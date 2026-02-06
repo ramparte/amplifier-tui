@@ -257,11 +257,41 @@ class AmplifierChicApp(App):
 
     # ── Actions ─────────────────────────────────────────────────
 
+    async def action_quit(self) -> None:
+        """Clean up the Amplifier session before quitting."""
+        if self.session_manager and hasattr(self.session_manager, "end_session"):
+            self._update_status("Saving session...")
+            try:
+                await self.session_manager.end_session()
+            except Exception:
+                pass
+        self.exit()
+
     def action_new_session(self) -> None:
         """Start a fresh session."""
         if self.is_processing:
             return
-        # Reset session manager state
+        # End the current session cleanly before starting a new one
+        if self.session_manager and hasattr(self.session_manager, "end_session"):
+            self._end_and_reset_session()
+            return
+        self._reset_for_new_session()
+
+    @work(thread=True)
+    async def _end_and_reset_session(self) -> None:
+        """End current session in background, then reset UI."""
+        try:
+            await self.session_manager.end_session()
+        except Exception:
+            pass
+        # Reset session manager state (but keep the manager)
+        if self.session_manager:
+            self.session_manager.session = None
+            self.session_manager.session_id = None
+        self.call_from_thread(self._reset_for_new_session)
+
+    def _reset_for_new_session(self) -> None:
+        """Reset UI for a new session."""
         if self.session_manager:
             self.session_manager.session = None
             self.session_manager.session_id = None

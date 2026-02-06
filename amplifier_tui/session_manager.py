@@ -234,6 +234,31 @@ class SessionManager:
 
         raise ValueError(f"Session {session_id} not found")
 
+    async def end_session(self) -> None:
+        """End the current session cleanly (emit SESSION_END + cleanup).
+
+        This mirrors what the CLI does in its finally block.
+        Must be called before the app exits or the last turn won't persist.
+        """
+        if not self.session:
+            return
+
+        try:
+            hooks = self.session.coordinator.get("hooks")
+            if hooks:
+                from amplifier_core.events import SESSION_END
+
+                await hooks.emit(SESSION_END, {"session_id": self.session_id})
+        except Exception:
+            pass
+
+        try:
+            await self.session.cleanup()
+        except Exception:
+            pass
+
+        self.session = None
+
     async def send_message(self, message: str) -> str:
         """Send a message to the current session."""
         if not self.session:
