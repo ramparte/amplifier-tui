@@ -8,7 +8,7 @@ from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
-from textual.widgets import Collapsible, Input, OptionList, Static
+from textual.widgets import Collapsible, Markdown, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 from textual import work
 
@@ -18,12 +18,18 @@ from .theme import CHIC_THEME
 # ── Widget Classes ──────────────────────────────────────────────────
 
 
-class ChatMessage(Static):
-    """A chat message with role-based styling."""
+class UserMessage(Static):
+    """A user chat message (plain text with styling)."""
 
-    def __init__(self, content: str, role: str = "assistant", **kwargs: object) -> None:
-        classes = f"chat-message {role}-message"
-        super().__init__(content, classes=classes, **kwargs)
+    def __init__(self, content: str) -> None:
+        super().__init__(content, classes="chat-message user-message")
+
+
+class AssistantMessage(Markdown):
+    """An assistant chat message rendered as markdown."""
+
+    def __init__(self, content: str) -> None:
+        super().__init__(content, classes="chat-message assistant-message")
 
 
 class ThinkingBlock(Static):
@@ -88,9 +94,13 @@ class AmplifierChicApp(App):
                 yield OptionList(id="session-list")
             with Vertical(id="chat-area"):
                 yield ScrollableContainer(id="chat-view")
-                yield Input(
-                    placeholder="Type a message... (Enter to send)",
+                yield TextArea(
+                    "",
                     id="chat-input",
+                    soft_wrap=True,
+                    show_line_numbers=False,
+                    tab_behavior="focus",
+                    compact=True,
                 )
                 with Horizontal(id="status-bar"):
                     yield Static("No session", id="status-session")
@@ -103,7 +113,7 @@ class AmplifierChicApp(App):
 
         # Show UI immediately, defer Amplifier import to background
         self._show_welcome()
-        self.query_one("#chat-input", Input).focus()
+        self.query_one("#chat-input", TextArea).focus()
 
         # Start the spinner timer
         self._spinner_frame = 0
@@ -262,7 +272,7 @@ class AmplifierChicApp(App):
         self._show_welcome("New session will start when you send a message.")
         self._update_session_display()
         self._update_status("Ready")
-        self.query_one("#chat-input", Input).focus()
+        self.query_one("#chat-input", TextArea).focus()
 
     def action_clear_chat(self) -> None:
         chat_view = self.query_one("#chat-view", ScrollableContainer)
@@ -271,8 +281,21 @@ class AmplifierChicApp(App):
 
     # ── Input Handling ──────────────────────────────────────────
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if not event.value.strip():
+    def on_key(self, event) -> None:
+        """Handle Enter to send, Shift+Enter for newline in TextArea."""
+        input_widget = self.query_one("#chat-input", TextArea)
+        if not input_widget.has_focus:
+            return
+        if event.key == "enter" and not event.shift:
+            event.prevent_default()
+            event.stop()
+            self._submit_message()
+
+    def _submit_message(self) -> None:
+        """Extract text from input and send it."""
+        input_widget = self.query_one("#chat-input", TextArea)
+        text = input_widget.text.strip()
+        if not text:
             return
         if self.is_processing:
             return
@@ -282,43 +305,42 @@ class AmplifierChicApp(App):
             self._update_status("Still loading Amplifier...")
             return
 
-        message = event.value.strip()
-        event.input.value = ""
+        input_widget.clear()
 
         self._clear_welcome()
-        self._add_user_message(message)
-        # Show appropriate label based on session state
+        self._add_user_message(text)
         has_session = self.session_manager and getattr(
             self.session_manager, "session", None
         )
         self._start_processing("Starting session" if not has_session else "Thinking")
-        self._send_message_worker(message)
+        self._send_message_worker(text)
 
     # ── Message Display ─────────────────────────────────────────
 
     def _add_user_message(self, text: str) -> None:
         chat_view = self.query_one("#chat-view", ScrollableContainer)
-        msg = ChatMessage(text, role="user")
+        msg = UserMessage(text)
         chat_view.mount(msg)
         msg.scroll_visible()
 
     def _add_assistant_message(self, text: str) -> None:
         chat_view = self.query_one("#chat-view", ScrollableContainer)
-        msg = ChatMessage(text, role="assistant")
+        msg = AssistantMessage(text)
         chat_view.mount(msg)
         msg.scroll_visible()
 
     def _add_thinking_block(self, text: str) -> None:
         chat_view = self.query_one("#chat-view", ScrollableContainer)
         # Show abbreviated preview, full text on expand
-        preview = text.split("\n")[0][:80]
-        if len(text) > 80:
+        preview = text.split("\n")[0][:60]
+        if len(text) > 60:
             preview += "..."
-        full_text = text[:600] + "..." if len(text) > 600 else text
+        full_text = text[:800] + "..." if len(text) > 800 else text
         collapsible = Collapsible(
-            Static(full_text, classes="thinking-block"),
+            Static(full_text, classes="thinking-text"),
             title=f"Thinking: {preview}",
             collapsed=True,
+            classes="thinking-block",
         )
         chat_view.mount(collapsible)
 
@@ -382,7 +404,7 @@ class AmplifierChicApp(App):
         self.is_processing = True
         self._got_stream_content = False
         self._processing_label = label
-        inp = self.query_one("#chat-input", Input)
+        inp = self.query_one("#chat-input", TextArea)
         inp.disabled = True
         inp.add_class("disabled")
 
@@ -400,7 +422,7 @@ class AmplifierChicApp(App):
     def _finish_processing(self) -> None:
         self.is_processing = False
         self._processing_label = None
-        inp = self.query_one("#chat-input", Input)
+        inp = self.query_one("#chat-input", TextArea)
         inp.disabled = False
         inp.remove_class("disabled")
         inp.focus()
@@ -536,10 +558,10 @@ class AmplifierChicApp(App):
             blocks = parse_message_blocks(msg)
             for block in blocks:
                 if block.kind == "user":
-                    chat_view.mount(ChatMessage(block.content, role="user"))
+                    chat_view.mount(UserMessage(block.content))
 
                 elif block.kind == "text":
-                    chat_view.mount(ChatMessage(block.content, role="assistant"))
+                    chat_view.mount(AssistantMessage(block.content))
 
                 elif block.kind == "thinking":
                     preview = block.content[:200]

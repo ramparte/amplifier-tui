@@ -83,15 +83,27 @@ Screen {
 
 .thinking-block {
     border-left: wide #665588;
-    margin: 0 0 0 0;
-    padding: 0 2;
-    color: $text-muted;
+    margin: 0 0 1 0;
+    padding: 0;
+    background: transparent;
 }
 
-.thinking-header {
-    color: #665588;
+.thinking-block CollapsibleTitle {
+    color: #8877aa;
     text-style: italic;
-    padding: 0;
+    padding: 0 0 0 2;
+    background: transparent;
+}
+
+.thinking-block CollapsibleTitle:hover {
+    color: #aa99cc;
+    background: $surface;
+}
+
+.thinking-text {
+    color: $text-muted;
+    text-style: italic;
+    padding: 0 2;
     margin: 0;
 }
 
@@ -159,24 +171,25 @@ CollapsibleTitle:hover {
     text-align: center;
 }
 
-/* ── Input container ────────────────────────────────── */
+/* ── Chat input (TextArea) ──────────────────────────── */
 
-#input-container {
+#chat-input {
     height: auto;
     min-height: 3;
-    margin: 1 2 0 1;
-    padding: 1 2;
+    max-height: 8;
+    margin: 0 2 0 1;
     border: solid $panel;
     background: $surface;
 }
 
-#input-container:focus-within {
+#chat-input:focus {
     border: solid $primary;
 }
 
-#input-container.disabled {
+#chat-input.disabled {
     border: solid $panel-darken-2;
     background: $background;
+    color: $text-muted;
 }
 
 /* ── Status bar ─────────────────────────────────────── */
@@ -214,17 +227,55 @@ CollapsibleTitle:hover {
     color: $error;
 }
 
-/* ── Markdown styling ───────────────────────────────── */
+/* -- Markdown styling (inside assistant messages) ------ */
 
-Markdown {
+AssistantMessage {
     padding: 0;
     margin: 0;
 }
 
-MarkdownH1, MarkdownH2, MarkdownH3 {
-    color: $text;
+AssistantMessage MarkdownH1 {
+    color: $secondary;
+    text-style: bold;
+    margin: 1 0 0 0;
 }
 
-MarkdownFence {
+AssistantMessage MarkdownH2 {
+    color: $secondary;
+    text-style: bold;
+    margin: 1 0 0 0;
+}
+
+AssistantMessage MarkdownH3 {
+    color: $text;
+    text-style: bold;
+    margin: 1 0 0 0;
+}
+
+AssistantMessage MarkdownFence {
     background: $surface;
+    margin: 1 0;
+    padding: 1 2;
+}
+
+AssistantMessage MarkdownBlockQuote {
+    border-left: thick $panel;
+    color: $text-muted;
+    margin: 0 0 0 1;
+    padding: 0 1;
+}
+
+AssistantMessage MarkdownBulletList,
+AssistantMessage MarkdownOrderedList {
+    margin: 0;
+    padding: 0;
+}
+
+AssistantMessage MarkdownTable {
+    margin: 1 0;
+}
+
+AssistantMessage MarkdownHorizontalRule {
+    color: $panel;
+    margin: 1 0;
 }
