@@ -240,7 +240,10 @@ class SessionManager:
     def list_all_sessions(limit: int = 50) -> list[dict]:
         """List all available sessions with metadata.
 
-        Returns list of dicts with: session_id, project, mtime, date_str, name
+        Returns list of dicts with:
+            session_id, project, project_path, mtime, date_str, name, description
+        Sorted by mtime descending (most recent first).
+        Only includes root sessions (skips sub-sessions with _ in ID).
         """
         sessions_dir = Path.home() / ".amplifier" / "projects"
         if not sessions_dir.exists():
@@ -254,17 +257,22 @@ class SessionManager:
             if not sessions_subdir.exists():
                 continue
 
-            # Extract readable project name from dir like -home-user-dev-MyProject
+            # Reconstruct the original path from the directory name
+            # e.g. -home-samschillace-dev-ANext-MyProject -> /home/samschillace/dev/ANext/MyProject
             raw_name = project_dir.name
             try:
-                # Convert -home-user-dev-Project to /home/user/dev/Project
                 path_str = "/" + raw_name[1:].replace("-", "/")
+                project_path = path_str
                 project_label = Path(path_str).name
             except Exception:
+                project_path = raw_name
                 project_label = raw_name[:20]
 
             for session_dir in sessions_subdir.iterdir():
                 if not session_dir.is_dir():
+                    continue
+                # Skip sub-sessions (they have _ in the session ID like uuid_agent-name)
+                if "_" in session_dir.name:
                     continue
                 transcript_path = session_dir / "transcript.jsonl"
                 if not transcript_path.exists():
@@ -274,18 +282,21 @@ class SessionManager:
                 info: dict[str, Any] = {
                     "session_id": session_dir.name,
                     "project": project_label,
+                    "project_path": project_path,
                     "mtime": mtime,
                     "date_str": datetime.fromtimestamp(mtime).strftime("%m/%d %H:%M"),
                     "name": "",
+                    "description": "",
                 }
 
-                # Try to read metadata for session name
+                # Read metadata for name and description
                 metadata_path = session_dir / "metadata.json"
                 if metadata_path.exists():
                     try:
                         with open(metadata_path, "r", encoding="utf-8") as f:
                             meta = json.load(f)
                             info["name"] = meta.get("name", "")
+                            info["description"] = meta.get("description", "")
                     except Exception:
                         pass
 

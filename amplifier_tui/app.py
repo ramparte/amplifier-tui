@@ -169,19 +169,54 @@ class AmplifierChicApp(App):
     # ── Session List Sidebar ────────────────────────────────────
 
     def _load_session_list(self) -> None:
-        if not self._amplifier_available or not self.session_manager:
+        """Show loading state then populate in background."""
+        if not self._amplifier_available:
             return
+        option_list = self.query_one("#session-list", OptionList)
+        option_list.clear_options()
+        option_list.add_option(Option("  Loading sessions...", disabled=True))
+        self._load_sessions_worker()
+
+    @work(thread=True)
+    def _load_sessions_worker(self) -> None:
+        """Load session list in background thread."""
         from .session_manager import SessionManager
 
-        self._session_list_data = SessionManager.list_all_sessions(limit=30)
+        sessions = SessionManager.list_all_sessions(limit=50)
+        self.call_from_thread(self._populate_session_list, sessions)
+
+    def _populate_session_list(self, sessions: list[dict]) -> None:
+        """Populate sidebar with sessions grouped by project folder."""
+        self._session_list_data = []
         option_list = self.query_one("#session-list", OptionList)
         option_list.clear_options()
 
-        for s in self._session_list_data:
-            sid = s["session_id"][:8]
+        if not sessions:
+            option_list.add_option(Option("  No sessions found", disabled=True))
+            return
+
+        # Group by project, maintaining recency order
+        current_group = None
+        for s in sessions:
             project = s["project"]
+            if project != current_group:
+                current_group = project
+                option_list.add_option(Option(f"-- {project} --", disabled=True))
+
             date = s["date_str"]
-            option_list.add_option(Option(f"{sid}  {project}  {date}"))
+            name = s.get("name", "")
+            desc = s.get("description", "")
+
+            if name:
+                label = name[:26] if len(name) > 26 else name
+            elif desc:
+                label = desc[:26] if len(desc) > 26 else desc
+            else:
+                label = s["session_id"][:8]
+
+            display = f"  {date}  {label}"
+            option_list.add_option(Option(display))
+            self._session_list_data.append(s)
 
     def action_toggle_sidebar(self) -> None:
         sidebar = self.query_one("#session-sidebar")
@@ -193,9 +228,20 @@ class AmplifierChicApp(App):
             sidebar.remove_class("visible")
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        idx = event.option_index
-        if 0 <= idx < len(self._session_list_data):
-            session_id = self._session_list_data[idx]["session_id"]
+        option_list = self.query_one("#session-list", OptionList)
+        selected = option_list.get_option_at_index(event.option_index)
+        if selected.disabled:
+            return
+
+        # Count non-disabled options before this index to map to data list
+        data_idx = 0
+        for i in range(event.option_index):
+            opt = option_list.get_option_at_index(i)
+            if not opt.disabled:
+                data_idx += 1
+
+        if 0 <= data_idx < len(self._session_list_data):
+            session_id = self._session_list_data[data_idx]["session_id"]
             self.action_toggle_sidebar()  # Close sidebar
             self._resume_session_worker(session_id)
 
