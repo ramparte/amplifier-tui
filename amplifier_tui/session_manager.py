@@ -215,7 +215,12 @@ class SessionManager:
         return sessions[0]["session_id"]
 
     def get_session_transcript_path(self, session_id: str) -> Path:
-        """Get the path to a session's transcript file."""
+        """Get the path to a session's transcript file.
+
+        Searches all project directories for the session.
+        A session dir may exist in multiple projects (e.g. sub-sessions),
+        so we verify transcript.jsonl actually exists before returning.
+        """
         sessions_dir = Path.home() / ".amplifier" / "projects"
 
         for project_dir in sessions_dir.iterdir():
@@ -223,9 +228,9 @@ class SessionManager:
                 continue
             sessions_subdir = project_dir / "sessions"
             if sessions_subdir.exists():
-                session_dir = sessions_subdir / session_id
-                if session_dir.exists():
-                    return session_dir / "transcript.jsonl"
+                transcript = sessions_subdir / session_id / "transcript.jsonl"
+                if transcript.exists():
+                    return transcript
 
         raise ValueError(f"Session {session_id} not found")
 
