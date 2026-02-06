@@ -38,6 +38,21 @@ class ThinkingBlock(Static):
     pass
 
 
+class ChatInput(TextArea):
+    """TextArea that sends on Enter and inserts newline on Shift+Enter."""
+
+    class Submitted(TextArea.Changed):
+        """Fired when the user presses Enter (without Shift)."""
+
+    async def _on_key(self, event) -> None:
+        if event.key == "enter" and not event.shift:
+            event.prevent_default()
+            event.stop()
+            self.post_message(self.Submitted(text_area=self))
+        else:
+            await super()._on_key(event)
+
+
 class ProcessingIndicator(Static):
     """Animated indicator shown during processing."""
 
@@ -94,7 +109,7 @@ class AmplifierChicApp(App):
                 yield OptionList(id="session-list")
             with Vertical(id="chat-area"):
                 yield ScrollableContainer(id="chat-view")
-                yield TextArea(
+                yield ChatInput(
                     "",
                     id="chat-input",
                     soft_wrap=True,
@@ -113,7 +128,7 @@ class AmplifierChicApp(App):
 
         # Show UI immediately, defer Amplifier import to background
         self._show_welcome()
-        self.query_one("#chat-input", TextArea).focus()
+        self.query_one("#chat-input", ChatInput).focus()
 
         # Start the spinner timer
         self._spinner_frame = 0
@@ -302,7 +317,7 @@ class AmplifierChicApp(App):
         self._show_welcome("New session will start when you send a message.")
         self._update_session_display()
         self._update_status("Ready")
-        self.query_one("#chat-input", TextArea).focus()
+        self.query_one("#chat-input", ChatInput).focus()
 
     def action_clear_chat(self) -> None:
         chat_view = self.query_one("#chat-view", ScrollableContainer)
@@ -311,19 +326,13 @@ class AmplifierChicApp(App):
 
     # ── Input Handling ──────────────────────────────────────────
 
-    def on_key(self, event) -> None:
-        """Handle Enter to send, Shift+Enter for newline in TextArea."""
-        input_widget = self.query_one("#chat-input", TextArea)
-        if not input_widget.has_focus:
-            return
-        if event.key == "enter" and not event.shift:
-            event.prevent_default()
-            event.stop()
-            self._submit_message()
+    def on_chat_input_submitted(self, event: ChatInput.Submitted) -> None:
+        """Handle Enter in the chat input."""
+        self._submit_message()
 
     def _submit_message(self) -> None:
         """Extract text from input and send it."""
-        input_widget = self.query_one("#chat-input", TextArea)
+        input_widget = self.query_one("#chat-input", ChatInput)
         text = input_widget.text.strip()
         if not text:
             return
@@ -434,7 +443,7 @@ class AmplifierChicApp(App):
         self.is_processing = True
         self._got_stream_content = False
         self._processing_label = label
-        inp = self.query_one("#chat-input", TextArea)
+        inp = self.query_one("#chat-input", ChatInput)
         inp.disabled = True
         inp.add_class("disabled")
 
@@ -452,7 +461,7 @@ class AmplifierChicApp(App):
     def _finish_processing(self) -> None:
         self.is_processing = False
         self._processing_label = None
-        inp = self.query_one("#chat-input", TextArea)
+        inp = self.query_one("#chat-input", ChatInput)
         inp.disabled = False
         inp.remove_class("disabled")
         inp.focus()
