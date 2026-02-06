@@ -39,16 +39,22 @@ class ThinkingBlock(Static):
 
 
 class ChatInput(TextArea):
-    """TextArea that sends on Enter and inserts newline on Shift+Enter."""
+    """TextArea where Enter submits, Ctrl+J inserts a newline."""
 
     class Submitted(TextArea.Changed):
-        """Fired when the user presses Enter (without Shift)."""
+        """Fired when the user presses Enter."""
 
     async def _on_key(self, event) -> None:
-        if event.key == "enter" and not event.shift:
+        if event.key == "enter":
+            # Submit the message
             event.prevent_default()
             event.stop()
             self.post_message(self.Submitted(text_area=self))
+        elif event.key == "ctrl+j":
+            # Insert a newline (Ctrl+J = linefeed)
+            event.prevent_default()
+            event.stop()
+            self.insert("\n")
         else:
             await super()._on_key(event)
 
