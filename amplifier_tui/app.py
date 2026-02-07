@@ -8,8 +8,7 @@ from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
-from textual.widgets import Collapsible, Markdown, OptionList, Static, TextArea
-from textual.widgets.option_list import Option
+from textual.widgets import Collapsible, Markdown, Static, TextArea, Tree
 from textual import work
 
 from .theme import CHIC_THEME
@@ -23,6 +22,12 @@ class UserMessage(Static):
 
     def __init__(self, content: str) -> None:
         super().__init__(content, classes="chat-message user-message")
+
+
+class ThinkingStatic(Static):
+    """A thinking block rendered as a static widget (for transcript replay)."""
+
+    pass
 
 
 class AssistantMessage(Markdown):
@@ -112,7 +117,7 @@ class AmplifierChicApp(App):
         with Horizontal(id="main-container"):
             with Vertical(id="session-sidebar"):
                 yield Static(" Sessions", id="sidebar-title")
-                yield OptionList(id="session-list")
+                yield Tree("Sessions", id="session-tree")
             with Vertical(id="chat-area"):
                 yield ScrollableContainer(id="chat-view")
                 yield ChatInput(
@@ -203,9 +208,9 @@ class AmplifierChicApp(App):
         """Show loading state then populate in background."""
         if not self._amplifier_available:
             return
-        option_list = self.query_one("#session-list", OptionList)
-        option_list.clear_options()
-        option_list.add_option(Option("  Loading sessions...", disabled=True))
+        tree = self.query_one("#session-tree", Tree)
+        tree.clear()
+        tree.root.add_leaf("Loading sessions...")
         self._load_sessions_worker()
 
     @work(thread=True)
@@ -217,36 +222,47 @@ class AmplifierChicApp(App):
         self.call_from_thread(self._populate_session_list, sessions)
 
     def _populate_session_list(self, sessions: list[dict]) -> None:
-        """Populate sidebar with sessions grouped by project folder."""
+        """Populate sidebar tree with sessions grouped by project folder.
+
+        Each project folder is an expandable node. Sessions show as single-line
+        summaries (date + name/description). Session ID is stored as node data
+        for selection handling without cluttering the display.
+        """
         self._session_list_data = []
-        option_list = self.query_one("#session-list", OptionList)
-        option_list.clear_options()
+        tree = self.query_one("#session-tree", Tree)
+        tree.clear()
+        tree.show_root = False
 
         if not sessions:
-            option_list.add_option(Option("  No sessions found", disabled=True))
+            tree.root.add_leaf("No sessions found")
             return
 
         # Group by project, maintaining recency order
-        current_group = None
+        current_group: str | None = None
+        group_node = tree.root
         for s in sessions:
             project = s["project"]
             if project != current_group:
                 current_group = project
-                option_list.add_option(Option(f"-- {project} --", disabled=True))
+                # Shorten long paths: show last 2 components
+                parts = project.split("/")
+                short = "/".join(parts[-2:]) if len(parts) > 2 else project
+                group_node = tree.root.add(short, expand=True)
 
             date = s["date_str"]
             name = s.get("name", "")
             desc = s.get("description", "")
 
             if name:
-                label = name[:26] if len(name) > 26 else name
+                label = name[:28] if len(name) > 28 else name
             elif desc:
-                label = desc[:26] if len(desc) > 26 else desc
+                label = desc[:28] if len(desc) > 28 else desc
             else:
                 label = s["session_id"][:8]
 
-            display = f"  {date}  {label}"
-            option_list.add_option(Option(display))
+            # Single line: "Jan 05  Fix the save bug"
+            display = f"{date}  {label}"
+            group_node.add_leaf(display, data=s["session_id"])
             self._session_list_data.append(s)
 
     def action_toggle_sidebar(self) -> None:
@@ -258,35 +274,38 @@ class AmplifierChicApp(App):
         else:
             sidebar.remove_class("visible")
 
-    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        option_list = self.query_one("#session-list", OptionList)
-        selected = option_list.get_option_at_index(event.option_index)
-        if selected.disabled:
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        """Handle session selection from the sidebar tree."""
+        node = event.node
+        # Only leaf nodes with data (session_id) are selectable sessions
+        if node.data is None:
             return
-
-        # Count non-disabled options before this index to map to data list
-        data_idx = 0
-        for i in range(event.option_index):
-            opt = option_list.get_option_at_index(i)
-            if not opt.disabled:
-                data_idx += 1
-
-        if 0 <= data_idx < len(self._session_list_data):
-            session_id = self._session_list_data[data_idx]["session_id"]
-            self.action_toggle_sidebar()  # Close sidebar
-            self._resume_session_worker(session_id)
+        session_id = node.data
+        self.action_toggle_sidebar()  # Close sidebar
+        self._resume_session_worker(session_id)
 
     # ── Actions ─────────────────────────────────────────────────
 
     async def action_quit(self) -> None:
-        """Clean up the Amplifier session before quitting."""
-        if self.session_manager and hasattr(self.session_manager, "end_session"):
+        """Clean up the Amplifier session before quitting.
+
+        Cleanup must run in a @work(thread=True) worker because the session
+        was created in a worker thread with its own asyncio event loop.
+        Running async cleanup on Textual's main loop fails silently.
+        """
+        if self.session_manager and getattr(self.session_manager, "session", None):
             self._update_status("Saving session...")
             try:
-                await self.session_manager.end_session()
+                worker = self._cleanup_session_worker()
+                await worker.wait()
             except Exception:
                 pass
         self.exit()
+
+    @work(thread=True)
+    async def _cleanup_session_worker(self) -> None:
+        """End session in a worker thread with a proper async event loop."""
+        await self.session_manager.end_session()
 
     def action_new_session(self) -> None:
         """Start a fresh session."""
@@ -377,13 +396,13 @@ class AmplifierChicApp(App):
     def _add_thinking_block(self, text: str) -> None:
         chat_view = self.query_one("#chat-view", ScrollableContainer)
         # Show abbreviated preview, full text on expand
-        preview = text.split("\n")[0][:60]
-        if len(text) > 60:
+        preview = text.split("\n")[0][:55]
+        if len(text) > 55:
             preview += "..."
         full_text = text[:800] + "..." if len(text) > 800 else text
         collapsible = Collapsible(
             Static(full_text, classes="thinking-text"),
-            title=f"Thinking: {preview}",
+            title=f"\u25b6 Thinking: {preview}",
             collapsed=True,
             classes="thinking-block",
         )
@@ -415,7 +434,7 @@ class AmplifierChicApp(App):
 
         collapsible = Collapsible(
             Static(detail, classes="tool-detail"),
-            title=f"Tool: {tool_name}",
+            title=f"\u25b6 {tool_name}",
             collapsed=True,
         )
         collapsible.add_class("tool-use")
@@ -609,10 +628,21 @@ class AmplifierChicApp(App):
                     chat_view.mount(AssistantMessage(block.content))
 
                 elif block.kind == "thinking":
-                    preview = block.content[:200]
-                    if len(block.content) > 200:
+                    preview = block.content.split("\n")[0][:55]
+                    if len(block.content) > 55:
                         preview += "..."
-                    chat_view.mount(ThinkingBlock(preview, classes="thinking-block"))
+                    full_text = (
+                        block.content[:800] + "..."
+                        if len(block.content) > 800
+                        else block.content
+                    )
+                    collapsible = Collapsible(
+                        Static(full_text, classes="thinking-text"),
+                        title=f"\u25b6 Thinking: {preview}",
+                        collapsed=True,
+                        classes="thinking-block",
+                    )
+                    chat_view.mount(collapsible)
 
                 elif block.kind == "tool_use":
                     result = tool_results.get(block.tool_id, "")
@@ -628,7 +658,7 @@ class AmplifierChicApp(App):
                         detail += f"\n\nResult:\n{result}"
                     collapsible = Collapsible(
                         Static(detail, classes="tool-detail"),
-                        title=f"Tool: {block.tool_name}",
+                        title=f"\u25b6 {block.tool_name}",
                         collapsed=True,
                     )
                     collapsible.add_class("tool-use")
