@@ -106,11 +106,16 @@ Screen {
 
 /* -- Thinking blocks: PURPLE, dim, italic ------------- */
 
+/* Thinking blocks are visually "recessed" - smaller, dimmer, tinted.
+ * They should NEVER be confused with assistant text even when expanded.
+ * Key cues: purple bar, dark purple bg, dim gray text, italic, indented.
+ */
+
 .thinking-block {
     border-left: wide #665588;
-    margin: 0 0 0 2;
+    margin: 0 0 0 4;
     padding: 0;
-    background: #0d0a12;
+    background: #110e18;
 }
 
 .thinking-block CollapsibleTitle {
@@ -125,8 +130,8 @@ Screen {
     background: #1a1525;
 }
 
-.thinking-text {
-    color: #777777;
+.thinking-block .thinking-text {
+    color: #666677;
     text-style: italic;
     padding: 0 2;
     margin: 0;
@@ -135,10 +140,10 @@ Screen {
 /* Thinking blocks from transcript replay (Static, not Collapsible) */
 .thinking-static {
     border-left: wide #665588;
-    margin: 0 0 0 2;
+    margin: 0 0 0 4;
     padding: 0 2;
-    background: #0d0a12;
-    color: #777777;
+    background: #110e18;
+    color: #666677;
     text-style: italic;
 }
 

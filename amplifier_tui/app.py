@@ -260,9 +260,11 @@ class AmplifierChicApp(App):
             else:
                 label = s["session_id"][:8]
 
-            # Single line: "Jan 05  Fix the save bug"
+            # Session is an expandable node: summary on collapse, ID on expand
             display = f"{date}  {label}"
-            group_node.add_leaf(display, data=s["session_id"])
+            session_node = group_node.add(display, data=s["session_id"])
+            session_node.add_leaf(f"id: {s['session_id'][:12]}...")
+            session_node.collapse()
             self._session_list_data.append(s)
 
     def action_toggle_sidebar(self) -> None:
@@ -275,13 +277,20 @@ class AmplifierChicApp(App):
             sidebar.remove_class("visible")
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
-        """Handle session selection from the sidebar tree."""
+        """Handle session selection from the sidebar tree.
+
+        Sessions are expandable nodes: click to toggle expand (shows session ID),
+        double-click/Enter on the node OR its children loads the session.
+        The sidebar stays open - user closes it manually with Ctrl+B.
+        """
         node = event.node
-        # Only leaf nodes with data (session_id) are selectable sessions
-        if node.data is None:
-            return
+        # Check the node itself, or its parent, for a session_id
         session_id = node.data
-        self.action_toggle_sidebar()  # Close sidebar
+        if session_id is None and node.parent is not None:
+            session_id = node.parent.data
+        if session_id is None:
+            return
+        # Don't close sidebar - let user close it manually with Ctrl+B
         self._resume_session_worker(session_id)
 
     # ── Actions ─────────────────────────────────────────────────
