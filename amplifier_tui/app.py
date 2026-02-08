@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 from textual.app import App, ComposeResult
@@ -112,6 +113,11 @@ class AmplifierChicApp(App):
         self._spinner_timer: object | None = None
         self._processing_label: str | None = None
         self._prefs = load_preferences()
+
+        # Streaming display state
+        self._stream_widget: Static | None = None
+        self._stream_container: Collapsible | None = None
+        self._stream_block_type: str | None = None
 
     # ── Layout ──────────────────────────────────────────────────
 
@@ -529,6 +535,10 @@ class AmplifierChicApp(App):
     def _finish_processing(self) -> None:
         self.is_processing = False
         self._processing_label = None
+        # Clean up any leftover streaming state
+        self._stream_widget = None
+        self._stream_container = None
+        self._stream_block_type = None
         inp = self.query_one("#chat-input", ChatInput)
         inp.disabled = False
         inp.remove_class("disabled")
@@ -560,16 +570,48 @@ class AmplifierChicApp(App):
     # ── Streaming Callbacks ─────────────────────────────────────
 
     def _setup_streaming_callbacks(self) -> None:
-        """Wire session manager hooks to UI updates via call_from_thread."""
+        """Wire session manager hooks to UI updates via call_from_thread.
 
-        def on_content(block_type: str, text: str) -> None:
+        Supports three levels of streaming granularity:
+        1. content_block:delta  - true token streaming (when orchestrator emits)
+        2. content_block:start  - create widget early, remove spinner
+        3. content_block:end    - finalize with complete text (always fires)
+        """
+        # Per-turn state captured by closures (reset each message send)
+        accumulated = {"text": ""}
+        last_update = {"t": 0.0}
+        block_started = {"v": False}
+
+        def on_block_start(block_type: str, block_index: int) -> None:
+            accumulated["text"] = ""
+            last_update["t"] = 0.0
+            block_started["v"] = True
+            self.call_from_thread(self._begin_streaming_block, block_type)
+
+        def on_block_delta(block_type: str, delta: str) -> None:
+            accumulated["text"] += delta
+            now = time.monotonic()
+            if now - last_update["t"] >= 0.05:  # Throttle: 50ms minimum
+                last_update["t"] = now
+                snapshot = accumulated["text"]
+                self.call_from_thread(
+                    self._update_streaming_content, block_type, snapshot
+                )
+
+        def on_block_end(block_type: str, text: str) -> None:
             self._got_stream_content = True
-            if block_type == "thinking":
-                self.call_from_thread(self._remove_processing_indicator)
-                self.call_from_thread(self._add_thinking_block, text)
+            if block_started["v"]:
+                # Streaming widget exists - finalize it with complete text
+                block_started["v"] = False
+                accumulated["text"] = ""
+                self.call_from_thread(self._finalize_streaming_block, block_type, text)
             else:
+                # No start event received - direct display (fallback)
                 self.call_from_thread(self._remove_processing_indicator)
-                self.call_from_thread(self._add_assistant_message, text)
+                if block_type in ("thinking", "reasoning"):
+                    self.call_from_thread(self._add_thinking_block, text)
+                else:
+                    self.call_from_thread(self._add_assistant_message, text)
 
         def on_tool_start(name: str, tool_input: dict) -> None:
             self.call_from_thread(self._remove_processing_indicator)
@@ -579,9 +621,95 @@ class AmplifierChicApp(App):
             self.call_from_thread(self._add_tool_use, name, tool_input, result)
             self.call_from_thread(self._update_status, "Thinking...")
 
-        self.session_manager.on_content_block_end = on_content
+        self.session_manager.on_content_block_start = on_block_start
+        self.session_manager.on_content_block_delta = on_block_delta
+        self.session_manager.on_content_block_end = on_block_end
         self.session_manager.on_tool_pre = on_tool_start
         self.session_manager.on_tool_post = on_tool_end
+
+    # ── Streaming Display ─────────────────────────────────────────
+
+    def _begin_streaming_block(self, block_type: str) -> None:
+        """Create an empty widget to stream content into.
+
+        Called on content_block:start. Removes the spinner immediately
+        so the user knows content is arriving.
+        """
+        self._remove_processing_indicator()
+        chat_view = self.query_one("#chat-view", ScrollableContainer)
+
+        if block_type in ("thinking", "reasoning"):
+            inner = Static("\u258d", classes="thinking-text")
+            container = Collapsible(
+                inner,
+                title="\u25b6 Thinking\u2026",
+                collapsed=False,
+                classes="thinking-block",
+            )
+            chat_view.mount(container)
+            self._style_thinking(container, inner)
+            self._stream_widget = inner
+            self._stream_container = container
+        else:
+            widget = Static(
+                "\u258d", classes="chat-message assistant-message streaming-content"
+            )
+            chat_view.mount(widget)
+            c = self._prefs.colors
+            widget.styles.color = c.assistant_text
+            widget.styles.border_left = ("wide", c.assistant_border)
+            widget.scroll_visible()
+            self._stream_widget = widget
+            self._stream_container = None
+
+        self._stream_block_type = block_type
+        self._update_status("Streaming\u2026")
+
+    def _update_streaming_content(self, block_type: str, text: str) -> None:
+        """Update the streaming widget with accumulated text so far.
+
+        Called on content_block:delta (throttled to ~50ms). Shows a
+        cursor character at the end to indicate more content is coming.
+        """
+        if not self._stream_widget:
+            return
+        self._stream_widget.update(text + " \u258d")
+        self._stream_widget.scroll_visible()
+
+    def _finalize_streaming_block(self, block_type: str, text: str) -> None:
+        """Replace the streaming Static with the final rendered widget.
+
+        Called on content_block:end. For text blocks, swaps the fast
+        Static with a proper Markdown widget for rich rendering.
+        For thinking blocks, collapses and sets the preview title.
+        """
+        chat_view = self.query_one("#chat-view", ScrollableContainer)
+
+        if block_type in ("thinking", "reasoning"):
+            full_text = text[:800] + "\u2026" if len(text) > 800 else text
+            if self._stream_widget:
+                self._stream_widget.update(full_text)
+            if self._stream_container:
+                preview = text.split("\n")[0][:55]
+                if len(text) > 55:
+                    preview += "\u2026"
+                self._stream_container.title = f"\u25b6 Thinking: {preview}"
+                self._stream_container.collapsed = True
+        else:
+            old = self._stream_widget
+            if old:
+                msg = AssistantMessage(text)
+                chat_view.mount(msg, before=old)
+                self._style_assistant(msg)
+                old.remove()
+                msg.scroll_visible()
+            else:
+                self._add_assistant_message(text)
+
+        # Reset streaming state for next block
+        self._stream_widget = None
+        self._stream_container = None
+        self._stream_block_type = None
 
     # ── Workers (background execution) ──────────────────────────
 

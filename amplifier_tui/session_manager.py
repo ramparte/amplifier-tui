@@ -53,6 +53,8 @@ class SessionManager:
         self.prepared_bundle = None
 
         # Streaming callbacks - set by the app before execute()
+        self.on_content_block_start: Callable[[str, int], None] | None = None
+        self.on_content_block_delta: Callable[[str, str], None] | None = None
         self.on_content_block_end: Callable[[str, str], None] | None = None
         self.on_tool_pre: Callable[[str, dict], None] | None = None
         self.on_tool_post: Callable[[str, dict, str], None] | None = None
@@ -153,6 +155,22 @@ class SessionManager:
 
         hooks = self.session.coordinator.hooks
 
+        async def on_block_start(event: str, data: dict) -> Any:
+            block_type = data.get("block_type", "text")
+            block_index = data.get("block_index", 0)
+            if self.on_content_block_start:
+                self.on_content_block_start(block_type, block_index)
+            return HookResult(action="continue")
+
+        async def on_block_delta(event: str, data: dict) -> Any:
+            block_type = data.get("block_type", "text")
+            delta = (
+                data.get("delta", "") or data.get("text", "") or data.get("content", "")
+            )
+            if delta and self.on_content_block_delta:
+                self.on_content_block_delta(block_type, delta)
+            return HookResult(action="continue")
+
         async def on_block_end(event: str, data: dict) -> Any:
             block = data.get("block", {})
             block_type = block.get("type", "")
@@ -192,6 +210,8 @@ class SessionManager:
                 self.on_execution_end()
             return HookResult(action="continue")
 
+        hooks.register("content_block:start", on_block_start, name="tui-block-start")
+        hooks.register("content_block:delta", on_block_delta, name="tui-block-delta")
         hooks.register("content_block:end", on_block_end, name="tui-content")
         hooks.register("tool:pre", on_tool_start, name="tui-tool-pre")
         hooks.register("tool:post", on_tool_end, name="tui-tool-post")
