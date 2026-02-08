@@ -50,6 +50,7 @@ from .preferences import (
     save_notification_enabled,
     save_notification_min_seconds,
     save_notification_sound,
+    save_notification_title_flash,
     save_preferred_model,
     save_session_sort,
     save_show_timestamps,
@@ -1231,7 +1232,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/pin-session", "Pin or unpin session in sidebar", "/pin-session"),
     ("/delete", "Delete session (with confirmation)", "/delete"),
     ("/export", "Export chat (md, html, json, txt)", "/export"),
-    ("/notify", "Toggle notifications (on, off, sound, silent)", "/notify"),
+    ("/notify", "Toggle notifications (on, off, sound, silent, flash)", "/notify"),
     ("/sound", "Toggle notification sound (on, off, test)", "/sound"),
     ("/scroll", "Toggle auto-scroll on/off", "/scroll"),
     ("/timestamps", "Toggle message timestamps", "/timestamps"),
@@ -3675,7 +3676,7 @@ class AmplifierChicApp(App):
             "  /pin-session  Pin/unpin session (pinned appear at top of sidebar)\n"
             "  /delete       Delete session (with confirmation)\n"
             "  /export       Export chat (md/html/json/txt) | /export <fmt> [path] | --clipboard\n"
-            "  /notify       Toggle notifications (/notify on|off|sound|silent|<secs>)\n"
+            "  /notify       Toggle notifications (/notify on|off|sound|silent|flash|<secs>)\n"
             "  /sound        Toggle notification sound (/sound on|off|test)\n"
             "  /scroll       Toggle auto-scroll on/off\n"
             "  /timestamps   Toggle message timestamps on/off\n"
@@ -5990,6 +5991,11 @@ class AmplifierChicApp(App):
             nprefs.enabled = False
             save_notification_enabled(False)
             self._add_system_message("Notifications OFF")
+        elif arg == "flash":
+            nprefs.title_flash = not nprefs.title_flash
+            save_notification_title_flash(nprefs.title_flash)
+            state = "ON" if nprefs.title_flash else "OFF"
+            self._add_system_message(f"Title bar flash: {state}")
         elif arg.replace(".", "", 1).isdigit():
             secs = max(0.0, float(arg))
             nprefs.min_seconds = secs
@@ -6005,12 +6011,13 @@ class AmplifierChicApp(App):
             )
         else:
             self._add_system_message(
-                "Usage: /notify [on|off|sound|silent|<seconds>]\n"
+                "Usage: /notify [on|off|sound|silent|flash|<seconds>]\n"
                 "  /notify         Toggle on/off\n"
                 "  /notify on      Enable completion notifications\n"
                 "  /notify off     Disable notifications\n"
                 "  /notify sound   Same as on\n"
                 "  /notify silent  Same as off\n"
+                "  /notify flash   Toggle title bar flash on response\n"
                 "  /notify 5       Set minimum response time (seconds)"
             )
 
@@ -8405,6 +8412,8 @@ class AmplifierChicApp(App):
         self._send_terminal_notification(
             "Amplifier", f"Response ready ({elapsed:.0f}s)"
         )
+        if nprefs.title_flash:
+            self._flash_title_bar()
 
     @staticmethod
     def _send_terminal_notification(title: str, body: str = "") -> None:
@@ -8439,6 +8448,34 @@ class AmplifierChicApp(App):
             return
         try:
             out.write("\a")
+            out.flush()
+        except Exception:
+            pass
+
+    def _flash_title_bar(self) -> None:
+        """Briefly change the terminal title to signal response completion.
+
+        Uses OSC 2 (Set Window Title) to show "[✓ Ready] Amplifier TUI",
+        then schedules a restore after 3 seconds.  Writes to ``sys.__stdout__``
+        to bypass Textual's stdout capture.
+        """
+        out = sys.__stdout__
+        if out is None:
+            return
+        try:
+            out.write("\033]2;[\u2713 Ready] Amplifier TUI\a")
+            out.flush()
+        except Exception:
+            pass
+        self.set_timer(3.0, self._restore_title)
+
+    def _restore_title(self) -> None:
+        """Restore the normal terminal title after a title-bar flash."""
+        out = sys.__stdout__
+        if out is None:
+            return
+        try:
+            out.write("\033]2;Amplifier TUI\a")
             out.flush()
         except Exception:
             pass

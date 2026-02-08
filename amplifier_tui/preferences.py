@@ -262,6 +262,7 @@ notifications:
   sound_enabled: false            # terminal bell when response completes (opt-in)
   sound_on_error: true            # beep on errors (when sound_enabled is true)
   sound_on_file_change: false     # beep on /watch file changes (when sound_enabled)
+  title_flash: true               # flash terminal title bar when response completes
 
 display:
   show_timestamps: true          # show HH:MM timestamps on messages
@@ -292,6 +293,7 @@ class NotificationPreferences:
     sound_on_file_change: bool = (
         False  # Beep on /watch file changes (when sound_enabled)
     )
+    title_flash: bool = True  # Flash terminal title bar on response completion
 
 
 @dataclass
@@ -382,6 +384,8 @@ def load_preferences(path: Path | None = None) -> Preferences:
                     prefs.notifications.sound_on_file_change = bool(
                         ndata["sound_on_file_change"]
                     )
+                if "title_flash" in ndata:
+                    prefs.notifications.title_flash = bool(ndata["title_flash"])
             if isinstance(data.get("display"), dict):
                 ddata = data["display"]
                 if "show_timestamps" in ddata:
@@ -908,6 +912,49 @@ def save_notification_min_seconds(seconds: float, path: Path | None = None) -> N
         else:
             # No notifications section at all — append it
             text = text.rstrip() + f"\n\nnotifications:\n  min_seconds: {value}\n"
+
+        path.write_text(text)
+    except Exception:
+        pass  # Best-effort persistence
+
+
+def save_notification_title_flash(enabled: bool, path: Path | None = None) -> None:
+    """Persist the notification title_flash preference to the preferences file.
+
+    Surgically updates only the title_flash value under the notifications section,
+    preserving the rest of the file (including user comments) as-is.
+    """
+    import re
+
+    path = path or PREFS_PATH
+    try:
+        if path.exists():
+            text = path.read_text()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = _DEFAULT_YAML
+
+        value = "true" if enabled else "false"
+        if re.search(r"^\s+title_flash:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(\s+title_flash:).*$",
+                f"\\1 {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        elif re.search(r"^notifications:", text, re.MULTILINE):
+            # notifications section exists but no title_flash key
+            text = re.sub(
+                r"^(notifications:.*)$",
+                f"\\1\n  title_flash: {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            # No notifications section at all — append it
+            text = text.rstrip() + f"\n\nnotifications:\n  title_flash: {value}\n"
 
         path.write_text(text)
     except Exception:
