@@ -3840,13 +3840,13 @@ class AmplifierChicApp(App):
 
     def _rsearch_cycle_next(self) -> None:
         """Cycle to the next (older) match in the current result set."""
-        if (
-            not self._rsearch_matches
-            or self._rsearch_match_idx >= len(self._rsearch_matches) - 1
-        ):
+        if not self._rsearch_matches:
             self._update_rsearch_display()
             return
-        self._rsearch_match_idx += 1
+        # Wrap around from last match back to first
+        self._rsearch_match_idx = (self._rsearch_match_idx + 1) % len(
+            self._rsearch_matches
+        )
         entry = self._history.get_entry(self._rsearch_matches[self._rsearch_match_idx])
         if entry is not None:
             input_widget = self.query_one("#chat-input", ChatInput)
@@ -3856,10 +3856,13 @@ class AmplifierChicApp(App):
 
     def _rsearch_cycle_prev(self) -> None:
         """Cycle to the previous (newer) match in the current result set."""
-        if not self._rsearch_matches or self._rsearch_match_idx <= 0:
+        if not self._rsearch_matches:
             self._update_rsearch_display()
             return
-        self._rsearch_match_idx -= 1
+        # Wrap around from first match back to last
+        self._rsearch_match_idx = (self._rsearch_match_idx - 1) % len(
+            self._rsearch_matches
+        )
         entry = self._history.get_entry(self._rsearch_matches[self._rsearch_match_idx])
         if entry is not None:
             input_widget = self.query_one("#chat-input", ChatInput)
