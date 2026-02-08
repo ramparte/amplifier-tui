@@ -139,6 +139,9 @@ display:
 
 model:
   preferred: ""                   # preferred model for new sessions (empty = use default)
+
+sidebar:
+  session_sort: "date"            # session sort order: date, name, project
 """
 
 
@@ -188,6 +191,7 @@ class Preferences:
     display: DisplayPreferences = field(default_factory=DisplayPreferences)
     preferred_model: str = ""  # Empty means use default from bundle config
     theme_name: str = "dark"  # Active theme name (persisted for display)
+    session_sort: str = "date"  # Session sort order: date, name, project
 
     def apply_theme(self, name: str) -> bool:
         """Apply a built-in theme by name. Returns False if unknown."""
@@ -236,6 +240,12 @@ def load_preferences(path: Path | None = None) -> Preferences:
                 tdata = data["theme"]
                 if "name" in tdata:
                     prefs.theme_name = str(tdata["name"] or "dark")
+            if isinstance(data.get("sidebar"), dict):
+                sdata = data["sidebar"]
+                if "session_sort" in sdata:
+                    val = str(sdata["session_sort"] or "date")
+                    if val in ("date", "name", "project"):
+                        prefs.session_sort = val
         except Exception:
             pass  # Fall back to defaults on any parse error
     else:
@@ -475,6 +485,49 @@ def save_notification_sound(enabled: bool, path: Path | None = None) -> None:
         else:
             # No notifications section at all — append it
             text = text.rstrip() + f"\n\nnotifications:\n  sound_enabled: {value}\n"
+
+        path.write_text(text)
+    except Exception:
+        pass  # Best-effort persistence
+
+
+def save_session_sort(sort_mode: str, path: Path | None = None) -> None:
+    """Persist the session sort preference to the preferences file.
+
+    Surgically updates only the session_sort value, preserving the rest of the
+    file (including user comments) as-is.
+    """
+    import re
+
+    path = path or PREFS_PATH
+    try:
+        if path.exists():
+            text = path.read_text()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = _DEFAULT_YAML
+
+        value = f'"{sort_mode}"'
+        if re.search(r"^\s+session_sort:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(\s+session_sort:).*$",
+                f"\\1 {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        elif re.search(r"^sidebar:", text, re.MULTILINE):
+            # sidebar section exists but no session_sort key
+            text = re.sub(
+                r"^(sidebar:.*)$",
+                f"\\1\n  session_sort: {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            # No sidebar section at all — append it
+            text = text.rstrip() + f"\n\nsidebar:\n  session_sort: {value}\n"
 
         path.write_text(text)
     except Exception:

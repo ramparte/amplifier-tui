@@ -38,6 +38,7 @@ from .preferences import (
     save_colors,
     save_notification_sound,
     save_preferred_model,
+    save_session_sort,
     save_show_timestamps,
     save_theme_name,
 )
@@ -97,6 +98,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/pin",
     "/draft",
     "/tokens",
+    "/sort",
 )
 
 # Known context window sizes (tokens) for popular models.
@@ -449,6 +451,7 @@ SHORTCUTS_TEXT = """\
   /timestamps Toggle timestamps
   /keys       This overlay
   /search     Search chat messages
+  /sort       Sort sessions (date/name/project)
   /draft      Show/save/clear input draft
   /compact    Clear chat, keep session
   /quit       Quit
@@ -939,12 +942,37 @@ class AmplifierChicApp(App):
         pin = "▪ " if sid in self._pinned_sessions else ""
         return f"{pin}{date}  {label}"
 
+    def _sort_sessions(
+        self, sessions: list[dict], custom_names: dict[str, str]
+    ) -> list[dict]:
+        """Return *sessions* sorted according to the active sort preference."""
+        mode = getattr(self._prefs, "session_sort", "date")
+        if mode == "name":
+            # Alphabetical by display name (custom name > metadata name > id)
+            def _sort_name(s: dict) -> str:
+                sid = s["session_id"]
+                custom = custom_names.get(sid)
+                if custom:
+                    return custom.lower()
+                name = s.get("name", "")
+                if name:
+                    return name.lower()
+                return sid.lower()
+
+            return sorted(sessions, key=_sort_name)
+        elif mode == "project":
+            # Group by project (alphabetical), then by date within each group
+            return sorted(sessions, key=lambda s: (s["project"].lower(), -s["mtime"]))
+        else:
+            # "date" default: most recent first
+            return sorted(sessions, key=lambda s: s["mtime"], reverse=True)
+
     def _populate_session_list(self, sessions: list[dict]) -> None:
         """Populate sidebar tree with sessions grouped by project folder.
 
         Pinned sessions are rendered first under a dedicated group, then the
-        remaining sessions are grouped by project in recency order.  Session ID
-        is stored as node ``data`` for selection handling.
+        remaining sessions are sorted/grouped per the active sort preference.
+        Session ID is stored as node ``data`` for selection handling.
         """
         self._session_list_data = []
         tree = self.query_one("#session-tree", Tree)
@@ -957,9 +985,12 @@ class AmplifierChicApp(App):
 
         custom_names = self._load_session_names()
 
-        # Partition into pinned / unpinned, preserving recency order
+        # Partition into pinned / unpinned
         pinned = [s for s in sessions if s["session_id"] in self._pinned_sessions]
         unpinned = [s for s in sessions if s["session_id"] not in self._pinned_sessions]
+
+        # Sort unpinned according to preference
+        unpinned = self._sort_sessions(unpinned, custom_names)
 
         # ── Pinned group ──
         if pinned:
@@ -1071,7 +1102,7 @@ class AmplifierChicApp(App):
             project = s["project"]
             return q in display.lower() or q in sid.lower() or q in project.lower()
 
-        # Partition into pinned / unpinned, preserving recency order
+        # Partition into pinned / unpinned
         pinned = [
             s
             for s in sessions
@@ -1083,6 +1114,9 @@ class AmplifierChicApp(App):
             if s["session_id"] not in self._pinned_sessions and _matches(s)
         ]
         matched = len(pinned) + len(unpinned)
+
+        # Sort unpinned according to preference
+        unpinned = self._sort_sessions(unpinned, custom_names)
 
         # ── Pinned group ──
         if pinned:
@@ -1495,6 +1529,7 @@ class AmplifierChicApp(App):
             "/colors": lambda: self._cmd_colors(text),
             "/pin": lambda: self._cmd_pin(text),
             "/draft": lambda: self._cmd_draft(text),
+            "/sort": lambda: self._cmd_sort(text),
         }
 
         handler = handlers.get(cmd)
@@ -1532,6 +1567,7 @@ class AmplifierChicApp(App):
             "  /colors       View/set colors (/colors reset, /colors <key> <#hex>)\n"
             "  /focus        Toggle focus mode (hide chrome)\n"
             "  /search       Search chat messages (e.g. /search my query)\n"
+            "  /sort         Sort sessions: date, name, project (/sort <mode>)\n"
             "  /draft        Show/save/clear input draft (/draft save, /draft clear)\n"
             "  /compact      Clear chat, keep session\n"
             "  /keys         Keyboard shortcut overlay\n"
@@ -2261,6 +2297,37 @@ class AmplifierChicApp(App):
             )
         else:
             self._add_system_message(f"Session {short} unpinned.")
+
+    _SORT_MODES = ("date", "name", "project")
+
+    def _cmd_sort(self, text: str) -> None:
+        """Show or change the session sort order in the sidebar."""
+        parts = text.strip().split(None, 1)
+        arg = parts[1].strip().lower() if len(parts) > 1 else ""
+
+        if not arg:
+            current = getattr(self._prefs, "session_sort", "date")
+            self._add_system_message(
+                f"Session sort: {current}\n"
+                f"Available: {', '.join(self._SORT_MODES)}\n"
+                f"Usage: /sort <mode>"
+            )
+            return
+
+        if arg not in self._SORT_MODES:
+            self._add_system_message(
+                f"Unknown sort mode '{arg}'.\nAvailable: {', '.join(self._SORT_MODES)}"
+            )
+            return
+
+        self._prefs.session_sort = arg
+        save_session_sort(arg)
+
+        # Refresh sidebar if it has data loaded
+        if self._session_list_data:
+            self._populate_session_list(self._session_list_data)
+
+        self._add_system_message(f"Sessions sorted by: {arg}")
 
     def _cmd_delete(self, text: str) -> None:
         """Delete a session with two-step confirmation."""
