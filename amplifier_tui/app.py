@@ -45,6 +45,7 @@ from .preferences import (
     THEMES,
     load_preferences,
     resolve_color,
+    save_autosave_enabled,
     save_colors,
     save_compact_mode,
     save_notification_enabled,
@@ -94,6 +95,10 @@ _DANGEROUS_PATTERNS: tuple[str, ...] = (
 )
 _MAX_RUN_OUTPUT_LINES = 100
 _RUN_TIMEOUT = 30
+
+# Auto-save directory and defaults
+AUTOSAVE_DIR = Path.home() / ".amplifier-tui" / "autosave"
+MAX_AUTOSAVES_PER_TAB = 5
 
 # Canonical list of slash commands – used by both _handle_slash_command and
 # ChatInput tab-completion.  Keep in sync with the handlers dict below.
@@ -163,6 +168,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/commands",
     "/run",
     "/include",
+    "/autosave",
 )
 
 
@@ -1271,6 +1277,11 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/quit", "Quit the application", "/quit"),
     ("/run", "Run a shell command inline (/! shorthand)", "/run"),
     ("/include", "Include file contents in prompt (@file syntax too)", "/include"),
+    ("/autosave", "Auto-save status, toggle, force save, or restore", "/autosave"),
+    ("/autosave on", "Enable periodic auto-save", "/autosave on"),
+    ("/autosave off", "Disable periodic auto-save", "/autosave off"),
+    ("/autosave now", "Force an immediate auto-save", "/autosave now"),
+    ("/autosave restore", "List and restore from auto-saves", "/autosave restore"),
     # ── Keyboard-shortcut actions ───────────────────────────────────────────
     ("New Session  Ctrl+N", "Start a new conversation", "action:new_session"),
     ("New Tab  Ctrl+T", "Open a new conversation tab", "action:new_tab"),
@@ -1581,6 +1592,12 @@ class AmplifierChicApp(App):
         self._active_tab_index: int = 0
         self._tab_counter: int = 1
 
+        # Auto-save state
+        self._autosave_enabled: bool = self._prefs.autosave.enabled
+        self._autosave_interval: int = self._prefs.autosave.interval
+        self._last_autosave: float = 0.0
+        self._autosave_timer: object | None = None
+
         # Reverse search state (Ctrl+R inline)
         self._rsearch_active: bool = False
         self._rsearch_query: str = ""
@@ -1684,6 +1701,9 @@ class AmplifierChicApp(App):
         # Periodic draft auto-save in case of crash
         self.set_interval(30, self._auto_save_draft)
 
+        # Initialize session auto-save system
+        self._setup_autosave()
+
         # Restore crash-recovery draft if one exists from a previous crash
         crash_draft = self._load_crash_draft()
         if crash_draft:
@@ -1700,6 +1720,9 @@ class AmplifierChicApp(App):
                 )
             except Exception:
                 pass
+
+        # Check for auto-save recovery from a previous crash
+        self._check_autosave_recovery()
 
         # Heavy import in background
         self._init_amplifier_worker()
@@ -2382,6 +2405,212 @@ class AmplifierChicApp(App):
                 self._save_draft()
         except Exception:
             pass
+
+    # ── Session auto-save ───────────────────────────────────────────────────
+
+    def _setup_autosave(self) -> None:
+        """Initialize the periodic session auto-save system."""
+        AUTOSAVE_DIR.mkdir(parents=True, exist_ok=True)
+        if self._autosave_enabled:
+            self._autosave_timer = self.set_interval(
+                self._autosave_interval,
+                self._do_autosave,
+                name="autosave",
+            )
+
+    def _do_autosave(self) -> None:
+        """Perform an auto-save of the current session (timer + event hook).
+
+        Silently fails — never interrupts the user.
+        """
+        if not self._autosave_enabled:
+            return
+        try:
+            messages = self._search_messages
+            if not messages:
+                return  # Nothing to save
+
+            tab = self._tabs[self._active_tab_index]
+            tab_id = tab.tab_id
+
+            session_data = {
+                "session_id": self._get_session_id(),
+                "session_title": self._session_title or "",
+                "tab_id": tab_id,
+                "tab_name": tab.name,
+                "saved_at": datetime.now().isoformat(),
+                "message_count": len(messages),
+                "messages": [
+                    {"role": role, "content": content}
+                    for role, content, _widget in messages
+                ],
+            }
+
+            ts = int(time.time())
+            filename = f"autosave-{tab_id}-{ts}.json"
+            filepath = AUTOSAVE_DIR / filename
+
+            filepath.write_text(
+                json.dumps(session_data, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            self._last_autosave = time.time()
+
+            # Rotate old auto-saves for this tab
+            self._rotate_autosaves(tab_id)
+        except Exception:
+            pass  # Silent failure — never interrupt the user
+
+    def _rotate_autosaves(self, tab_id: str) -> None:
+        """Keep only the last MAX_AUTOSAVES_PER_TAB files per tab."""
+        try:
+            pattern = f"autosave-{tab_id}-*.json"
+            files = sorted(AUTOSAVE_DIR.glob(pattern), key=lambda f: f.stat().st_mtime)
+            while len(files) > MAX_AUTOSAVES_PER_TAB:
+                oldest = files.pop(0)
+                oldest.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    def _check_autosave_recovery(self) -> None:
+        """Check for auto-save files on startup and notify the user."""
+        try:
+            if not AUTOSAVE_DIR.exists():
+                return
+            autosaves = sorted(
+                AUTOSAVE_DIR.glob("autosave-*.json"),
+                key=lambda f: f.stat().st_mtime,
+                reverse=True,
+            )
+            if not autosaves:
+                return
+            latest = autosaves[0]
+            age_minutes = (time.time() - latest.stat().st_mtime) / 60
+            if age_minutes < 60:  # Only offer if less than 1 hour old
+                self._add_system_message(
+                    f"Auto-save found ({age_minutes:.0f} min ago). "
+                    "Use /autosave restore to recover."
+                )
+        except Exception:
+            pass
+
+    def _cmd_autosave(self, text: str) -> None:
+        """Manage session auto-save (/autosave [on|off|now|restore])."""
+        text = text.strip().lower()
+
+        if not text:
+            # Show status
+            status = "enabled" if self._autosave_enabled else "disabled"
+            last = "never"
+            if self._last_autosave:
+                ago = time.time() - self._last_autosave
+                if ago < 60:
+                    last = f"{ago:.0f}s ago"
+                else:
+                    last = f"{ago / 60:.0f}m ago"
+            try:
+                count = len(list(AUTOSAVE_DIR.glob("autosave-*.json")))
+            except Exception:
+                count = 0
+            self._add_system_message(
+                f"Auto-save: {status}\n"
+                f"  Interval: {self._autosave_interval}s\n"
+                f"  Last save: {last}\n"
+                f"  Files: {count}\n"
+                f"  Location: {AUTOSAVE_DIR}"
+            )
+            return
+
+        if text == "on":
+            self._autosave_enabled = True
+            self._prefs.autosave.enabled = True
+            save_autosave_enabled(True)
+            # Start timer if not already running
+            if self._autosave_timer is not None:
+                try:
+                    self._autosave_timer.stop()  # type: ignore[union-attr]
+                except Exception:
+                    pass
+            self._autosave_timer = self.set_interval(
+                self._autosave_interval,
+                self._do_autosave,
+                name="autosave",
+            )
+            self._add_system_message("Auto-save enabled")
+
+        elif text == "off":
+            self._autosave_enabled = False
+            self._prefs.autosave.enabled = False
+            save_autosave_enabled(False)
+            if self._autosave_timer is not None:
+                try:
+                    self._autosave_timer.stop()  # type: ignore[union-attr]
+                except Exception:
+                    pass
+                self._autosave_timer = None
+            self._add_system_message("Auto-save disabled")
+
+        elif text == "now":
+            self._do_autosave()
+            if self._last_autosave:
+                self._add_system_message("Auto-save completed")
+            else:
+                self._add_system_message(
+                    "Nothing to auto-save (no messages in current session)"
+                )
+
+        elif text == "restore":
+            self._autosave_restore()
+
+        else:
+            self._add_system_message(
+                "Usage: /autosave [on|off|now|restore]\n"
+                "  /autosave          Show auto-save status\n"
+                "  /autosave on       Enable periodic auto-save\n"
+                "  /autosave off      Disable periodic auto-save\n"
+                "  /autosave now      Force immediate save\n"
+                "  /autosave restore  List & restore auto-saves"
+            )
+
+    def _autosave_restore(self) -> None:
+        """Show available auto-saves for recovery."""
+        try:
+            autosaves = sorted(
+                AUTOSAVE_DIR.glob("autosave-*.json"),
+                key=lambda f: f.stat().st_mtime,
+                reverse=True,
+            )
+        except Exception:
+            autosaves = []
+
+        if not autosaves:
+            self._add_system_message("No auto-saves found")
+            return
+
+        lines = ["Available auto-saves:"]
+        for i, f in enumerate(autosaves[:10], 1):
+            try:
+                age = (time.time() - f.stat().st_mtime) / 60
+                size = f.stat().st_size / 1024
+                # Try to read session title from the file
+                data = json.loads(f.read_text(encoding="utf-8"))
+                title = data.get("session_title", "")
+                msg_count = data.get("message_count", "?")
+                label = f" — {title}" if title else ""
+                lines.append(
+                    f"  {i}. {f.name} "
+                    f"({age:.0f} min ago, {size:.1f} KB, "
+                    f"{msg_count} msgs{label})"
+                )
+            except Exception:
+                lines.append(f"  {i}. {f.name}")
+
+        lines.append("")
+        lines.append("To restore the most recent auto-save:")
+        lines.append(f"  /export json  (then compare with {autosaves[0]})")
+        lines.append(f"\nAuto-save files are in: {AUTOSAVE_DIR}")
+
+        self._add_system_message("\n".join(lines))
 
     # ── Crash-recovery draft (global, plain-text) ─────────────────
 
@@ -3639,6 +3868,7 @@ class AmplifierChicApp(App):
             "/commands": self.action_command_palette,
             "/run": lambda: self._cmd_run(args),
             "/include": lambda: self._cmd_include(args),
+            "/autosave": lambda: self._cmd_autosave(args),
         }
 
         handler = handlers.get(cmd)
@@ -3711,6 +3941,7 @@ class AmplifierChicApp(App):
             "  /!            Shorthand for /run (/! git diff)\n"
             "  /include      Include file contents (/include src/main.py, /include *.py --send)\n"
             "                Also: @./path/to/file in your prompt auto-includes\n"
+            "  /autosave     Auto-save status, toggle, force save, restore (/autosave on|off|now|restore)\n"
             "  /keys         Keyboard shortcut overlay\n"
             "  /palette      Command palette (Ctrl+P) – fuzzy search all commands\n"
             "  /quit         Quit\n"
@@ -8399,6 +8630,8 @@ class AmplifierChicApp(App):
             self._response_times.append(elapsed)
         self._maybe_send_notification(elapsed)
         self._notify_sound(elapsed)
+        # Auto-save after every completed response
+        self._do_autosave()
 
     def _maybe_send_notification(self, elapsed: float | None = None) -> None:
         """Send a terminal notification if processing took long enough."""

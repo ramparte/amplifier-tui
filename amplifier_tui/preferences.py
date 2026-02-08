@@ -279,6 +279,10 @@ theme:
 
 sidebar:
   session_sort: "date"            # session sort order: date, name, project
+
+autosave:
+  enabled: true                   # auto-save sessions periodically and after responses
+  interval: 120                   # seconds between periodic auto-saves (default 2 min)
 """
 
 
@@ -331,6 +335,14 @@ class DisplayPreferences:
 
 
 @dataclass
+class AutosavePreferences:
+    """Settings for periodic session auto-save."""
+
+    enabled: bool = True  # Auto-save sessions periodically and after responses
+    interval: int = 120  # Seconds between periodic auto-saves (default 2 min)
+
+
+@dataclass
 class Preferences:
     """Top-level TUI preferences."""
 
@@ -339,6 +351,7 @@ class Preferences:
         default_factory=NotificationPreferences
     )
     display: DisplayPreferences = field(default_factory=DisplayPreferences)
+    autosave: AutosavePreferences = field(default_factory=AutosavePreferences)
     preferred_model: str = ""  # Empty means use default from bundle config
     theme_name: str = "dark"  # Active theme name (persisted for display)
     session_sort: str = "date"  # Session sort order: date, name, project
@@ -412,6 +425,12 @@ def load_preferences(path: Path | None = None) -> Preferences:
                     val = str(sdata["session_sort"] or "date")
                     if val in ("date", "name", "project"):
                         prefs.session_sort = val
+            if isinstance(data.get("autosave"), dict):
+                adata = data["autosave"]
+                if "enabled" in adata:
+                    prefs.autosave.enabled = bool(adata["enabled"])
+                if "interval" in adata:
+                    prefs.autosave.interval = max(30, int(adata["interval"]))
         except Exception:
             pass  # Fall back to defaults on any parse error
     else:
@@ -998,6 +1017,88 @@ def save_session_sort(sort_mode: str, path: Path | None = None) -> None:
         else:
             # No sidebar section at all — append it
             text = text.rstrip() + f"\n\nsidebar:\n  session_sort: {value}\n"
+
+        path.write_text(text)
+    except Exception:
+        pass  # Best-effort persistence
+
+
+def save_autosave_enabled(enabled: bool, path: Path | None = None) -> None:
+    """Persist the autosave enabled preference to the preferences file.
+
+    Surgically updates the enabled value under the autosave section,
+    preserving the rest of the file (including user comments) as-is.
+    """
+    import re
+
+    path = path or PREFS_PATH
+    try:
+        if path.exists():
+            text = path.read_text()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = _DEFAULT_YAML
+
+        value = "true" if enabled else "false"
+        # The autosave section has its own 'enabled:' key.  Since
+        # notifications also has 'enabled:', we target the *last* occurrence
+        # which belongs to the autosave section (it appears after sidebar).
+        matches = list(re.finditer(r"^(\s+enabled:).*$", text, re.MULTILINE))
+        if len(matches) >= 2:
+            # Replace the last match (autosave section)
+            m = matches[-1]
+            text = text[: m.start()] + f"{m.group(1)} {value}" + text[m.end() :]
+        elif re.search(r"^autosave:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(autosave:.*)$",
+                f"\\1\n  enabled: {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            text = text.rstrip() + f"\n\nautosave:\n  enabled: {value}\n"
+
+        path.write_text(text)
+    except Exception:
+        pass  # Best-effort persistence
+
+
+def save_autosave_interval(seconds: int, path: Path | None = None) -> None:
+    """Persist the autosave interval preference to the preferences file.
+
+    Surgically updates the interval value under the autosave section,
+    preserving the rest of the file (including user comments) as-is.
+    """
+    import re
+
+    path = path or PREFS_PATH
+    try:
+        if path.exists():
+            text = path.read_text()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = _DEFAULT_YAML
+
+        value = str(max(30, seconds))
+        if re.search(r"^\s+interval:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(\s+interval:).*$",
+                f"\\1 {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        elif re.search(r"^autosave:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(autosave:.*)$",
+                f"\\1\n  interval: {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            text = text.rstrip() + f"\n\nautosave:\n  interval: {value}\n"
 
         path.write_text(text)
     except Exception:
