@@ -456,14 +456,14 @@ AssistantMessage MarkdownHorizontalRule {
     margin: 1 0;
 }
 
-/* -- Shortcut overlay (F1) ---------------------------- */
+/* -- Shortcut overlay (F1 / Ctrl+/) ------------------- */
 
 ShortcutOverlay {
     align: center middle;
 }
 
 #shortcut-modal {
-    width: 46;
+    width: 52;
     max-height: 80%;
     background: $surface;
     border: tall $primary;

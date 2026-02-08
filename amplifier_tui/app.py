@@ -563,80 +563,100 @@ class FoldToggle(Static):
 # ── Shortcut Overlay ────────────────────────────────────────
 
 SHORTCUTS_TEXT = """\
-       Keyboard Shortcuts
-─────────────────────────────────────
+         Keyboard Shortcuts
+──────────────────────────────────────────
 
-  Enter       Send message
-  Shift+Enter Insert newline
-  Ctrl+J      Insert newline (alt)
-  Ctrl+B      Toggle sidebar
-  Ctrl+N      New session
-  Ctrl+L      Clear chat
-  Ctrl+G      Open $EDITOR
-  Ctrl+S      Stash/restore prompt
-  Ctrl+Y      Copy last response
-  Ctrl+M      Bookmark last response
-  Ctrl+A      Toggle auto-scroll
-  Ctrl+F      Search chat messages
-  Ctrl+R      Search prompt history
-  Ctrl+Home   Jump to top of chat
-  Ctrl+End    Jump to bottom of chat
-  Ctrl+Up     Scroll chat up
-  Ctrl+Down   Scroll chat down
-  Home/End    Top/bottom (empty input)
-  Up/Down     Browse prompt history
-  F1          This help
-  F11         Focus mode
-  Ctrl+Q      Quit
+ NAVIGATION ─────────────────────────────
+  Ctrl+↑/↓         Scroll chat up/down
+  Ctrl+Home/End    Jump to top/bottom
+  Home/End          Top/bottom (input empty)
+  ↑/↓              Browse prompt history
+  Ctrl+B           Toggle sidebar
+  Tab              Cycle focus
+  F11              Focus mode
 
-        Slash Commands
-─────────────────────────────────────
+ CHAT ───────────────────────────────────
+  Enter            Send message
+  Shift+Enter      New line (also Ctrl+J)
+  Ctrl+C           Cancel AI response
+  Ctrl+L           Clear chat
+  Ctrl+A           Toggle auto-scroll
 
-  /help       Show help
-  /clear      Clear chat
-  /new        New session
-  /sessions   Toggle sidebar
-  /prefs      Show preferences
-  /model      Model info / switch (/model <name>)
-  /theme      Switch theme
-  /colors     View/set colors
-  /export     Export chat (md/txt/json)
-  /title      View/set session title (auto from first msg)
-  /rename     Rename session
-  /pin [N]    Pin message (/pin last AI, /pin N for msg #N)
-  /pins       List pinned messages
-  /unpin N    Remove a pin by number
-  /pin-session  Pin/unpin session in sidebar
-  /delete     Delete session
-  /stats      Session statistics
-  /tokens     Token / context usage
-  /info       Session details
-  /copy [N|all|code]  Copy response / conversation / code block
-  /bookmark   Bookmark last response
-  /bookmarks  List / jump to bookmarks
-  /scroll     Toggle auto-scroll
-  /focus      Focus mode
-  /notify     Toggle notifications (on/off/sound/silent/<secs>)
-  /sound      Toggle notification sound
-  /timestamps Toggle timestamps
-  /wrap       Toggle word wrap
-  /keys       This overlay
-  /search     Search chat messages
-  /grep       Search chat (/grep -c for case-sensitive)
-  /diff [file|all|staged|last]  Show git changes
-  /sort       Sort sessions (date/name/project)
-  /edit       Open $EDITOR for longer prompts
-  /alias      List/create/remove shortcuts
-  /draft      Show/save/clear/load input draft
-  /compact    Toggle compact view mode
-  /fold       Fold/unfold long messages
-  /history    Browse/clear input history
-  /undo [N]   Remove last (or last N) exchange(s)
-  /redo [N]   Re-send last (or Nth-to-last) message
-  /snippet    Prompt templates (save/use/remove/clear)
-  /quit       Quit
+ SEARCH & EDIT ──────────────────────────
+  Ctrl+F           Search chat messages
+  Ctrl+R           Reverse history search
+  Ctrl+G           Open external editor
+  Ctrl+Y           Copy last AI response
+  Ctrl+M           Bookmark last response
+  Ctrl+S           Stash/restore draft
 
-       Press Escape to close\
+ SESSIONS ───────────────────────────────
+  Ctrl+N           New session
+  F1 / Ctrl+/      This help
+  Ctrl+Q           Quit
+
+          Slash Commands
+──────────────────────────────────────────
+  Type /help for the full reference
+
+ SESSION ────────────────────────────────
+  /new             New session
+  /sessions        Toggle session sidebar
+  /rename          Rename session
+  /title           View/set session title
+  /delete          Delete current session
+  /pin-session     Pin/unpin in sidebar
+  /sort            Sort sessions
+  /info            Session details
+  /stats           Session statistics
+
+ CHAT & HISTORY ─────────────────────────
+  /clear           Clear chat display
+  /copy            Copy response (N/all/code)
+  /undo [N]        Undo last N exchange(s)
+  /redo [N]        Resend last message
+  /fold            Fold/unfold long messages
+  /compact         Toggle compact mode
+  /history         Browse/clear input history
+
+ SEARCH ─────────────────────────────────
+  /search          Search chat messages
+  /grep            Search chat (regex)
+
+ PINS & BOOKMARKS ──────────────────────
+  /pin [N]         Pin a message
+  /pins            List pinned messages
+  /unpin N         Remove a pin
+  /bookmark        Bookmark last response
+  /bookmarks       List/jump to bookmarks
+
+ MODEL & DISPLAY ───────────────────────
+  /model [name]    View/switch AI model
+  /theme [name]    Switch color theme
+  /colors          View/set custom colors
+  /wrap            Toggle word wrap
+  /timestamps      Toggle timestamps
+  /focus           Toggle focus mode
+  /scroll          Toggle auto-scroll
+
+ EXPORT & DATA ─────────────────────────
+  /export          Export chat (md/txt/json)
+  /diff            Show git changes
+  /tokens          Token/context usage
+  /context         Context window details
+
+ INPUT & SETTINGS ──────────────────────
+  /edit            Open $EDITOR for input
+  /draft           Save/load input drafts
+  /snippet         Prompt templates
+  /alias           Custom command shortcuts
+  /prefs           Preferences
+  /notify          Toggle notifications
+  /sound           Toggle notification sound
+  /keys            Show this overlay
+  /quit            Quit
+
+    Press F1, Ctrl+/, or Esc to close\
 """
 
 
@@ -646,6 +666,8 @@ class ShortcutOverlay(ModalScreen):
     BINDINGS = [
         Binding("escape", "dismiss_overlay", show=False),
         Binding("f1", "dismiss_overlay", show=False),
+        Binding("ctrl+question_mark", "dismiss_overlay", show=False),
+        Binding("ctrl+slash", "dismiss_overlay", show=False),
     ]
 
     def compose(self) -> ComposeResult:
@@ -654,6 +676,12 @@ class ShortcutOverlay(ModalScreen):
 
     def action_dismiss_overlay(self) -> None:
         self.app.pop_screen()
+
+    def on_click(self, event) -> None:
+        """Dismiss overlay when clicking outside the modal content."""
+        modal = self.query_one("#shortcut-modal")
+        if (event.screen_x, event.screen_y) not in modal.region:
+            self.app.pop_screen()
 
 
 class HistorySearchScreen(ModalScreen[str]):
@@ -743,6 +771,8 @@ class AmplifierChicApp(App):
 
     BINDINGS = [
         Binding("f1", "show_shortcuts", "Help", show=True),
+        Binding("ctrl+question_mark", "show_shortcuts", "Shortcuts", show=False),
+        Binding("ctrl+slash", "show_shortcuts", "Shortcuts", show=False),
         Binding("ctrl+b", "toggle_sidebar", "Sessions", show=True),
         Binding("ctrl+g", "open_editor", "Editor", show=True),
         Binding("ctrl+s", "stash_prompt", "Stash", show=True),
@@ -1692,7 +1722,7 @@ class AmplifierChicApp(App):
     # ── Actions ─────────────────────────────────────────────────
 
     def action_show_shortcuts(self) -> None:
-        """Toggle the keyboard shortcut overlay (F1)."""
+        """Toggle the keyboard shortcut overlay (F1 / Ctrl+/)."""
         if isinstance(self.screen, ShortcutOverlay):
             self.pop_screen()
         else:
