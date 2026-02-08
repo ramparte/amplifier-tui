@@ -130,6 +130,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/refs",
     "/vim",
     "/watch",
+    "/split",
 )
 
 # Known context window sizes (tokens) for popular models.
@@ -1021,6 +1022,7 @@ class AmplifierChicApp(App):
         Binding("ctrl+end", "scroll_chat_bottom", "Bottom of chat", show=False),
         Binding("ctrl+up", "scroll_chat_up", "Scroll up", show=False),
         Binding("ctrl+down", "scroll_chat_down", "Scroll down", show=False),
+        Binding("ctrl+t", "toggle_split_focus", "Split", show=False),
         Binding("ctrl+q", "quit", "Quit", show=True),
     ]
 
@@ -1138,7 +1140,9 @@ class AmplifierChicApp(App):
                 yield Tree("Sessions", id="session-tree")
             with Vertical(id="chat-area"):
                 yield Static("", id="breadcrumb-bar")
-                yield ScrollableContainer(id="chat-view")
+                with Horizontal(id="chat-split-container"):
+                    yield ScrollableContainer(id="chat-view")
+                    yield ScrollableContainer(id="split-panel")
                 yield ChatInput(
                     "",
                     id="chat-input",
@@ -2509,6 +2513,30 @@ class AmplifierChicApp(App):
         except Exception:
             pass
 
+    def action_toggle_split_focus(self) -> None:
+        """Switch focus between chat input, chat view, and split panel (Ctrl+T)."""
+        if not self.has_class("split-mode"):
+            return
+        try:
+            chat_input = self.query_one("#chat-input", ChatInput)
+            split_panel = self.query_one("#split-panel", ScrollableContainer)
+            chat_view = self.query_one("#chat-view", ScrollableContainer)
+        except Exception:
+            return
+
+        focused = self.focused
+        if focused is chat_input or (focused and focused.is_descendant_of(chat_input)):
+            # Input -> split panel
+            split_panel.focus()
+        elif focused is split_panel or (
+            focused and focused.is_descendant_of(split_panel)
+        ):
+            # Split panel -> chat view
+            chat_view.focus()
+        else:
+            # Chat view (or anything else) -> input
+            chat_input.focus()
+
     def _resolve_editor(self) -> str | None:
         """Return the first available editor from $EDITOR, $VISUAL, or common defaults."""
         for candidate in (
@@ -2766,6 +2794,7 @@ class AmplifierChicApp(App):
             "/refs": lambda: self._cmd_ref(text),
             "/vim": lambda: self._cmd_vim(args),
             "/watch": lambda: self._cmd_watch(args),
+            "/split": lambda: self._cmd_split(args),
         }
 
         handler = handlers.get(cmd)
@@ -2826,6 +2855,7 @@ class AmplifierChicApp(App):
             "  /history      Browse input history (/history clear, /history <N>)\n"
             "  /undo         Remove last exchange (/undo <N> for last N exchanges)\n"
             "  /redo         Re-send last user message (/redo <N> for Nth-to-last)\n"
+            "  /split        Toggle split view (/split pins|chat|file <path>|on|off)\n"
             "  /vim          Toggle vim keybindings (/vim on, /vim off)\n"
             "  /keys         Keyboard shortcut overlay\n"
             "  /quit         Quit\n"
@@ -3533,6 +3563,189 @@ class AmplifierChicApp(App):
             self._add_system_message("Vim mode disabled")
 
         self._update_vim_status()
+
+    # ── /split – side-by-side reference panel ────────────────────────────
+
+    def _cmd_split(self, text: str) -> None:
+        """Toggle or configure split view with a reference panel.
+
+        /split          Toggle split view on/off
+        /split on       Open split (default: pins)
+        /split off      Close split
+        /split pins     Show pinned messages in right panel
+        /split chat     Mirror of chat at independent scroll position
+        /split file <p> Show file content in right panel
+        """
+        raw = text.strip() if text else ""
+        lower = raw.lower()
+
+        if lower == "off":
+            self._close_split()
+            return
+
+        if lower == "on" or not lower:
+            if self.has_class("split-mode"):
+                self._close_split()
+            else:
+                self._open_split_pins()
+            return
+
+        if lower == "pins":
+            self._open_split_pins()
+            return
+
+        if lower == "chat":
+            self._open_split_chat()
+            return
+
+        # /split file <path> – preserve original case for the path
+        if lower.startswith("file ") or lower.startswith("file\t"):
+            path = raw[5:].strip()
+            if not path:
+                self._add_system_message("Usage: /split file <path>")
+                return
+            self._open_split_file(path)
+            return
+
+        self._add_system_message(
+            "Usage: /split [on|off|pins|chat|file <path>]\n"
+            "  /split          Toggle split view on/off\n"
+            "  /split pins     Pinned messages in right panel\n"
+            "  /split chat     Chat mirror (independent scroll)\n"
+            "  /split file <p> File content in right panel\n"
+            "  Tab             Switch focus between panels"
+        )
+
+    def _open_split_pins(self) -> None:
+        """Open split panel showing pinned messages."""
+        panel = self.query_one("#split-panel", ScrollableContainer)
+        panel.remove_children()
+
+        panel.mount(Static("\U0001f4cc Pinned Messages", classes="split-panel-title"))
+
+        if not self._message_pins:
+            panel.mount(
+                Static(
+                    "No pinned messages.\nUse /pin to pin messages.",
+                    classes="split-panel-hint",
+                )
+            )
+        else:
+            total = len(self._search_messages)
+            for i, pin in enumerate(self._message_pins, 1):
+                idx = pin["index"]
+                if idx < total:
+                    role, content, _widget = self._search_messages[idx]
+                else:
+                    role = "?"
+                    content = pin.get("preview", "(unavailable)")
+                label = {"user": "You", "assistant": "AI", "system": "Sys"}.get(
+                    role, role
+                )
+                # Truncate very long content for display
+                display = content[:500]
+                if len(content) > 500:
+                    display += "\n..."
+                panel.mount(
+                    Static(
+                        f"[bold]#{i} ({label} msg {idx + 1}):[/bold]\n{display}",
+                        classes="split-panel-content",
+                    )
+                )
+
+        panel.mount(
+            Static(
+                "Tab to switch focus • /split off to close",
+                classes="split-panel-hint",
+            )
+        )
+
+        self.add_class("split-mode")
+        self._add_system_message("Split view: pinned messages (Tab to switch panels)")
+
+    def _open_split_chat(self) -> None:
+        """Open split panel with a copy of current chat messages."""
+        panel = self.query_one("#split-panel", ScrollableContainer)
+        panel.remove_children()
+
+        panel.mount(Static("\U0001f4ac Chat Reference", classes="split-panel-title"))
+
+        if not self._search_messages:
+            panel.mount(Static("No messages yet.", classes="split-panel-hint"))
+        else:
+            for role, content, _widget in self._search_messages:
+                label = {"user": "You", "assistant": "AI", "system": "Sys"}.get(
+                    role, role
+                )
+                # Truncate very long messages
+                display = content[:800]
+                if len(content) > 800:
+                    display += "\n..."
+                panel.mount(
+                    Static(
+                        f"[bold]{label}:[/bold] {display}",
+                        classes="split-panel-content",
+                    )
+                )
+
+        panel.mount(
+            Static(
+                "Tab to switch focus • /split off to close",
+                classes="split-panel-hint",
+            )
+        )
+
+        self.add_class("split-mode")
+        self._add_system_message("Split view: chat reference (Tab to switch panels)")
+
+    def _open_split_file(self, path: str) -> None:
+        """Open split panel showing file content."""
+        abs_path = os.path.abspath(os.path.expanduser(path))
+        if not os.path.exists(abs_path):
+            self._add_system_message(f"File not found: {path}")
+            return
+
+        try:
+            with open(abs_path) as f:
+                content = f.read()
+        except Exception as e:
+            self._add_system_message(f"Cannot read file: {e}")
+            return
+
+        panel = self.query_one("#split-panel", ScrollableContainer)
+        panel.remove_children()
+
+        rel = os.path.relpath(abs_path)
+        panel.mount(Static(f"\U0001f4c4 {rel}", classes="split-panel-title"))
+
+        # Truncate very large files for display
+        display = content
+        if len(display) > 10_000:
+            display = (
+                display[:10_000] + f"\n\n... ({len(content):,} chars total, truncated)"
+            )
+
+        panel.mount(Static(display, classes="split-panel-content"))
+
+        panel.mount(
+            Static(
+                "Tab to switch focus • /split off to close",
+                classes="split-panel-hint",
+            )
+        )
+
+        self.add_class("split-mode")
+        self._add_system_message(f"Split view: {rel}")
+
+    def _close_split(self) -> None:
+        """Close the split panel."""
+        self.remove_class("split-mode")
+        try:
+            panel = self.query_one("#split-panel", ScrollableContainer)
+            panel.remove_children()
+        except Exception:
+            pass
+        self._add_system_message("Split view closed")
 
     # ── /watch – file change monitoring ──────────────────────────────────
 
