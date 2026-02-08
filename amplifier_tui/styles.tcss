@@ -348,3 +348,22 @@ AssistantMessage MarkdownHorizontalRule {
     color: $panel;
     margin: 1 0;
 }
+
+/* -- Shortcut overlay (F1) ---------------------------- */
+
+ShortcutOverlay {
+    align: center middle;
+}
+
+#shortcut-modal {
+    width: 46;
+    max-height: 80%;
+    background: $surface;
+    border: tall $primary;
+    padding: 1 2;
+}
+
+#shortcut-content {
+    color: $text;
+    width: auto;
+}

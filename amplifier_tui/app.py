@@ -16,6 +16,7 @@ from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
+from textual.screen import ModalScreen
 from textual.widgets import Collapsible, Input, Markdown, Static, TextArea, Tree
 from textual import work
 
@@ -201,6 +202,67 @@ class SystemMessage(Static):
         super().__init__(content, classes="chat-message system-message")
 
 
+# ── Shortcut Overlay ────────────────────────────────────────
+
+SHORTCUTS_TEXT = """\
+       Keyboard Shortcuts
+─────────────────────────────────────
+
+  Enter       Send message
+  Ctrl+J      Insert newline
+  Ctrl+B      Toggle sidebar
+  Ctrl+N      New session
+  Ctrl+L      Clear chat
+  Ctrl+G      Open $EDITOR
+  Ctrl+S      Stash/restore prompt
+  Ctrl+Y      Copy last response
+  Ctrl+A      Toggle auto-scroll
+  Up/Down     Browse prompt history
+  F1          This help
+  F11         Focus mode
+  Ctrl+Q      Quit
+
+        Slash Commands
+─────────────────────────────────────
+
+  /help       Show help
+  /clear      Clear chat
+  /new        New session
+  /sessions   Toggle sidebar
+  /prefs      Show preferences
+  /model      Show model info
+  /theme      Switch theme
+  /export     Export to markdown
+  /rename     Rename session
+  /copy       Copy last response
+  /scroll     Toggle auto-scroll
+  /focus      Focus mode
+  /notify     Toggle notifications
+  /timestamps Toggle timestamps
+  /keys       This overlay
+  /compact    Clear chat, keep session
+  /quit       Quit
+
+       Press Escape to close\
+"""
+
+
+class ShortcutOverlay(ModalScreen):
+    """Modal overlay showing all keyboard shortcuts and slash commands."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss_overlay", show=False),
+        Binding("f1", "dismiss_overlay", show=False),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with ScrollableContainer(id="shortcut-modal"):
+            yield Static(SHORTCUTS_TEXT, id="shortcut-content")
+
+    def action_dismiss_overlay(self) -> None:
+        self.app.pop_screen()
+
+
 # ── Main Application ────────────────────────────────────────────────
 
 
@@ -214,6 +276,7 @@ class AmplifierChicApp(App):
     SESSION_NAMES_FILE = Path.home() / ".amplifier" / "tui-session-names.json"
 
     BINDINGS = [
+        Binding("f1", "show_shortcuts", "Help", show=True),
         Binding("ctrl+b", "toggle_sidebar", "Sessions", show=True),
         Binding("ctrl+g", "open_editor", "Editor", show=True),
         Binding("ctrl+s", "stash_prompt", "Stash", show=True),
@@ -562,6 +625,13 @@ class AmplifierChicApp(App):
 
     # ── Actions ─────────────────────────────────────────────────
 
+    def action_show_shortcuts(self) -> None:
+        """Toggle the keyboard shortcut overlay (F1)."""
+        if isinstance(self.screen, ShortcutOverlay):
+            self.pop_screen()
+        else:
+            self.push_screen(ShortcutOverlay())
+
     async def action_quit(self) -> None:
         """Clean up the Amplifier session before quitting.
 
@@ -823,6 +893,7 @@ class AmplifierChicApp(App):
             "/notify": self._cmd_notify,
             "/scroll": self._cmd_scroll,
             "/timestamps": self._cmd_timestamps,
+            "/keys": self._cmd_keys,
             "/theme": lambda: self._cmd_theme(text),
             "/export": lambda: self._cmd_export(text),
             "/rename": lambda: self._cmd_rename(text),
@@ -855,13 +926,15 @@ class AmplifierChicApp(App):
             "  /theme        Switch color theme (dark, light, solarized)\n"
             "  /focus        Toggle focus mode (hide chrome)\n"
             "  /compact      Clear chat, keep session\n"
+            "  /keys         Keyboard shortcut overlay\n"
             "  /quit         Quit\n"
             "\n"
-            "Key Bindings\n"
+            "Key Bindings  (press F1 for full overlay)\n"
             "\n"
             "  Enter         Send message\n"
             "  Ctrl+J        Insert newline\n"
             "  Up/Down       Browse prompt history\n"
+            "  F1            Keyboard shortcuts overlay\n"
             "  F11           Toggle focus mode (hide chrome)\n"
             "  Ctrl+A        Toggle auto-scroll\n"
             "  Ctrl+G        Open $EDITOR for longer prompts\n"
@@ -987,6 +1060,10 @@ class AmplifierChicApp(App):
         for ts_widget in self.query(".msg-timestamp"):
             ts_widget.display = self._prefs.display.show_timestamps
         self._add_system_message(f"Timestamps {state}")
+
+    def _cmd_keys(self) -> None:
+        """Show the keyboard shortcut overlay."""
+        self.action_show_shortcuts()
 
     def _cmd_theme(self, text: str) -> None:
         """Switch color theme or show current/available themes."""
