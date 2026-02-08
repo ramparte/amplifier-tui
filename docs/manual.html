@@ -1,0 +1,949 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Amplifier TUI Manual</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-surface: #161b22;
+    --bg-elevated: #1c2128;
+    --bg-code: #1a1f2b;
+    --border: #30363d;
+    --border-subtle: #21262d;
+    --text: #c9d1d9;
+    --text-dim: #8b949e;
+    --text-bright: #f0f6fc;
+    --orange: #cb7700;
+    --blue: #58a6ff;
+    --purple: #bc8cff;
+    --teal: #56d4dd;
+    --green: #3fb950;
+    --red: #f85149;
+    --gold: #d4a017;
+    --coral: #e06030;
+    --yellow: #e3b341;
+    --nav-width: 280px;
+    --max-content: 900px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; scroll-padding-top: 2rem; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    font-size: 15px;
+  }
+
+  /* --- Sidebar Nav --- */
+  nav {
+    position: fixed;
+    top: 0; left: 0;
+    width: var(--nav-width);
+    height: 100vh;
+    overflow-y: auto;
+    background: var(--bg-surface);
+    border-right: 1px solid var(--border);
+    padding: 1.5rem 0;
+    z-index: 100;
+  }
+  nav::-webkit-scrollbar { width: 4px; }
+  nav::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  nav .nav-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--orange);
+    padding: 0 1.25rem;
+    margin-bottom: 1rem;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+  }
+  nav a {
+    display: block;
+    padding: 0.35rem 1.25rem;
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 13px;
+    border-left: 3px solid transparent;
+    transition: all 0.15s;
+  }
+  nav a:hover {
+    color: var(--text);
+    background: var(--bg-elevated);
+    border-left-color: var(--border);
+  }
+  nav a.section-head {
+    font-weight: 600;
+    color: var(--text);
+    margin-top: 0.75rem;
+    font-size: 13.5px;
+  }
+
+  /* --- Main Content --- */
+  main {
+    margin-left: var(--nav-width);
+    padding: 0 3rem 6rem 3rem;
+    max-width: calc(var(--max-content) + 6rem + var(--nav-width));
+  }
+
+  /* Hero */
+  .hero {
+    padding: 4rem 0 3rem 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 3rem;
+  }
+  .hero h1 {
+    font-size: 2.8rem;
+    font-weight: 800;
+    color: var(--text-bright);
+    letter-spacing: -1px;
+  }
+  .hero h1 span { color: var(--orange); }
+  .hero .tagline {
+    font-size: 1.15rem;
+    color: var(--text-dim);
+    margin-top: 0.5rem;
+    max-width: 600px;
+  }
+  .hero .badges {
+    margin-top: 1.25rem;
+    display: flex; gap: 0.75rem; flex-wrap: wrap;
+  }
+  .badge {
+    display: inline-block;
+    padding: 0.2rem 0.65rem;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+  .badge.orange { border-color: var(--orange); color: var(--orange); }
+  .badge.blue { border-color: var(--blue); color: var(--blue); }
+  .badge.purple { border-color: var(--purple); color: var(--purple); }
+  .badge.teal { border-color: var(--teal); color: var(--teal); }
+
+  /* Sections */
+  section { margin-bottom: 3rem; }
+  h2 {
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: var(--text-bright);
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  h3 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: var(--blue);
+    margin: 1.5rem 0 0.75rem 0;
+  }
+  h4 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--purple);
+    margin: 1.25rem 0 0.5rem 0;
+  }
+  p { margin-bottom: 0.75rem; }
+
+  /* Code */
+  code {
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
+    font-size: 0.88em;
+    background: var(--bg-code);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+    color: var(--purple);
+  }
+  pre {
+    background: var(--bg-code);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    overflow-x: auto;
+    margin: 0.75rem 0 1rem 0;
+    line-height: 1.5;
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    color: var(--text);
+    font-size: 13px;
+  }
+  .cmd { color: var(--green); }
+  .flag { color: var(--blue); }
+  .comment { color: var(--text-dim); font-style: italic; }
+
+  /* Tables */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.75rem 0 1.25rem 0;
+    font-size: 14px;
+  }
+  th {
+    text-align: left;
+    padding: 0.6rem 0.75rem;
+    background: var(--bg-elevated);
+    color: var(--text-bright);
+    font-weight: 600;
+    border-bottom: 2px solid var(--border);
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+  td {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--border-subtle);
+    vertical-align: top;
+  }
+  tr:hover td { background: rgba(56,58,64,0.15); }
+  td code { font-size: 12.5px; }
+
+  /* Special elements */
+  .tip, .warn, .note-box {
+    padding: 0.75rem 1rem;
+    border-radius: 6px;
+    margin: 1rem 0;
+    font-size: 14px;
+    border-left: 4px solid;
+  }
+  .tip { background: rgba(63,185,80,0.08); border-color: var(--green); }
+  .warn { background: rgba(227,179,65,0.08); border-color: var(--yellow); }
+  .note-box { background: rgba(88,166,255,0.08); border-color: var(--blue); }
+
+  /* Message type samples */
+  .msg-sample {
+    padding: 0.6rem 1rem;
+    margin: 0.4rem 0;
+    border-radius: 4px;
+    font-size: 13.5px;
+    font-family: 'SF Mono', Consolas, monospace;
+  }
+  .msg-user { border-left: 4px solid var(--orange); color: #e0e0e0; font-weight: 700; }
+  .msg-assistant { border-left: 4px solid #333344; color: #999999; background: transparent; }
+  .msg-thinking { border-left: 4px solid #665588; background: #110e18; color: #666677; font-style: italic; }
+  .msg-tool { border-left: 4px solid #444444; background: #0a0a0a; color: #555555; }
+  .msg-error { border-left: 4px solid var(--red); color: var(--red); }
+  .msg-note { border-left: 4px solid #c0a030; background: #2a2a10; color: #c0a030; }
+  .msg-system { border-left: 4px solid var(--teal); color: var(--teal); }
+
+  /* Layout diagram */
+  .layout-diagram {
+    background: var(--bg-code);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem;
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 12.5px;
+    line-height: 1.6;
+    overflow-x: auto;
+    color: var(--text-dim);
+  }
+  .layout-diagram .hl { color: var(--orange); font-weight: 600; }
+  .layout-diagram .hl-blue { color: var(--blue); }
+  .layout-diagram .hl-purple { color: var(--purple); }
+
+  /* Kbd */
+  kbd {
+    display: inline-block;
+    padding: 0.1em 0.45em;
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 12px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-bright);
+    box-shadow: 0 1px 0 var(--border);
+  }
+
+  ul, ol { padding-left: 1.5rem; margin-bottom: 0.75rem; }
+  li { margin-bottom: 0.3rem; }
+
+  /* Responsive */
+  @media (max-width: 900px) {
+    nav { display: none; }
+    main { margin-left: 0; padding: 0 1.5rem 4rem 1.5rem; }
+    .hero h1 { font-size: 2rem; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-title">Amplifier TUI</div>
+  <a href="#getting-started" class="section-head">Getting Started</a>
+  <a href="#installation">Installation</a>
+  <a href="#cli-usage">CLI Usage</a>
+  <a href="#ui-overview" class="section-head">UI Overview</a>
+  <a href="#layout">Layout</a>
+  <a href="#message-types">Message Types</a>
+  <a href="#status-bar">Status Bar</a>
+  <a href="#session-sidebar">Session Sidebar</a>
+  <a href="#commands" class="section-head">Slash Commands</a>
+  <a href="#cmd-session">Session Management</a>
+  <a href="#cmd-nav">Navigation &amp; Display</a>
+  <a href="#cmd-search">Search &amp; Find</a>
+  <a href="#cmd-export">Export &amp; Clipboard</a>
+  <a href="#cmd-prompt">Prompt Productivity</a>
+  <a href="#cmd-model">Model &amp; System</a>
+  <a href="#cmd-theme">Theme &amp; Colors</a>
+  <a href="#cmd-bookmarks">Bookmarks &amp; Annotations</a>
+  <a href="#cmd-tabs">Tabs &amp; Layout</a>
+  <a href="#cmd-analytics">Analytics &amp; Diagnostics</a>
+  <a href="#cmd-misc">Notifications &amp; Misc</a>
+  <a href="#keyboard" class="section-head">Keyboard Shortcuts</a>
+  <a href="#keys-core">Core Navigation</a>
+  <a href="#keys-editing">Editing &amp; History</a>
+  <a href="#keys-chat">Chat &amp; Content</a>
+  <a href="#keys-tabs">Tabs</a>
+  <a href="#keys-vim">Vim Mode</a>
+  <a href="#tabs-splits" class="section-head">Tabs &amp; Split Views</a>
+  <a href="#themes" class="section-head">Themes</a>
+  <a href="#preferences" class="section-head">Preferences</a>
+  <a href="#snippets" class="section-head">Snippets &amp; Templates</a>
+  <a href="#testing" class="section-head">UX Testing Tools</a>
+  <a href="#architecture" class="section-head">Architecture</a>
+  <a href="#data-files">Data Files</a>
+  <a href="#known-issues">Known Issues</a>
+</nav>
+
+<main>
+
+<!-- ============================================================ -->
+<!-- HERO -->
+<!-- ============================================================ -->
+<div class="hero">
+  <h1><span>Amplifier</span> TUI</h1>
+  <p class="tagline">A feature-rich terminal interface for Amplifier &mdash; tabbed sessions, 80+ commands, 11 themes, vim mode, split views, and more.</p>
+  <div class="badges">
+    <span class="badge orange">80+ Slash Commands</span>
+    <span class="badge blue">11 Color Themes</span>
+    <span class="badge purple">Vim Mode</span>
+    <span class="badge teal">Split Views</span>
+    <span class="badge">Ctrl+P Palette</span>
+    <span class="badge">Streaming</span>
+    <span class="badge">Bookmarks &amp; Pins</span>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- GETTING STARTED -->
+<!-- ============================================================ -->
+<section id="getting-started">
+  <h2>Getting Started</h2>
+
+  <h3 id="installation">Installation</h3>
+  <p>Amplifier TUI requires Python 3.10+ and a working Amplifier installation.</p>
+  <pre><code><span class="comment"># Install Amplifier globally (if not already)</span>
+<span class="cmd">uv tool install</span> git+https://github.com/microsoft/amplifier
+
+<span class="comment"># Clone and install the TUI</span>
+<span class="cmd">git clone</span> https://github.com/ramparte/amplifier-tui.git
+<span class="cmd">cd</span> amplifier-tui
+<span class="cmd">uv sync</span>
+
+<span class="comment"># Run it</span>
+<span class="cmd">amplifier-tui</span></code></pre>
+
+  <div class="tip">The TUI discovers Amplifier packages from your global <code>uv tool install amplifier</code> installation via runtime path resolution. You don't need Amplifier in the project's venv.</div>
+
+  <h3 id="cli-usage">CLI Usage</h3>
+  <table>
+    <tr><th>Command</th><th>Description</th></tr>
+    <tr><td><code>amplifier-tui</code></td><td>Start a fresh session</td></tr>
+    <tr><td><code>amplifier-tui --resume</code> / <code>-r</code></td><td>Resume the most recent session</td></tr>
+    <tr><td><code>amplifier-tui --session ID</code> / <code>-s ID</code></td><td>Resume a specific session by ID</td></tr>
+    <tr><td><code>amplifier-tui "prompt text"</code></td><td>Start with an initial prompt</td></tr>
+    <tr><td><code>amplifier-tui --version</code> / <code>-V</code></td><td>Print version</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<!-- UI OVERVIEW -->
+<!-- ============================================================ -->
+<section id="ui-overview">
+  <h2>UI Overview</h2>
+
+  <h3 id="layout">Layout</h3>
+  <p>The TUI is organized into a sidebar + main chat area with a multi-segment status bar:</p>
+  <div class="layout-diagram">
+<span class="hl">+----------+--------------------------------------------------+</span>
+<span class="hl">|</span> <span class="hl-blue">Sessions</span> <span class="hl">|</span> <span class="hl-purple">Breadcrumb: project / session-name / model</span>       <span class="hl">|</span>
+<span class="hl">|</span>          <span class="hl">|</span> <span class="hl-purple">[ Tab 1 ] [ Tab 2 ] [ Tab 3 ]</span>                   <span class="hl">|</span>
+<span class="hl">|</span> <span class="hl-blue">Filter:</span>  <span class="hl">|--------------------------------------------------|</span>
+<span class="hl">|</span> <span class="hl-blue">[______]</span> <span class="hl">|</span>                                                  <span class="hl">|</span>
+<span class="hl">|</span>          <span class="hl">|</span>  <span class="msg-user" style="display:inline;padding:0.1em 0.3em;">User: How do I set up a venv?</span>               <span class="hl">|</span>
+<span class="hl">|</span> <span class="hl-blue">v project</span><span class="hl">|</span>                                                  <span class="hl">|</span>
+<span class="hl">|</span>  <span class="hl-blue">sess 1</span> <span class="hl">|</span>  <span class="msg-thinking" style="display:inline;padding:0.1em 0.3em;">Thinking: The user is asking about...</span>       <span class="hl">|</span>
+<span class="hl">|</span>  <span class="hl-blue">sess 2</span> <span class="hl">|</span>                                                  <span class="hl">|</span>
+<span class="hl">|</span>          <span class="hl">|</span>  <span class="msg-tool" style="display:inline;padding:0.1em 0.3em;">Tool: bash (0.3s)</span>                             <span class="hl">|</span>
+<span class="hl">|</span> <span class="hl-blue">v another</span><span class="hl">|</span>                                                  <span class="hl">|</span>
+<span class="hl">|</span>  <span class="hl-blue">sess 3</span> <span class="hl">|</span>  <span class="msg-assistant" style="display:inline;padding:0.1em 0.3em;">Create one with the built-in venv module...</span><span class="hl">|</span>
+<span class="hl">|</span>          <span class="hl">|</span>                                                  <span class="hl">|</span>
+<span class="hl">|</span>          <span class="hl">|--------------------------------------------------|</span>
+<span class="hl">|</span>          <span class="hl">|</span> <span class="hl-purple">Type a message... (Ctrl+P for commands)</span>        <span class="hl">|</span>
+<span class="hl">|</span>          <span class="hl">|--------------------------------------------------|</span>
+<span class="hl">|</span>          <span class="hl">|</span> session | Tab 1/3 | Ready | ctx [====    ] | model<span class="hl">|</span>
+<span class="hl">+----------+--------------------------------------------------+</span>
+  </div>
+
+  <h3 id="message-types">Message Types</h3>
+  <p>Each message type has a distinct visual treatment so you can instantly tell what you're looking at:</p>
+
+  <div class="msg-sample msg-user">User: How do I set up a Python virtual environment?</div>
+  <div class="msg-sample msg-thinking">Thinking: The user is asking about Python venvs. I should cover venv and uv...</div>
+  <div class="msg-sample msg-tool">Tool: bash (0.3s) &mdash; python3 -m venv .venv</div>
+  <div class="msg-sample msg-assistant">Create one with the built-in venv module: python3 -m venv .venv</div>
+  <div class="msg-sample msg-error">Error: Connection failed &mdash; check your API key</div>
+  <div class="msg-sample msg-note">Note: Remember to test this with the staging environment</div>
+  <div class="msg-sample msg-system">System: Session started &mdash; using claude-sonnet-4-20250514</div>
+
+  <table>
+    <tr><th>Type</th><th>Left Border</th><th>Background</th><th>Text Style</th></tr>
+    <tr><td><strong>User</strong></td><td style="color:var(--orange)">thick orange</td><td>transparent</td><td>Bold, bright white</td></tr>
+    <tr><td><strong>Assistant</strong></td><td style="color:#667">wide blue</td><td>transparent</td><td>Normal markdown, gray</td></tr>
+    <tr><td><strong>Thinking</strong></td><td style="color:var(--purple)">wide purple</td><td>Dark tint</td><td>Italic, dim</td></tr>
+    <tr><td><strong>Tool Call</strong></td><td style="color:#777">wide gray</td><td>Dark tint</td><td>Dim, compact</td></tr>
+    <tr><td><strong>Error</strong></td><td style="color:var(--red)">red</td><td>&mdash;</td><td>Red text</td></tr>
+    <tr><td><strong>Note</strong></td><td style="color:var(--gold)">golden</td><td>Warm dark</td><td>Yellow text</td></tr>
+    <tr><td><strong>System</strong></td><td style="color:var(--teal)">teal</td><td>&mdash;</td><td>Teal text</td></tr>
+  </table>
+
+  <p>Thinking blocks and tool calls are rendered as <strong>Collapsible</strong> widgets, collapsed by default. Click to expand and see full content.</p>
+
+  <h3 id="status-bar">Status Bar</h3>
+  <p>The status bar at the bottom shows contextual information across multiple segments:</p>
+  <ul>
+    <li><strong>Session name</strong> &mdash; current session (orange)</li>
+    <li><strong>Tab indicator</strong> &mdash; e.g. "Tab 2/5"</li>
+    <li><strong>Activity state</strong> &mdash; "Ready", animated spinner during processing, or contextual labels like "Reading file.py..."</li>
+    <li><strong>Mode indicators</strong> &mdash; VIM, ML (multiline), stash count, system prompt, active mode</li>
+    <li><strong>Token fuel gauge</strong> &mdash; color-coded bar (green &rarr; yellow &rarr; orange &rarr; red at 4 thresholds)</li>
+    <li><strong>Word count</strong> &mdash; words and reading time</li>
+    <li><strong>Model name</strong> &mdash; current LLM model</li>
+  </ul>
+
+  <h3 id="session-sidebar">Session Sidebar</h3>
+  <p>Toggle with <kbd>Ctrl+B</kbd>. Features a <strong>Tree widget</strong> with:</p>
+  <ul>
+    <li>Expandable project folder groups (derived from session working directories)</li>
+    <li>Single-line session summaries with date (e.g. "Feb 05  Fix the save bug")</li>
+    <li>Session IDs visible on expand</li>
+    <li>Filter/search input at the top</li>
+    <li>Pinned sessions appear at the top (via <code>/pin-session</code>)</li>
+    <li>Configurable sort order (date, name, project) via <code>/sort</code></li>
+  </ul>
+</section>
+
+<!-- ============================================================ -->
+<!-- SLASH COMMANDS -->
+<!-- ============================================================ -->
+<section id="commands">
+  <h2>Slash Commands</h2>
+  <p>Type <code>/</code> followed by a command name. Use <kbd>Ctrl+P</kbd> to open the command palette for fuzzy search across all 80+ commands.</p>
+
+  <h3 id="cmd-session">Session Management</h3>
+  <table>
+    <tr><th>Command</th><th>Description</th></tr>
+    <tr><td><code>/new</code></td><td>Start a new session in the current tab</td></tr>
+    <tr><td><code>/delete</code></td><td>Delete session with two-step confirmation</td></tr>
+    <tr><td><code>/sessions</code></td><td>Cross-session management: <code>/sessions list</code>, <code>/sessions search &lt;query&gt;</code>, <code>/sessions recent</code>, <code>/sessions info &lt;id&gt;</code></td></tr>
+    <tr><td><code>/name &lt;text&gt;</code></td><td>Set a friendly session name (updates tab label)</td></tr>
+    <tr><td><code>/rename &lt;text&gt;</code></td><td>Rename current tab (also <kbd>F2</kbd>)</td></tr>
+    <tr><td><code>/fork</code></td><td>Branch the conversation into a new tab</td></tr>
+    <tr><td><code>/info</code></td><td>Comprehensive session details (model, tokens, duration, etc.)</td></tr>
+    <tr><td><code>/title</code></td><td>Auto-generate or manually set a session title</td></tr>
+  </table>
+
+  <h3 id="cmd-nav">Navigation &amp; Display</h3>
+  <table>
+    <tr><th>Command</th><th>Description</th></tr>
+    <tr><td><code>/help</code></td><td>Show help with all available commands</td></tr>
+    <tr><td><code>/clear</code></td><td>Clear the chat view</td></tr>
+    <tr><td><code>/scroll</code></td><td>Chat scrolling controls</td></tr>
+    <tr><td><code>/focus</code></td><td>Distraction-free mode &mdash; hides sidebar, status bar, breadcrumb, tabs. Only chat + input remain. Also <kbd>F11</kbd>.</td></tr>
+    <tr><td><code>/compact</code></td><td>Toggle dense content view (tighter spacing, hidden timestamps, truncated tool output)</td></tr>
+    <tr><td><code>/wrap</code></td><td>Toggle word wrap (off = horizontal scroll)</td></tr>
+    <tr><td><code>/fold</code></td><td>Message folding: <code>/fold</code> (fold long messages), <code>/fold N</code> (fold specific), <code>/fold threshold &lt;lines&gt;</code> (auto-fold threshold)</td></tr>
+    <tr><td><code>/unfold</code></td><td>Expand all folded messages</td></tr>
+    <tr><td><code>/timestamps</code> / <code>/ts</code></td><td>Toggle live-updating relative timestamps on messages</td></tr>
+  </table>
+
+  <h3 id="cmd-search">Search &amp; Find</h3>
+  <table>
+    <tr><th>Command</th><th>Description</th></tr>
+    <tr><td><code>/search &lt;query&gt;</code></td><td>Cross-session search. <code>/search here &lt;q&gt;</code> (current only), <code>/search open &lt;q&gt;</code> (open results in new tab)</td></tr>
+    <tr><td><code>/find</code></td><td>Open the find bar for in-chat search (<kbd>Ctrl+F</kbd>). Navigate matches with arrows.</td></tr>
+    <tr><td><code>/grep &lt;pattern&gt;</code></td><td>Search within current conversation</td></tr>
+    <tr><td><code>/history</code></td><td>Browse prompt history. <code>/history search &lt;q&gt;</code> for filtered search.</td></tr>
+  </table>
+
+  <h3 id="cmd-export">Export &amp; Clipboard</h3>
+  <table>
+    <tr><th>Command</th><th>Description</th></tr>
+    <tr><td><code>/export</code></td><td>Export conversation. Formats: <code>md</code>, <code>html</code>, <code>json</code>, <code>txt</code>. <code>/export clipboard</code> copies to clipboard. <code>/export last N</code> exports only last N messages.</td></tr>
+    <tr><td><code>/copy</code></td><td>Copy messages to clipboard: <code>/copy</code> (last response), <code>/copy N</code> (last N), <code>/copy all</code>, <code>/copy code</code> (extracts code blocks only)</td></tr>
+    <tr><td><code>/attach &lt;path&gt;</code></td><td>Attach a file to the next message</td></tr>
+    <tr><td><code>/cat &lt;path&gt;</code></td><td>Display file contents inline</td></tr>
+    <tr><td><code>/include &lt;path&gt;</code></td><td>Include file content in message. Also supports <code>@file</code> syntax inline.</td></tr>
+  </table>
+
+  <h3 id="cmd-prompt">Prompt Productivity</h3>
+  <table>
+    <tr><th>Command</th><th>Description</th></tr>
+    <tr><td><code>/snippet</code> / <code>/snip</code></td><td>Reusable prompt snippets. Subcommands: <code>save</code>, <code>use</code>, <code>delete</code>, <code>search</code>, <code>list</code>, <code>cat</code>, <code>tag</code>, <code>export</code>, <code>import</code>. Supports <code>{placeholder}</code> substitution and <code>@@name</code> shorthand inline. 10 built-in snippets included.</td></tr>
+    <tr><td><code>/template</code></td><td>Prompt templates with <code>{{variable}}</code> substitution: <code>save</code>, <code>use</code>, <code>remove</code>, <code>list</code></td></tr>
+    <tr><td><code>/alias &lt;name&gt; &lt;cmd&gt;</code></td><td>Create custom command shortcuts (e.g. <code>/alias cc /copy code</code>)</td></tr>
+    <tr><td><code>/redo</code></td><td>Re-send the previous message</td></tr>
+    <tr><td><code>/retry</code></td><td>Regenerate the last response</td></tr>
+    <tr><td><code>/undo</code></td><td>Remove the last exchange (message + response)</td></tr>
+    <tr><td><code>/suggest</code></td><td>Toggle smart prompt suggestions from history and templates</td></tr>
+    <tr><td><code>/draft</code> / <code>/drafts</code></td><td>Auto-saved draft management per tab</td></tr>
+    <tr><td><code>/edit</code> / <code>/editor</code></td><td>Open external editor (<code>$EDITOR</code>) with fallback chain. <code>/editor auto</code> toggles auto-send after editor closes.</td></tr>
+    <tr><td><code>/multiline</code> / <code>/ml</code></td><td>Toggle multiline input mode (<kbd>Alt+M</kbd>). Use <kbd>Ctrl+J</kbd> or <kbd>Shift+Enter</kbd> for newlines.</td></tr>
+    <tr><td><code>/run &lt;cmd&gt;</code> / <code>/! &lt;cmd&gt;</code></td><td>Inline shell execution (30s timeout, 100 line max output). Blocks dangerous commands.</td></tr>
+  </table>
+
+  <h3 id="cmd-model">Model &amp; System</h3>
+  <table>
+    <tr><th>Command</th><th>Description</th></tr>
+    <tr><td><code>/model</code></td><td>Show current model. <code>/model &lt;name&gt;</code> to switch, <code>/model list</code> to see available. Built-in aliases: <code>sonnet</code>, <code>haiku</code>, <code>opus</code>, <code>gpt4</code>/<code>gpt4o</code>, <code>fast</code>, <code>smart</code>, <code>best</code>.</td></tr>
+    <tr><td><code>/system &lt;text&gt;</code></td><td>Set custom system prompt. 8 built-in presets: <code>coder</code>, <code>reviewer</code>, <code>teacher</code>, <code>concise</code>, <code>creative</code>, <code>debug</code>, <code>architect</code>, <code>writer</code>.</td></tr>
+    <tr><td><code>/mode &lt;name&gt;</code></td><td>Activate a working mode: <code>planning</code>, <code>research</code>, <code>review</code>, <code>debug</code>. Each has a status indicator and accent color.</td></tr>
+    <tr><td><code>/stream</code></td><td>Toggle streaming on/off</td></tr>
+  </table>
+
+  <h3 id="cmd-theme">Theme &amp; Colors</h3>
+  <table>
+    <tr><th>Command</th><th>Description</th></tr>
+    <tr><td><code>/theme</code></td><td>List themes. <code>/theme &lt;name&gt;</code> to switch. <code>/theme preview &lt;name&gt;</code> to preview with revert. 11 built-in themes + custom theme support.</td></tr>
+    <tr><td><code>/colors</code></td><td>Per-message-type color customization: <code>/colors user #ff9900</code>, <code>/colors assistant blue</code>, etc. Supports named colors, hex, presets, and <code>/colors reset</code>.</td></tr>
+    <tr><td><code>/preferences</code> / <code>/prefs</code></td><td>Show all current preference values</td></tr>
+  </table>
+
+  <h3 id="cmd-bookmarks">Bookmarks &amp; Annotations</h3>
+  <table>
+    <tr><th>Command</th><th>Description</th></tr>
+    <tr><td><code>/bookmark</code> / <code>/bm</code></td><td>Bookmark messages. Subcommands: <code>add</code>, <code>list</code>, <code>jump &lt;N&gt;</code>, <code>remove &lt;N&gt;</code>, <code>clear</code>. Vim-style navigation in list. Toggle last with <kbd>Ctrl+M</kbd>.</td></tr>
+    <tr><td><code>/pin</code> / <code>/unpin</code></td><td>Pin important messages to a persistent panel at the top of chat. <code>/pins</code> to list.</td></tr>
+    <tr><td><code>/pin-session</code></td><td>Favorite a session &mdash; pinned sessions appear at the top of the sidebar</td></tr>
+    <tr><td><code>/note &lt;text&gt;</code></td><td>Add session annotations with sticky-note styling. <code>/notes</code> to list.</td></tr>
+    <tr><td><code>/ref &lt;url&gt;</code></td><td>Save URL references. <code>/refs</code> to list collection.</td></tr>
+  </table>
+
+  <h3 id="cmd-tabs">Tabs &amp; Layout</h3>
+  <table>
+    <tr><th>Command</th><th>Description</th></tr>
+    <tr><td><code>/tab</code></td><td>Tab management: <code>new</code>, <code>close</code>, <code>goto &lt;N&gt;</code>, <code>list</code>. Up to 10 concurrent tabs.</td></tr>
+    <tr><td><code>/split</code></td><td>Side-by-side views: <code>/split &lt;N&gt;</code> (tab split), <code>/split pins</code>, <code>/split chat</code>, <code>/split file &lt;path&gt;</code>. Also: <code>/split swap</code>, <code>/split off</code>.</td></tr>
+    <tr><td><code>/sort</code></td><td>Session sidebar sort order: <code>date</code>, <code>name</code>, <code>project</code></td></tr>
+  </table>
+
+  <h3 id="cmd-analytics">Analytics &amp; Diagnostics</h3>
+  <table>
+    <tr><th>Command</th><th>Description</th></tr>
+    <tr><td><code>/stats</code></td><td>Session statistics: timing, cost estimate, top words, tool usage breakdown, token analysis</td></tr>
+    <tr><td><code>/tokens</code></td><td>Show token and context usage estimate</td></tr>
+    <tr><td><code>/context</code></td><td>Visual token usage bar with color thresholds</td></tr>
+    <tr><td><code>/showtokens</code> / <code>/contextwindow</code></td><td>Configure token usage display and context window size</td></tr>
+    <tr><td><code>/diff</code></td><td>Inline git diff viewing: <code>/diff</code> (unstaged), <code>/diff staged</code>, <code>/diff all</code>, <code>/diff &lt;file&gt;</code>. <code>/diff msgs</code> compares messages.</td></tr>
+    <tr><td><code>/git</code></td><td>Quick inline git: <code>status</code>, <code>log</code>, <code>diff</code>, <code>branch</code>, <code>stash</code>, <code>blame &lt;file&gt;</code></td></tr>
+  </table>
+
+  <h3 id="cmd-misc">Notifications &amp; Misc</h3>
+  <table>
+    <tr><th>Command</th><th>Description</th></tr>
+    <tr><td><code>/notify</code></td><td>Terminal notifications: <code>on</code>/<code>off</code>/<code>sound</code>/<code>silent</code>/<code>flash</code>. Persistent, with configurable min-duration.</td></tr>
+    <tr><td><code>/sound</code></td><td>Terminal bell: <code>on</code>/<code>off</code>/<code>test</code></td></tr>
+    <tr><td><code>/progress</code></td><td>Toggle detailed vs generic tool progress labels (e.g. "Reading file.py..." vs "Processing...")</td></tr>
+    <tr><td><code>/watch &lt;path&gt;</code></td><td>Monitor file changes and notify on modification</td></tr>
+    <tr><td><code>/keys</code></td><td>Show keyboard shortcuts reference</td></tr>
+    <tr><td><code>/palette</code> / <code>/commands</code></td><td>Open the command palette (<kbd>Ctrl+P</kbd>)</td></tr>
+    <tr><td><code>/vim</code></td><td>Toggle vim mode: <code>on</code>/<code>off</code></td></tr>
+    <tr><td><code>/autosave</code></td><td>Toggle auto-save with configurable interval</td></tr>
+    <tr><td><code>/quit</code> / <code>/exit</code></td><td>Exit the TUI (sessions are saved automatically)</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<!-- KEYBOARD SHORTCUTS -->
+<!-- ============================================================ -->
+<section id="keyboard">
+  <h2>Keyboard Shortcuts</h2>
+  <p>Press <kbd>F1</kbd> in the TUI for a quick-reference overlay of all shortcuts.</p>
+
+  <h3 id="keys-core">Core Navigation</h3>
+  <table>
+    <tr><th>Key</th><th>Action</th></tr>
+    <tr><td><kbd>Enter</kbd></td><td>Send message</td></tr>
+    <tr><td><kbd>Ctrl+J</kbd> / <kbd>Shift+Enter</kbd></td><td>Insert newline (multiline input)</td></tr>
+    <tr><td><kbd>Ctrl+B</kbd></td><td>Toggle session sidebar</td></tr>
+    <tr><td><kbd>Ctrl+N</kbd></td><td>New session</td></tr>
+    <tr><td><kbd>Ctrl+L</kbd></td><td>Clear chat</td></tr>
+    <tr><td><kbd>Ctrl+Q</kbd></td><td>Quit</td></tr>
+    <tr><td><kbd>F1</kbd> / <kbd>Ctrl+?</kbd> / <kbd>Ctrl+/</kbd></td><td>Keyboard shortcut overlay</td></tr>
+    <tr><td><kbd>Ctrl+P</kbd></td><td>Command palette (fuzzy search across all commands)</td></tr>
+    <tr><td><kbd>F11</kbd></td><td>Toggle focus (distraction-free) mode</td></tr>
+  </table>
+
+  <h3 id="keys-editing">Editing &amp; History</h3>
+  <table>
+    <tr><th>Key</th><th>Action</th></tr>
+    <tr><td><kbd>Ctrl+G</kbd></td><td>Open external editor (<code>$EDITOR</code>)</td></tr>
+    <tr><td><kbd>Ctrl+S</kbd></td><td>Stash/restore prompt (push/pop stack of 5)</td></tr>
+    <tr><td><kbd>Up</kbd> / <kbd>Down</kbd></td><td>Browse prompt history</td></tr>
+    <tr><td><kbd>Ctrl+R</kbd></td><td>Reverse history search (dedicated search bar)</td></tr>
+    <tr><td><kbd>Alt+M</kbd></td><td>Toggle multiline input mode</td></tr>
+  </table>
+
+  <h3 id="keys-chat">Chat &amp; Content</h3>
+  <table>
+    <tr><th>Key</th><th>Action</th></tr>
+    <tr><td><kbd>Ctrl+Y</kbd> / <kbd>Ctrl+Shift+C</kbd></td><td>Copy last response to clipboard</td></tr>
+    <tr><td><kbd>Ctrl+F</kbd></td><td>Find in chat (opens find bar)</td></tr>
+    <tr><td><kbd>Ctrl+A</kbd></td><td>Toggle auto-scroll</td></tr>
+    <tr><td><kbd>Ctrl+M</kbd></td><td>Bookmark last message</td></tr>
+    <tr><td><kbd>Ctrl+Home</kbd> / <kbd>Ctrl+End</kbd></td><td>Jump to top/bottom of chat</td></tr>
+    <tr><td><kbd>Ctrl+Up</kbd> / <kbd>Ctrl+Down</kbd></td><td>Scroll chat up/down</td></tr>
+  </table>
+
+  <h3 id="keys-tabs">Tabs</h3>
+  <table>
+    <tr><th>Key</th><th>Action</th></tr>
+    <tr><td><kbd>Ctrl+T</kbd></td><td>New tab</td></tr>
+    <tr><td><kbd>Ctrl+W</kbd></td><td>Close tab</td></tr>
+    <tr><td><kbd>Ctrl+PageUp</kbd> / <kbd>Ctrl+PageDown</kbd></td><td>Previous / next tab</td></tr>
+    <tr><td><kbd>Alt+Left</kbd> / <kbd>Alt+Right</kbd></td><td>Previous / next tab</td></tr>
+    <tr><td><kbd>Alt+1</kbd>&ndash;<kbd>Alt+9</kbd> / <kbd>Alt+0</kbd></td><td>Switch to tab N / last tab</td></tr>
+    <tr><td><kbd>F2</kbd></td><td>Rename current tab</td></tr>
+  </table>
+
+  <h3 id="keys-vim">Vim Mode</h3>
+  <p>Enable with <code>/vim on</code>. Full vim keybindings in the input area:</p>
+  <table>
+    <tr><th>Key</th><th>Action</th></tr>
+    <tr><td><kbd>h</kbd> <kbd>j</kbd> <kbd>k</kbd> <kbd>l</kbd></td><td>Character/line movement</td></tr>
+    <tr><td><kbd>w</kbd> <kbd>b</kbd> <kbd>e</kbd></td><td>Word navigation (forward, back, end)</td></tr>
+    <tr><td><kbd>0</kbd> <kbd>$</kbd></td><td>Line start / line end</td></tr>
+    <tr><td><kbd>g</kbd><kbd>g</kbd> / <kbd>G</kbd></td><td>Document start / document end</td></tr>
+    <tr><td><kbd>d</kbd><kbd>d</kbd></td><td>Delete line</td></tr>
+    <tr><td><kbd>x</kbd></td><td>Delete character</td></tr>
+    <tr><td><kbd>i</kbd> <kbd>a</kbd> <kbd>I</kbd> <kbd>A</kbd></td><td>Insert modes (before/after cursor, start/end of line)</td></tr>
+    <tr><td><kbd>o</kbd></td><td>Open new line below and enter insert mode</td></tr>
+    <tr><td><kbd>Esc</kbd></td><td>Return to normal mode</td></tr>
+  </table>
+  <p>Multi-character combos (<code>dd</code>, <code>gg</code>) use a key buffer with timeout. The status bar shows <code>VIM</code> and the current mode (NORMAL/INSERT).</p>
+</section>
+
+<!-- ============================================================ -->
+<!-- TABS & SPLIT VIEWS -->
+<!-- ============================================================ -->
+<section id="tabs-splits">
+  <h2>Tabs &amp; Split Views</h2>
+
+  <h3>Working with Tabs</h3>
+  <p>Up to <strong>10 concurrent tabs</strong>, each with its own session, chat history, bookmarks, pins, notes, and input state.</p>
+  <pre><code><span class="cmd">/tab new</span>          <span class="comment"># Open a new tab</span>
+<span class="cmd">/tab close</span>        <span class="comment"># Close current tab</span>
+<span class="cmd">/tab goto 3</span>       <span class="comment"># Switch to tab 3</span>
+<span class="cmd">/tab list</span>         <span class="comment"># Show all open tabs</span>
+<span class="cmd">/fork</span>             <span class="comment"># Branch conversation into new tab</span>
+<span class="cmd">/rename My Work</span>   <span class="comment"># Name the current tab</span></code></pre>
+
+  <div class="tip">Use <kbd>Alt+1</kbd> through <kbd>Alt+9</kbd> to instantly switch tabs. <kbd>Alt+0</kbd> jumps to the last tab.</div>
+
+  <h3>Split Views</h3>
+  <p>The <code>/split</code> command enables side-by-side reference views:</p>
+  <pre><code><span class="cmd">/split 2</span>          <span class="comment"># Show tab 2 alongside current tab</span>
+<span class="cmd">/split pins</span>       <span class="comment"># Show pinned messages as reference panel</span>
+<span class="cmd">/split chat</span>       <span class="comment"># Duplicate chat view for reference</span>
+<span class="cmd">/split file src/app.py</span>  <span class="comment"># Show file contents in side panel</span>
+<span class="cmd">/split swap</span>       <span class="comment"># Swap left and right panels</span>
+<span class="cmd">/split off</span>        <span class="comment"># Close split view</span></code></pre>
+  <p>In tab-split mode, the chat area is divided 1:1 with each side showing a live tab. The active pane has an accent border.</p>
+</section>
+
+<!-- ============================================================ -->
+<!-- THEMES -->
+<!-- ============================================================ -->
+<section id="themes">
+  <h2>Themes</h2>
+  <p>11 built-in color themes, each providing a complete set of UI colors:</p>
+
+  <table>
+    <tr><th>Theme</th><th>Style</th></tr>
+    <tr><td><code>dark</code></td><td>Default dark theme</td></tr>
+    <tr><td><code>light</code></td><td>Light background</td></tr>
+    <tr><td><code>solarized</code></td><td>Solarized Dark</td></tr>
+    <tr><td><code>solarized-light</code></td><td>Solarized Light</td></tr>
+    <tr><td><code>monokai</code></td><td>Monokai</td></tr>
+    <tr><td><code>high-contrast</code></td><td>Maximum readability</td></tr>
+    <tr><td><code>nord</code></td><td>Arctic blue palette</td></tr>
+    <tr><td><code>dracula</code></td><td>Dracula purple theme</td></tr>
+    <tr><td><code>gruvbox</code></td><td>Retro warm tones</td></tr>
+    <tr><td><code>catppuccin</code></td><td>Pastel palette</td></tr>
+    <tr><td><code>midnight</code></td><td>Deep blue-black</td></tr>
+  </table>
+
+  <pre><code><span class="cmd">/theme nord</span>            <span class="comment"># Switch to Nord theme</span>
+<span class="cmd">/theme preview dracula</span> <span class="comment"># Preview Dracula (revert if you don't like it)</span>
+<span class="cmd">/theme</span>                 <span class="comment"># List all available themes</span></code></pre>
+
+  <p>Each theme sets base UI colors (background, surface, panels, primary, secondary, accent) plus per-message-type text and border colors. Custom themes can be created in the preferences file.</p>
+
+  <h3>Per-Message Color Customization</h3>
+  <p>Fine-tune individual message type colors independently of theme:</p>
+  <pre><code><span class="cmd">/colors user #ff9900</span>       <span class="comment"># Set user message text color</span>
+<span class="cmd">/colors assistant blue</span>     <span class="comment"># Named colors work too</span>
+<span class="cmd">/colors thinking #9966cc</span>   <span class="comment"># Customize thinking block color</span>
+<span class="cmd">/colors reset</span>              <span class="comment"># Reset to theme defaults</span></code></pre>
+</section>
+
+<!-- ============================================================ -->
+<!-- PREFERENCES -->
+<!-- ============================================================ -->
+<section id="preferences">
+  <h2>Preferences</h2>
+  <p>All settings persist in <code>~/.amplifier/tui-preferences.yaml</code> (auto-created on first run with inline documentation). View current values with <code>/prefs</code>.</p>
+
+  <h3>Color Preferences</h3>
+  <p>18 color keys for per-message-type customization:</p>
+  <table>
+    <tr><th>Key</th><th>Controls</th></tr>
+    <tr><td><code>user_text</code> / <code>user_border</code></td><td>User message text and border</td></tr>
+    <tr><td><code>assistant_text</code> / <code>assistant_border</code></td><td>Assistant message text and border</td></tr>
+    <tr><td><code>thinking_text</code> / <code>thinking_border</code> / <code>thinking_background</code></td><td>Thinking block styling</td></tr>
+    <tr><td><code>tool_text</code> / <code>tool_border</code> / <code>tool_background</code></td><td>Tool call styling</td></tr>
+    <tr><td><code>system_text</code> / <code>system_border</code></td><td>System message styling</td></tr>
+    <tr><td><code>error_text</code> / <code>error_border</code></td><td>Error message styling</td></tr>
+    <tr><td><code>note_text</code> / <code>note_border</code></td><td>Note/annotation styling</td></tr>
+    <tr><td><code>timestamp</code> / <code>status_bar</code></td><td>Metadata colors</td></tr>
+  </table>
+
+  <h3>Display Preferences</h3>
+  <table>
+    <tr><th>Setting</th><th>Default</th><th>Description</th></tr>
+    <tr><td><code>show_timestamps</code></td><td>off</td><td>Show relative timestamps on messages</td></tr>
+    <tr><td><code>word_wrap</code></td><td>on</td><td>Wrap long lines</td></tr>
+    <tr><td><code>compact_mode</code></td><td>off</td><td>Dense content layout</td></tr>
+    <tr><td><code>vim_mode</code></td><td>off</td><td>Vim keybindings in input</td></tr>
+    <tr><td><code>streaming_enabled</code></td><td>on</td><td>Stream responses token-by-token</td></tr>
+    <tr><td><code>multiline_default</code></td><td>off</td><td>Start in multiline input mode</td></tr>
+    <tr><td><code>show_token_usage</code></td><td>on</td><td>Show token fuel gauge in status bar</td></tr>
+    <tr><td><code>context_window_size</code></td><td>200,000</td><td>Context window size for fuel gauge</td></tr>
+    <tr><td><code>fold_threshold</code></td><td>20</td><td>Auto-fold messages longer than N lines</td></tr>
+    <tr><td><code>show_suggestions</code></td><td>on</td><td>Smart prompt suggestions</td></tr>
+    <tr><td><code>progress_labels</code></td><td>detailed</td><td>Tool progress label style</td></tr>
+  </table>
+
+  <h3>Notification Preferences</h3>
+  <table>
+    <tr><th>Setting</th><th>Default</th><th>Description</th></tr>
+    <tr><td><code>enabled</code></td><td>on</td><td>Enable notifications</td></tr>
+    <tr><td><code>min_seconds</code></td><td>3</td><td>Minimum processing time before notifying</td></tr>
+    <tr><td><code>sound_enabled</code></td><td>off</td><td>Terminal bell on completion</td></tr>
+    <tr><td><code>title_flash</code></td><td>off</td><td>Flash terminal title bar</td></tr>
+  </table>
+
+  <h3>Autosave</h3>
+  <table>
+    <tr><th>Setting</th><th>Default</th><th>Description</th></tr>
+    <tr><td><code>enabled</code></td><td>on</td><td>Auto-save drafts periodically</td></tr>
+    <tr><td><code>interval</code></td><td>120s</td><td>Save frequency in seconds</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<!-- SNIPPETS & TEMPLATES -->
+<!-- ============================================================ -->
+<section id="snippets">
+  <h2>Snippets &amp; Templates</h2>
+
+  <h3>Snippets</h3>
+  <p>Reusable prompt fragments with placeholder support. 10 built-in snippets included.</p>
+  <pre><code><span class="comment"># Save a snippet</span>
+<span class="cmd">/snippet save</span> review Review this code for {focus}: {code}
+
+<span class="comment"># Use a snippet (prompts for placeholders)</span>
+<span class="cmd">/snippet use</span> review
+
+<span class="comment"># Quick inline usage with @@ shorthand</span>
+@@review
+
+<span class="comment"># Browse and search</span>
+<span class="cmd">/snippet list</span>
+<span class="cmd">/snippet search</span> debug
+<span class="cmd">/snippet cat</span> review     <span class="comment"># Show snippet content</span>
+
+<span class="comment"># Tag and organize</span>
+<span class="cmd">/snippet tag</span> review coding,review
+
+<span class="comment"># Import/export</span>
+<span class="cmd">/snippet export</span> snippets.json
+<span class="cmd">/snippet import</span> snippets.json</code></pre>
+
+  <h3>Templates</h3>
+  <p>Full prompt templates with <code>{{variable}}</code> substitution:</p>
+  <pre><code><span class="comment"># Save a template</span>
+<span class="cmd">/template save</span> bug-report Describe the bug in {{module}}: expected {{expected}} but got {{actual}}
+
+<span class="comment"># Use a template (prompts for each variable)</span>
+<span class="cmd">/template use</span> bug-report
+
+<span class="comment"># List and manage</span>
+<span class="cmd">/template list</span>
+<span class="cmd">/template remove</span> bug-report</code></pre>
+
+  <h3>Aliases</h3>
+  <p>Create custom command shortcuts:</p>
+  <pre><code><span class="cmd">/alias cc /copy code</span>        <span class="comment"># /cc now copies code blocks</span>
+<span class="cmd">/alias ss /sessions search</span>  <span class="comment"># /ss searches sessions</span>
+<span class="cmd">/alias</span>                       <span class="comment"># List all aliases</span>
+<span class="cmd">/alias remove cc</span>            <span class="comment"># Remove an alias</span></code></pre>
+</section>
+
+<!-- ============================================================ -->
+<!-- TESTING TOOLS -->
+<!-- ============================================================ -->
+<section id="testing">
+  <h2>UX Testing Tools</h2>
+  <p>The <code>tools/</code> directory contains a headless UX testing pipeline that validates the TUI without needing a live terminal.</p>
+
+  <div class="note-box"><strong>Key insight:</strong> Textual's SVG screenshot export contains every character with exact position, color, and bold/italic state &mdash; making SVG parsing far superior to OCR for TUI validation.</div>
+
+  <h3>Quick Start</h3>
+  <pre><code><span class="comment"># Fast validation (SVG parsing only)</span>
+<span class="cmd">./tools/ux_test.sh</span> --mock-chat --svg-only
+
+<span class="comment"># Full pipeline (SVG + image analysis)</span>
+<span class="cmd">./tools/ux_test.sh</span> --mock-chat
+
+<span class="comment"># Direct capture for scripting</span>
+<span class="cmd">python tools/tui_capture.py</span> --mock-chat --svg -o screenshot.png</code></pre>
+
+  <h3>Pipeline Components</h3>
+  <table>
+    <tr><th>Tool</th><th>Purpose</th><th>Dependencies</th></tr>
+    <tr><td><code>tui_capture.py</code></td><td>Headless screenshot capture (SVG + PNG) via Textual's Pilot framework</td><td><code>cairosvg</code></td></tr>
+    <tr><td><code>svg_parser.py</code></td><td><strong>Primary analysis:</strong> Extracts exact text, colors, styles, layout regions from SVG</td><td>stdlib only</td></tr>
+    <tr><td><code>tui_analyze.py</code></td><td>Supplementary: Layout band analysis, color palette from rasterized PNG</td><td><code>Pillow</code></td></tr>
+    <tr><td><code>ux_test.sh</code></td><td>Combined pipeline: capture &rarr; SVG parse &rarr; image analyze</td><td>&mdash;</td></tr>
+    <tr><td><code>bugdb.py</code></td><td>SQLite bug tracker CLI for test findings</td><td>stdlib only</td></tr>
+  </table>
+
+  <h3>What SVG Parsing Extracts</h3>
+  <ul>
+    <li>Line-by-line text content with exact character positions</li>
+    <li>Per-span colors and styles (bold, italic)</li>
+    <li>Layout region classification (header, content, input, status bar, sidebar)</li>
+    <li>Message type detection by color/prefix heuristics</li>
+    <li>Color theme summary</li>
+  </ul>
+
+  <p>Results are written as YAML to <code>.ux-tests/</code> for human or automated inspection.</p>
+
+  <h3>Bug Tracker</h3>
+  <pre><code><span class="cmd">python tools/bugdb.py add</span> --severity P1 --category rendering "Thinking blocks not collapsed"
+<span class="cmd">python tools/bugdb.py list</span>
+<span class="cmd">python tools/bugdb.py update</span> 1 --status fixed
+<span class="cmd">python tools/bugdb.py export</span> md &gt; bugs.md</code></pre>
+</section>
+
+<!-- ============================================================ -->
+<!-- ARCHITECTURE -->
+<!-- ============================================================ -->
+<section id="architecture">
+  <h2>Architecture</h2>
+
+  <h3>Project Structure</h3>
+  <pre><code>amplifier-tui/
+├── amplifier_tui/
+│   ├── __init__.py            <span class="comment"># Version string</span>
+│   ├── __main__.py            <span class="comment"># CLI entry point (argparse)</span>
+│   ├── app.py                 <span class="comment"># Main app: all widgets, commands, UI (13,700 lines)</span>
+│   ├── session_manager.py     <span class="comment"># Amplifier session lifecycle wrapper</span>
+│   ├── transcript_loader.py   <span class="comment"># Parses transcript.jsonl for session replay</span>
+│   ├── theme.py               <span class="comment"># 11 Textual Theme definitions</span>
+│   ├── preferences.py         <span class="comment"># User prefs system (YAML persistence)</span>
+│   ├── history.py             <span class="comment"># Persistent prompt history with Up/Down</span>
+│   └── styles.tcss            <span class="comment"># Textual CSS stylesheet (917 lines)</span>
+├── tools/                     <span class="comment"># UX testing pipeline</span>
+│   ├── tui_capture.py         <span class="comment"># Headless screenshot capture</span>
+│   ├── svg_parser.py          <span class="comment"># SVG text/color/style extraction</span>
+│   ├── tui_analyze.py         <span class="comment"># Image analysis</span>
+│   ├── ux_test.sh             <span class="comment"># Combined pipeline</span>
+│   └── bugdb.py               <span class="comment"># Bug tracker</span>
+└── pyproject.toml             <span class="comment"># Package metadata</span></code></pre>
+
+  <h3>Amplifier Integration</h3>
+  <p>The <code>SessionManager</code> class wraps Amplifier's session lifecycle:</p>
+  <ul>
+    <li><strong>Session creation:</strong> <code>start_new_session(cwd, model_override)</code> via <code>amplifier_app_cli.session_runner.create_initialized_session()</code></li>
+    <li><strong>Session resume:</strong> <code>resume_session(session_id)</code> loads transcript and reconnects hooks</li>
+    <li><strong>Message sending:</strong> <code>send_message(text)</code> calls <code>session.execute(message)</code></li>
+    <li><strong>Model switching:</strong> <code>switch_model(name)</code> with convenient aliases</li>
+    <li><strong>Session listing:</strong> Scans <code>~/.amplifier/projects/*/sessions/</code> for all sessions</li>
+  </ul>
+
+  <h3>Hook-Based Streaming</h3>
+  <p>Real-time UI updates are driven by 8 Amplifier lifecycle hooks:</p>
+  <table>
+    <tr><th>Hook</th><th>Purpose</th></tr>
+    <tr><td><code>content_block:start</code></td><td>Begin streaming a text or thinking block</td></tr>
+    <tr><td><code>content_block:delta</code></td><td>Append streaming tokens to the current block</td></tr>
+    <tr><td><code>content_block:end</code></td><td>Finalize the current block</td></tr>
+    <tr><td><code>tool:pre</code></td><td>Show tool call in progress (with descriptive label)</td></tr>
+    <tr><td><code>tool:post</code></td><td>Update tool call with result and elapsed time</td></tr>
+    <tr><td><code>execution:start</code></td><td>Show processing indicator</td></tr>
+    <tr><td><code>execution:end</code></td><td>Clear processing indicator</td></tr>
+    <tr><td><code>llm:response</code></td><td>Track token usage for fuel gauge</td></tr>
+  </table>
+
+  <h3>Key Design Decisions</h3>
+  <ol>
+    <li><strong>Worker-thread pattern for session lifecycle:</strong> Sessions are created and destroyed in <code>@work(thread=True)</code> workers with their own event loops, avoiding conflicts with Textual's main loop.</li>
+    <li><strong>Hook-based streaming:</strong> Rather than polling, the TUI registers Amplifier hooks for real-time content, tool progress, and token usage.</li>
+    <li><strong>Everything persists:</strong> All preferences, aliases, snippets, bookmarks, pins, notes, drafts, and custom names persist across sessions via individual JSON/YAML files.</li>
+    <li><strong>SVG over OCR for testing:</strong> Textual SVG exports contain full text data, eliminating the need for heavy ML dependencies.</li>
+    <li><strong>Monolithic app.py:</strong> A pragmatic choice for a Textual app where widgets, actions, and CSS classes are tightly coupled.</li>
+  </ol>
+
+  <h3 id="data-files">Persistent Data Files</h3>
+  <p>All stored under <code>~/.amplifier/</code>:</p>
+  <table>
+    <tr><th>File</th><th>Purpose</th></tr>
+    <tr><td><code>tui-preferences.yaml</code></td><td>All settings (colors, display, notifications, theme, autosave)</td></tr>
+    <tr><td><code>tui-history.txt</code></td><td>Prompt history (up to 1,000 entries)</td></tr>
+    <tr><td><code>tui-session-names.json</code></td><td>Custom session names</td></tr>
+    <tr><td><code>tui-session-titles.json</code></td><td>Auto-generated session titles</td></tr>
+    <tr><td><code>tui-bookmarks.json</code></td><td>Message bookmarks</td></tr>
+    <tr><td><code>tui-pins.json</code></td><td>Pinned messages</td></tr>
+    <tr><td><code>tui-pinned-sessions.json</code></td><td>Favorite sessions for sidebar</td></tr>
+    <tr><td><code>tui-drafts.json</code></td><td>Auto-saved drafts per tab</td></tr>
+    <tr><td><code>tui-draft.txt</code></td><td>Crash recovery draft</td></tr>
+    <tr><td><code>tui-aliases.json</code></td><td>Custom command aliases</td></tr>
+    <tr><td><code>tui-snippets.json</code></td><td>Reusable prompt snippets</td></tr>
+    <tr><td><code>tui-templates.json</code></td><td>Prompt templates</td></tr>
+    <tr><td><code>tui-refs.json</code></td><td>URL/reference collection</td></tr>
+    <tr><td><code>tui-notes.json</code></td><td>Session annotations</td></tr>
+  </table>
+
+  <h3 id="known-issues">Known Issues</h3>
+  <ul>
+    <li><strong>sys.path hack:</strong> <code>session_manager.py</code> uses runtime <code>sys.path</code> manipulation to find Amplifier packages. A fix plan exists in <code>DISTRO-FIX.md</code> to use proper <code>[tool.uv.sources]</code> dependencies.</li>
+    <li><strong>Model thinking duplication:</strong> Some models put the same content in both <code>thinking</code> and <code>text</code> blocks. The TUI renders both correctly, but the content may appear duplicated.</li>
+    <li><strong>Pyright errors:</strong> Static analysis reports missing imports for <code>textual</code>, <code>amplifier_core</code>, and <code>amplifier_app_cli</code>. These are expected &mdash; packages are resolved at runtime.</li>
+  </ul>
+</section>
+
+</main>
+</body>
+</html>
