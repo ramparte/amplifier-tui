@@ -268,10 +268,13 @@ class ThinkingBlock(Static):
 
 
 class ChatInput(TextArea):
-    """TextArea where Enter submits, Ctrl+J inserts a newline."""
+    """TextArea where Enter submits, Shift+Enter/Ctrl+J inserts a newline."""
 
     class Submitted(TextArea.Changed):
         """Fired when the user presses Enter."""
+
+    # Maximum number of content lines before the input scrolls internally
+    MAX_INPUT_LINES = 10
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)
@@ -332,8 +335,23 @@ class ChatInput(TextArea):
 
     # -- Key handling --------------------------------------------------------
 
+    def _update_line_indicator(self) -> None:
+        """Show line count in border subtitle when input is multi-line."""
+        lines = self.text.count("\n") + 1
+        if lines > 1:
+            self.border_subtitle = f"{lines} lines"
+        else:
+            self.border_subtitle = ""
+
     async def _on_key(self, event) -> None:  # noqa: C901
-        if event.key == "enter":
+        if event.key == "shift+enter":
+            # Insert newline (Shift+Enter = multi-line composition)
+            event.prevent_default()
+            event.stop()
+            self._reset_tab_state()
+            self.insert("\n")
+            self._update_line_indicator()
+        elif event.key == "enter":
             # Submit the message
             event.prevent_default()
             event.stop()
@@ -355,6 +373,7 @@ class ChatInput(TextArea):
             event.stop()
             self._reset_tab_state()
             self.insert("\n")
+            self._update_line_indicator()
         elif event.key == "up":
             # History navigation when cursor is on the first line
             self._reset_tab_state()
@@ -427,7 +446,8 @@ SHORTCUTS_TEXT = """\
 ─────────────────────────────────────
 
   Enter       Send message
-  Ctrl+J      Insert newline
+  Shift+Enter Insert newline
+  Ctrl+J      Insert newline (alt)
   Ctrl+B      Toggle sidebar
   Ctrl+N      New session
   Ctrl+L      Clear chat
@@ -1091,9 +1111,12 @@ class AmplifierChicApp(App):
             self._filter_sessions(event.value)
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
-        """Update the input counter when the chat input changes."""
+        """Update the input counter and line indicator when the chat input changes."""
         if event.text_area.id == "chat-input":
             self._update_input_counter(event.text_area.text)
+            # Update the border subtitle line indicator (handles paste, clear, etc.)
+            if isinstance(event.text_area, ChatInput):
+                event.text_area._update_line_indicator()
 
     def _update_input_counter(self, text: str) -> None:
         """Update the character/line counter below the chat input."""
@@ -1730,7 +1753,8 @@ class AmplifierChicApp(App):
             "Key Bindings  (press F1 for full overlay)\n"
             "\n"
             "  Enter         Send message\n"
-            "  Ctrl+J        Insert newline\n"
+            "  Shift+Enter   Insert newline (multi-line input)\n"
+            "  Ctrl+J        Insert newline (alt)\n"
             "  Up/Down       Browse prompt history\n"
             "  F1            Keyboard shortcuts overlay\n"
             "  F11           Toggle focus mode (hide chrome)\n"
