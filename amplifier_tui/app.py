@@ -1580,7 +1580,7 @@ SHORTCUTS_TEXT = """\
   /scroll          Toggle auto-scroll
 
  EXPORT & DATA ─────────────────────────
-  /export          Export chat (md/html/json/txt/clipboard)
+  /export          Export chat (md/html/json/txt/last [N]/clipboard)
   /diff            Show git diff (color-coded)
   /diff msgs       Compare last two assistant messages (or /diff msgs N M)
   /git             Quick git operations (status/log/diff/branch/stash/blame)
@@ -1815,7 +1815,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/note clear", "Remove all session notes", "/note clear"),
     ("/notes", "List all session notes", "/notes"),
     ("/delete", "Delete session (with confirmation)", "/delete"),
-    ("/export", "Export chat (md/html/json/txt/clipboard)", "/export"),
+    ("/export", "Export chat (md/html/json/txt/last [N]/clipboard)", "/export"),
     ("/notify", "Toggle notifications (on, off, sound, silent, flash)", "/notify"),
     ("/sound", "Toggle notification sound (on, off, test)", "/sound"),
     ("/scroll", "Toggle auto-scroll on/off", "/scroll"),
@@ -5375,7 +5375,7 @@ class AmplifierChicApp(App):
             "  /notes        List all session notes (alias for /note list)\n"
             "  /pin-session  Pin/unpin session (pinned appear at top of sidebar)\n"
             "  /delete       Delete session (with confirmation)\n"
-            "  /export       Export chat (md default) | /export <fmt> [path] | /export clipboard\n"
+            "  /export       Export chat (md default) | /export <fmt> [path] | /export last [N] | clipboard\n"
             "  /notify       Toggle notifications (/notify on|off|sound|silent|flash|<secs>)\n"
             "  /sound        Toggle notification sound (/sound on|off|test)\n"
             "  /scroll       Toggle auto-scroll on/off\n"
@@ -11412,6 +11412,8 @@ class AmplifierChicApp(App):
             /export html [path]      Styled HTML (dark theme)
             /export json [path]      Structured JSON
             /export txt [path]       Plain text
+            /export last             Export last assistant response
+            /export last N           Export last N messages
             /export clipboard        Copy markdown to clipboard
             /export <fmt> --clipboard Copy <fmt> to clipboard
             /export help             Show this help
@@ -11428,6 +11430,9 @@ class AmplifierChicApp(App):
                 "  /export html [path]        Styled HTML (dark theme)\n"
                 "  /export json [path]        Structured JSON\n"
                 "  /export txt [path]         Plain text\n"
+                "  /export last               Last assistant response only\n"
+                "  /export last N             Last N messages\n"
+                "  /export <fmt> last [N]     Combine format + scope\n"
                 "  /export clipboard          Copy markdown to clipboard\n"
                 "  /export <fmt> --clipboard  Copy to clipboard\n\n"
                 "Default path: ./amplifier-chat-{timestamp}.{ext}"
@@ -11441,6 +11446,18 @@ class AmplifierChicApp(App):
         # Check for --clipboard flag
         to_clipboard = "--clipboard" in arg or "--clip" in arg
         arg = arg.replace("--clipboard", "").replace("--clip", "").strip()
+
+        # Check for 'last [N]' scope filter anywhere in the args.
+        # Matches: "last", "last 5", "md last", "json last 3", etc.
+        scope = "all"
+        scope_count = 0
+        scope_match = re.search(r"\blast\b(?:\s+(\d+))?", arg, re.IGNORECASE)
+        if scope_match:
+            scope = "last"
+            if scope_match.group(1):
+                scope_count = int(scope_match.group(1))
+            # Remove 'last [N]' from arg so format/path parsing is unaffected
+            arg = (arg[: scope_match.start()] + arg[scope_match.end() :]).strip()
 
         # Parse format and optional path
         tokens = arg.split(None, 1)
@@ -11478,8 +11495,22 @@ class AmplifierChicApp(App):
             else:
                 fmt = "md"
 
-        # Generate content
-        messages = self._search_messages
+        # Select messages based on scope
+        if scope == "last" and scope_count:
+            # /export last N — last N messages (any role)
+            messages = self._search_messages[-scope_count:]
+        elif scope == "last":
+            # /export last — last assistant response only
+            messages = []
+            for entry in reversed(self._search_messages):
+                if entry[0] == "assistant":
+                    messages = [entry]
+                    break
+            if not messages:
+                self._add_system_message("No assistant messages to export")
+                return
+        else:
+            messages = self._search_messages
         if fmt == "json":
             content = self._export_json(messages)
         elif fmt == "html":
