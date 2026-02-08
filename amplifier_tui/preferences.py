@@ -1423,6 +1423,49 @@ def save_fold_threshold(threshold: int, path: Path | None = None) -> None:
         pass  # Best-effort persistence
 
 
+def save_editor_auto_send(enabled: bool, path: Path | None = None) -> None:
+    """Persist the editor_auto_send display preference to the preferences file.
+
+    Surgically updates only the editor_auto_send value, preserving the rest of the
+    file (including user comments) as-is.
+    """
+    import re
+
+    path = path or PREFS_PATH
+    try:
+        if path.exists():
+            text = path.read_text()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = _DEFAULT_YAML
+
+        value = "true" if enabled else "false"
+        if re.search(r"^\s+editor_auto_send:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(\s+editor_auto_send:).*$",
+                f"\\1 {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        elif re.search(r"^display:", text, re.MULTILINE):
+            # display section exists but no editor_auto_send key
+            text = re.sub(
+                r"^(display:.*)$",
+                f"\\1\n  editor_auto_send: {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            # No display section at all — append it
+            text = text.rstrip() + f"\n\ndisplay:\n  editor_auto_send: {value}\n"
+
+        path.write_text(text)
+    except Exception:
+        pass  # Best-effort persistence
+
+
 def save_show_suggestions(enabled: bool, path: Path | None = None) -> None:
     """Persist the show_suggestions display preference to the preferences file.
 

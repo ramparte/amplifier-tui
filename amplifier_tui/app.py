@@ -49,6 +49,7 @@ from .preferences import (
     save_colors,
     save_compact_mode,
     save_context_window_size,
+    save_editor_auto_send,
     save_notification_enabled,
     save_notification_min_seconds,
     save_notification_sound,
@@ -1568,7 +1569,7 @@ SHORTCUTS_TEXT = """\
 
  INPUT & SETTINGS ──────────────────────
   /edit            Open $EDITOR for input
-  /editor          Alias for /edit
+  /editor          Alias for /edit | /editor submit toggles auto-submit
   /draft           Save/load input drafts
   /snippet         Prompt snippets
   /template        Prompt templates with {{variables}}
@@ -4914,7 +4915,14 @@ class AmplifierChicApp(App):
             prefix="amplifier-prompt-",
             delete=False,
         ) as f:
-            f.write(current_text)
+            f.write(
+                "# Compose your prompt below. Lines starting with # are stripped.\n"
+                "# Save and close to submit. Empty file cancels.\n"
+                "\n"
+            )
+            if current_text:
+                f.write(current_text)
+                f.write("\n")
             tmpfile = f.name
 
         try:
@@ -4928,7 +4936,10 @@ class AmplifierChicApp(App):
                 return
 
             with open(tmpfile) as f:
-                new_text = f.read().strip()
+                raw = f.read()
+            # Strip comment lines (template header and user comments)
+            lines = [ln for ln in raw.split("\n") if not ln.startswith("#")]
+            new_text = "\n".join(lines).strip()
 
             if not new_text or new_text == current_text.strip():
                 self._add_system_message("Editor closed with no changes — cancelled.")
@@ -4948,6 +4959,19 @@ class AmplifierChicApp(App):
                 os.unlink(tmpfile)
             except OSError:
                 pass
+
+    def _cmd_editor(self, args: str) -> None:
+        """Handle /editor command with optional 'submit' toggle."""
+        arg = args.strip().lower()
+        if arg == "submit":
+            current = self._prefs.display.editor_auto_send
+            self._prefs.display.editor_auto_send = not current
+            state = "ON" if not current else "OFF"
+            self._add_system_message(f"Editor auto-submit: {state}")
+            save_editor_auto_send(not current)
+            return
+        # No argument (or unknown) — just open editor
+        self.action_open_editor()
 
     def action_stash_prompt(self) -> None:
         """Toggle stash: push current input or pop most recent stash."""
@@ -5215,7 +5239,7 @@ class AmplifierChicApp(App):
             "/drafts": lambda: self._cmd_drafts(text),
             "/sort": lambda: self._cmd_sort(text),
             "/edit": self.action_open_editor,
-            "/editor": self.action_open_editor,
+            "/editor": lambda: self._cmd_editor(args),
             "/wrap": lambda: self._cmd_wrap(text),
             "/fold": lambda: self._cmd_fold(text),
             "/unfold": lambda: self._cmd_unfold(text),
@@ -5320,7 +5344,7 @@ class AmplifierChicApp(App):
             "  /watch        Watch files for changes (/watch <path>, stop, diff)\n"
             "  /sort         Sort sessions: date, name, project (/sort <mode>)\n"
             "  /edit         Open $EDITOR for longer prompts (same as Ctrl+G)\n"
-            "  /editor       Alias for /edit\n"
+            "  /editor       Alias for /edit | /editor submit toggles auto-submit\n"
             "  /draft        Show/save/clear/load input draft (/draft save, /draft clear, /draft load)\n"
             "  /drafts       List all saved drafts across sessions (/drafts clear to clear current)\n"
             "  /snippet      Prompt snippets (/snippet save|use|remove|search|cat|tag|export|import|<name>)\n"
