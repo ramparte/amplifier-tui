@@ -301,6 +301,49 @@ def save_preferred_model(model: str, path: Path | None = None) -> None:
         pass  # Best-effort persistence
 
 
+def save_show_timestamps(enabled: bool, path: Path | None = None) -> None:
+    """Persist the show_timestamps display preference to the preferences file.
+
+    Surgically updates only the show_timestamps value, preserving the rest of the
+    file (including user comments) as-is.
+    """
+    import re
+
+    path = path or PREFS_PATH
+    try:
+        if path.exists():
+            text = path.read_text()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = _DEFAULT_YAML
+
+        value = "true" if enabled else "false"
+        if re.search(r"^\s+show_timestamps:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(\s+show_timestamps:).*$",
+                f"\\1 {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        elif re.search(r"^display:", text, re.MULTILINE):
+            # display section exists but no show_timestamps key
+            text = re.sub(
+                r"^(display:.*)$",
+                f"\\1\n  show_timestamps: {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            # No display section at all — append it
+            text = text.rstrip() + f"\n\ndisplay:\n  show_timestamps: {value}\n"
+
+        path.write_text(text)
+    except Exception:
+        pass  # Best-effort persistence
+
+
 def save_notification_sound(enabled: bool, path: Path | None = None) -> None:
     """Persist the notification sound preference to the preferences file.
 

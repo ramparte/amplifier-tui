@@ -38,6 +38,7 @@ from .preferences import (
     save_colors,
     save_notification_sound,
     save_preferred_model,
+    save_show_timestamps,
 )
 from .theme import CHIC_THEME
 
@@ -1615,6 +1616,7 @@ class AmplifierChicApp(App):
     def _cmd_timestamps(self) -> None:
         """Toggle message timestamps on/off."""
         self._prefs.display.show_timestamps = not self._prefs.display.show_timestamps
+        save_show_timestamps(self._prefs.display.show_timestamps)
         state = "on" if self._prefs.display.show_timestamps else "off"
         # Show/hide existing timestamp widgets
         for ts_widget in self.query(".msg-timestamp"):
@@ -2201,22 +2203,58 @@ class AmplifierChicApp(App):
 
     # ── Message Display ─────────────────────────────────────────
 
-    def _make_timestamp(self, ts: str | None = None) -> Static | None:
-        """Create a dim right-aligned timestamp label, or None if disabled."""
+    @staticmethod
+    def _format_timestamp(dt: datetime) -> str:
+        """Format a datetime for display.
+
+        Returns ``"HH:MM"`` for today's messages or ``"Feb 5 14:32"`` for
+        older ones so users can orient themselves in long conversations.
+        """
+        today = datetime.now(tz=dt.tzinfo).date()
+        if dt.date() == today:
+            return dt.strftime("%H:%M")
+        # Non-zero-padded day: "Feb 5 14:32"
+        return f"{dt.strftime('%b')} {dt.day} {dt.strftime('%H:%M')}"
+
+    def _make_timestamp(
+        self,
+        dt: datetime | None = None,
+        *,
+        fallback_now: bool = True,
+    ) -> Static | None:
+        """Create a dim right-aligned timestamp label, or *None* if disabled.
+
+        Parameters
+        ----------
+        dt:
+            The datetime to display.  When *None* and *fallback_now* is True
+            (the default for live messages), ``datetime.now()`` is used.
+        fallback_now:
+            If *False* and *dt* is None (e.g. a replayed transcript with no
+            stored timestamp), skip the widget entirely rather than showing an
+            incorrect "now" time.
+        """
         if not self._prefs.display.show_timestamps:
             return None
-        time_str = ts or datetime.now().strftime("%H:%M")
-        return Static(time_str, classes="msg-timestamp")
+        if dt is None:
+            if not fallback_now:
+                return None
+            dt = datetime.now()
+        return Static(self._format_timestamp(dt), classes="msg-timestamp")
 
     @staticmethod
-    def _extract_transcript_timestamp(msg: dict) -> str | None:
-        """Extract a display timestamp (HH:MM) from a transcript message."""
+    def _extract_transcript_timestamp(msg: dict) -> datetime | None:
+        """Extract a datetime from a transcript message dict.
+
+        Looks for common timestamp keys (``timestamp``, ``created_at``,
+        ``ts``) and returns a :class:`datetime` so the caller can decide
+        on display formatting (today vs. older).
+        """
         for key in ("timestamp", "created_at", "ts"):
             val = msg.get(key)
             if val:
                 try:
-                    dt = datetime.fromisoformat(str(val).replace("Z", "+00:00"))
-                    return dt.strftime("%H:%M")
+                    return datetime.fromisoformat(str(val).replace("Z", "+00:00"))
                 except (ValueError, TypeError):
                     pass
         return None
@@ -2300,7 +2338,7 @@ class AmplifierChicApp(App):
         widget.styles.color = c.system_text
         widget.styles.border_left = ("thick", c.system_border)
 
-    def _add_user_message(self, text: str, ts: str | None = None) -> None:
+    def _add_user_message(self, text: str, ts: datetime | None = None) -> None:
         chat_view = self.query_one("#chat-view", ScrollableContainer)
         ts_widget = self._make_timestamp(ts)
         if ts_widget:
@@ -2316,7 +2354,7 @@ class AmplifierChicApp(App):
         self._user_words += words
         self._update_word_count_display()
 
-    def _add_assistant_message(self, text: str, ts: str | None = None) -> None:
+    def _add_assistant_message(self, text: str, ts: datetime | None = None) -> None:
         chat_view = self.query_one("#chat-view", ScrollableContainer)
         ts_widget = self._make_timestamp(ts)
         if ts_widget:
@@ -2336,7 +2374,7 @@ class AmplifierChicApp(App):
         self._assistant_words += words
         self._update_word_count_display()
 
-    def _add_system_message(self, text: str, ts: str | None = None) -> None:
+    def _add_system_message(self, text: str, ts: datetime | None = None) -> None:
         """Display a system message (slash command output)."""
         chat_view = self.query_one("#chat-view", ScrollableContainer)
         ts_widget = self._make_timestamp(ts)
@@ -2977,7 +3015,7 @@ class AmplifierChicApp(App):
             for block in blocks:
                 if block.kind == "user":
                     if not ts_shown:
-                        ts_widget = self._make_timestamp(msg_ts)
+                        ts_widget = self._make_timestamp(msg_ts, fallback_now=False)
                         if ts_widget:
                             chat_view.mount(ts_widget)
                         ts_shown = True
@@ -2992,7 +3030,7 @@ class AmplifierChicApp(App):
 
                 elif block.kind == "text":
                     if not ts_shown:
-                        ts_widget = self._make_timestamp(msg_ts)
+                        ts_widget = self._make_timestamp(msg_ts, fallback_now=False)
                         if ts_widget:
                             chat_view.mount(ts_widget)
                         ts_shown = True
