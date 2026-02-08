@@ -176,6 +176,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/notes",
     "/fork",
     "/branch",
+    "/name",
 )
 
 # -- System prompt presets -----------------------------------------------------
@@ -1481,6 +1482,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/fork", "Fork conversation into a new tab", "/fork"),
     ("/fork N", "Fork from message N (from bottom) into a new tab", "/fork"),
     ("/branch", "Fork conversation into a new tab (alias for /fork)", "/branch"),
+    ("/name", "Name current session (/name <text>, /name clear)", "/name"),
     # ── Keyboard-shortcut actions ───────────────────────────────────────────
     ("New Session  Ctrl+N", "Start a new conversation", "action:new_session"),
     ("New Tab  Ctrl+T", "Open a new conversation tab", "action:new_tab"),
@@ -4457,6 +4459,7 @@ class AmplifierChicApp(App):
             "/notes": lambda: self._show_notes(),
             "/fork": lambda: self._cmd_fork(args),
             "/branch": lambda: self._cmd_fork(args),
+            "/name": lambda: self._cmd_name(args),
         }
 
         handler = handlers.get(cmd)
@@ -4488,6 +4491,7 @@ class AmplifierChicApp(App):
             "  /refs         List all saved references (same as /ref with no args)\n"
             "  /title        View/set session title (/title <text> or /title clear)\n"
             "  /rename       Rename current session (e.g. /rename My Project)\n"
+            "  /name         Name session (/name <text>, /name clear, /name to show)\n"
             "  /pin          Pin message (/pin, /pin N, /pin list, /pin clear, /pin remove N)\n"
             "  /pins         List all pinned messages (alias for /pin list)\n"
             "  /unpin <N>    Remove a pin by its pin number\n"
@@ -9317,6 +9321,65 @@ class AmplifierChicApp(App):
 
         self._add_system_message(f'Session renamed to "{new_name}"')
         self._update_breadcrumb()
+
+    def _cmd_name(self, text: str) -> None:
+        """Name the current session (friendly label for search/sidebar/tabs).
+
+        Usage:
+            /name              Show current name
+            /name <text>       Set session name
+            /name clear        Remove the name
+        """
+        sid = self._get_session_id()
+        if not sid:
+            self._add_system_message("No active session to name.")
+            return
+
+        text = text.strip()
+
+        # No argument: show current name
+        if not text:
+            custom_names = self._load_session_names()
+            current = custom_names.get(sid)
+            if current:
+                self._add_system_message(f'Session name: "{current}"')
+            else:
+                self._add_system_message(
+                    "Session is unnamed.\nUsage: /name <text> to set a name."
+                )
+            return
+
+        # Clear the name
+        if text.lower() == "clear":
+            self._remove_session_name(sid)
+            # Reset tab name back to default
+            tab = self._tabs[self._active_tab_index]
+            tab.name = f"Tab {self._active_tab_index + 1}"
+            self._update_tab_bar()
+            self._update_breadcrumb()
+            if self._session_list_data:
+                self._populate_session_list(self._session_list_data)
+            self._add_system_message("Session name cleared.")
+            return
+
+        # Set the name
+        try:
+            self._save_session_name(sid, text)
+        except Exception as e:
+            self._add_system_message(f"Failed to save name: {e}")
+            return
+
+        # Update tab bar label so the name is visible immediately
+        tab = self._tabs[self._active_tab_index]
+        tab.name = text
+        self._update_tab_bar()
+        self._update_breadcrumb()
+
+        # Refresh sidebar if loaded
+        if self._session_list_data:
+            self._populate_session_list(self._session_list_data)
+
+        self._add_system_message(f'Session named: "{text}"')
 
     def _cmd_pin_session(self, text: str) -> None:
         """Pin or unpin a session so it appears at the top of the sidebar."""
