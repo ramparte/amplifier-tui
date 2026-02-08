@@ -1225,6 +1225,37 @@ class FoldToggle(Static):
         self.update(self._make_label(folded=not folded))
 
 
+class PinnedPanelHeader(Static):
+    """Header for the pinned panel. Click to collapse/expand."""
+
+    def on_click(self) -> None:
+        app = self.app
+        if hasattr(app, "_toggle_pinned_panel"):
+            app._toggle_pinned_panel()
+
+
+class PinnedPanelItem(Static):
+    """A single pinned message preview. Click to scroll to the original message."""
+
+    def __init__(
+        self, pin_number: int, msg_index: int, content: str, **kwargs: object
+    ) -> None:
+        super().__init__(content, **kwargs)
+        self.pin_number = pin_number
+        self.msg_index = msg_index
+
+    def on_click(self) -> None:
+        app = self.app
+        if hasattr(app, "_scroll_to_pinned_message"):
+            app._scroll_to_pinned_message(self.msg_index)
+
+
+class PinnedPanel(Vertical):
+    """Collapsible panel at top of chat showing pinned message previews."""
+
+    pass
+
+
 # ── Shortcut Overlay ────────────────────────────────────────
 
 SHORTCUTS_TEXT = """\
@@ -1956,6 +1987,7 @@ class AmplifierChicApp(App):
 
         # Pinned messages (per-session bookmarks for quick recall)
         self._message_pins: list[dict] = []
+        self._pinned_panel_collapsed: bool = False
 
         # Session notes (user annotations, not sent to AI)
         self._session_notes: list[dict] = []
@@ -2024,6 +2056,7 @@ class AmplifierChicApp(App):
                 yield Static("", id="breadcrumb-bar")
                 yield TabBar(id="tab-bar")
                 yield FindBar(id="find-bar")
+                yield PinnedPanel(id="pinned-panel")
                 with Horizontal(id="chat-split-container"):
                     yield ScrollableContainer(id="chat-view", classes="tab-chat-view")
                     yield ScrollableContainer(id="split-panel")
@@ -2091,6 +2124,7 @@ class AmplifierChicApp(App):
 
         # Load message pins for current session
         self._message_pins = self._load_message_pins()
+        self._update_pinned_panel()
 
         # Load custom command aliases
         self._aliases = self._load_aliases()
@@ -2297,6 +2331,7 @@ class AmplifierChicApp(App):
         self._update_session_display()
         self._update_word_count_display()
         self._update_breadcrumb()
+        self._update_pinned_panel()
         self.sub_title = self._session_title or ""
         self.query_one("#chat-input", ChatInput).focus()
 
@@ -2375,6 +2410,7 @@ class AmplifierChicApp(App):
         self._session_refs = []
         self._message_pins = []
         self._session_notes = []
+        self._update_pinned_panel()
 
         # Update UI
         self._update_tab_bar()
@@ -3546,6 +3582,7 @@ class AmplifierChicApp(App):
             }
         )
         self._save_message_pins()
+        self._update_pinned_panel()
 
         # Apply visual indicator to the message widget
         widget = self._search_messages[index][2]
@@ -3595,11 +3632,75 @@ class AmplifierChicApp(App):
                 if widget is not None:
                     widget.remove_class("pinned")
             self._save_message_pins()
+            self._update_pinned_panel()
             preview = removed["preview"][:40]
             self._add_system_message(f"Unpinned #{n}: {preview}...")
         else:
             total = len(self._message_pins)
             self._add_system_message(f"Pin #{n} not found (valid: 1-{total})")
+
+    def _update_pinned_panel(self) -> None:
+        """Refresh the pinned-messages panel at the top of the chat area."""
+        try:
+            panel = self.query_one("#pinned-panel", PinnedPanel)
+        except Exception:
+            return
+
+        panel.remove_children()
+
+        if not self._message_pins:
+            panel.display = False
+            return
+
+        panel.display = True
+
+        # Header line (click to collapse/expand)
+        count = len(self._message_pins)
+        if self._pinned_panel_collapsed:
+            header_text = f"\U0001f4cc Pinned ({count}) \u25b6"
+        else:
+            header_text = f"\U0001f4cc Pinned ({count}) \u25bc"
+        header = PinnedPanelHeader(header_text, id="pinned-panel-header")
+        panel.mount(header)
+
+        if self._pinned_panel_collapsed:
+            return
+
+        total = len(self._search_messages)
+        for i, pin in enumerate(self._message_pins, 1):
+            idx = pin["index"]
+            if idx < total:
+                role = self._search_messages[idx][0]
+            else:
+                role = pin.get("role", "?")
+            role_label = {"user": "You", "assistant": "AI", "system": "Sys"}.get(
+                role, role
+            )
+            pin_label = pin.get("label", "")
+            label_str = f" [{pin_label}]" if pin_label else ""
+            preview = pin["preview"][:60]
+            item = PinnedPanelItem(
+                pin_number=i,
+                msg_index=idx,
+                content=f"  {i}. {role_label}{label_str}: {preview}",
+                classes="pinned-panel-item",
+            )
+            panel.mount(item)
+
+    def _scroll_to_pinned_message(self, msg_index: int) -> None:
+        """Scroll the chat view to bring a pinned message into view."""
+        if msg_index < len(self._search_messages):
+            widget = self._search_messages[msg_index][2]
+            if widget is not None:
+                widget.scroll_visible(animate=True)
+                # Briefly highlight the message
+                widget.add_class("find-current")
+                self.set_timer(2.0, lambda: widget.remove_class("find-current"))
+
+    def _toggle_pinned_panel(self) -> None:
+        """Toggle the pinned panel between collapsed and expanded."""
+        self._pinned_panel_collapsed = not self._pinned_panel_collapsed
+        self._update_pinned_panel()
 
     def _load_session_list(self) -> None:
         """Show loading state then populate in background."""
@@ -4365,6 +4466,7 @@ class AmplifierChicApp(App):
         self._session_notes = []
         self._search_messages = []
         self._session_start_time = time.monotonic()
+        self._update_pinned_panel()
         self._update_word_count_display()
         self.query_one("#chat-input", ChatInput).focus()
 
@@ -10180,6 +10282,7 @@ class AmplifierChicApp(App):
             self._message_pins = []
             self._save_message_pins()
             self._add_system_message("All message pins cleared.")
+            self._update_pinned_panel()
             return
 
         if arg.lower() == "list":
@@ -12047,6 +12150,7 @@ class AmplifierChicApp(App):
         # Restore message pins for this session
         self._message_pins = self._load_message_pins()
         self._apply_pin_classes()
+        self._update_pinned_panel()
 
         # Restore saved references for this session
         self._session_refs = self._load_session_refs()
