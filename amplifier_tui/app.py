@@ -1070,6 +1070,9 @@ class AmplifierChicApp(App):
         # Word count tracking
         self._total_words: int = 0
 
+        # Per-turn tool counter (for progress labels like "[#3]")
+        self._tool_count_this_turn: int = 0
+
         # Session statistics counters
         self._user_message_count: int = 0
         self._assistant_message_count: int = 0
@@ -6299,6 +6302,7 @@ class AmplifierChicApp(App):
         self._got_stream_content = False
         self._processing_label = label
         self._processing_start_time = time.monotonic()
+        self._tool_count_this_turn = 0
         inp = self.query_one("#chat-input", ChatInput)
         inp.disabled = True
         inp.add_class("disabled")
@@ -6340,6 +6344,7 @@ class AmplifierChicApp(App):
             return  # Already finished (e.g. cancel + worker finally)
         self.is_processing = False
         self._processing_label = None
+        self._tool_count_this_turn = 0
         self._streaming_cancelled = False
         self._stream_accumulated_text = ""
         # Clean up any leftover streaming state
@@ -6768,8 +6773,14 @@ class AmplifierChicApp(App):
                     self.call_from_thread(self._add_assistant_message, text)
 
         def on_tool_start(name: str, tool_input: dict) -> None:
+            self._tool_count_this_turn += 1
             label = _get_tool_label(name, tool_input)
             bare = label.rstrip(".")
+            # Append raw tool name for extra detail
+            bare = f"{bare} ({name})"
+            # Show sequential counter when this isn't the first tool
+            if self._tool_count_this_turn > 1:
+                bare = f"{bare} [#{self._tool_count_this_turn}]"
             self._processing_label = bare
             self.call_from_thread(self._ensure_processing_indicator, bare)
             self.call_from_thread(self._update_status, label)
