@@ -538,6 +538,92 @@ def save_notification_sound(enabled: bool, path: Path | None = None) -> None:
         pass  # Best-effort persistence
 
 
+def save_notification_enabled(enabled: bool, path: Path | None = None) -> None:
+    """Persist the notification enabled preference to the preferences file.
+
+    Surgically updates only the enabled value under the notifications section,
+    preserving the rest of the file (including user comments) as-is.
+    """
+    import re
+
+    path = path or PREFS_PATH
+    try:
+        if path.exists():
+            text = path.read_text()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = _DEFAULT_YAML
+
+        value = "true" if enabled else "false"
+        if re.search(r"^\s+enabled:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(\s+enabled:).*$",
+                f"\\1 {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        elif re.search(r"^notifications:", text, re.MULTILINE):
+            # notifications section exists but no enabled key
+            text = re.sub(
+                r"^(notifications:.*)$",
+                f"\\1\n  enabled: {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            # No notifications section at all — append it
+            text = text.rstrip() + f"\n\nnotifications:\n  enabled: {value}\n"
+
+        path.write_text(text)
+    except Exception:
+        pass  # Best-effort persistence
+
+
+def save_notification_min_seconds(seconds: float, path: Path | None = None) -> None:
+    """Persist the notification min_seconds preference to the preferences file.
+
+    Surgically updates only the min_seconds value under the notifications section,
+    preserving the rest of the file (including user comments) as-is.
+    """
+    import re
+
+    path = path or PREFS_PATH
+    try:
+        if path.exists():
+            text = path.read_text()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = _DEFAULT_YAML
+
+        value = f"{seconds:.1f}"
+        if re.search(r"^\s+min_seconds:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(\s+min_seconds:).*$",
+                f"\\1 {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        elif re.search(r"^notifications:", text, re.MULTILINE):
+            # notifications section exists but no min_seconds key
+            text = re.sub(
+                r"^(notifications:.*)$",
+                f"\\1\n  min_seconds: {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            # No notifications section at all — append it
+            text = text.rstrip() + f"\n\nnotifications:\n  min_seconds: {value}\n"
+
+        path.write_text(text)
+    except Exception:
+        pass  # Best-effort persistence
+
+
 def save_session_sort(sort_mode: str, path: Path | None = None) -> None:
     """Persist the session sort preference to the preferences file.
 

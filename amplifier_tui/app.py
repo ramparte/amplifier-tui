@@ -36,6 +36,8 @@ from .preferences import (
     THEMES,
     load_preferences,
     save_colors,
+    save_notification_enabled,
+    save_notification_min_seconds,
     save_notification_sound,
     save_preferred_model,
     save_session_sort,
@@ -596,7 +598,7 @@ SHORTCUTS_TEXT = """\
   /bookmarks  List / jump to bookmarks
   /scroll     Toggle auto-scroll
   /focus      Focus mode
-  /notify     Toggle notifications
+  /notify     Toggle notifications (on/off/sound/silent/<secs>)
   /sound      Toggle notification sound
   /timestamps Toggle timestamps
   /wrap       Toggle word wrap
@@ -1972,7 +1974,7 @@ class AmplifierChicApp(App):
             "/focus": self._cmd_focus,
             "/compact": self._cmd_compact,
             "/copy": lambda: self._cmd_copy(text),
-            "/notify": self._cmd_notify,
+            "/notify": lambda: self._cmd_notify(text),
             "/sound": lambda: self._cmd_sound(text),
             "/scroll": self._cmd_scroll,
             "/timestamps": self._cmd_timestamps,
@@ -2030,7 +2032,7 @@ class AmplifierChicApp(App):
             "  /pin          Pin/unpin session (pinned appear at top of sidebar)\n"
             "  /delete       Delete session (with confirmation)\n"
             "  /export       Export session to markdown file\n"
-            "  /notify       Toggle completion notifications\n"
+            "  /notify       Toggle notifications (/notify on|off|sound|silent|<secs>)\n"
             "  /sound        Toggle notification sound (/sound on, /sound off)\n"
             "  /scroll       Toggle auto-scroll on/off\n"
             "  /timestamps   Toggle message timestamps on/off\n"
@@ -2671,14 +2673,44 @@ class AmplifierChicApp(App):
         """Toggle auto-scroll on/off."""
         self.action_toggle_auto_scroll()
 
-    def _cmd_notify(self) -> None:
-        """Toggle completion notifications on/off."""
+    def _cmd_notify(self, text: str) -> None:
+        """Toggle completion notifications, or set mode/threshold explicitly."""
+        arg = text.partition(" ")[2].strip().lower() if " " in text else ""
         nprefs = self._prefs.notifications
-        nprefs.enabled = not nprefs.enabled
-        state = "on" if nprefs.enabled else "off"
-        self._add_system_message(
-            f"Notifications {state} (notify after {nprefs.min_seconds:.0f}s)"
-        )
+
+        if arg in ("on", "sound"):
+            nprefs.enabled = True
+            save_notification_enabled(True)
+            self._add_system_message(
+                f"Notifications ON (after {nprefs.min_seconds:.0f}s)"
+            )
+        elif arg in ("off", "silent"):
+            nprefs.enabled = False
+            save_notification_enabled(False)
+            self._add_system_message("Notifications OFF")
+        elif arg.replace(".", "", 1).isdigit():
+            secs = max(0.0, float(arg))
+            nprefs.min_seconds = secs
+            save_notification_min_seconds(secs)
+            self._add_system_message(f"Notification threshold: {secs:.1f}s")
+        elif not arg:
+            # Toggle
+            nprefs.enabled = not nprefs.enabled
+            save_notification_enabled(nprefs.enabled)
+            state = "ON" if nprefs.enabled else "OFF"
+            self._add_system_message(
+                f"Notifications {state} (after {nprefs.min_seconds:.0f}s)"
+            )
+        else:
+            self._add_system_message(
+                "Usage: /notify [on|off|sound|silent|<seconds>]\n"
+                "  /notify         Toggle on/off\n"
+                "  /notify on      Enable completion notifications\n"
+                "  /notify off     Disable notifications\n"
+                "  /notify sound   Same as on\n"
+                "  /notify silent  Same as off\n"
+                "  /notify 5       Set minimum response time (seconds)"
+            )
 
     def _cmd_sound(self, text: str) -> None:
         """Toggle notification sound on/off, or set explicitly."""
@@ -3951,15 +3983,18 @@ class AmplifierChicApp(App):
         self._remove_processing_indicator()
         self._update_token_display()
         self._update_status("Ready")
-        self._maybe_send_notification()
-        self._notify_sound()
+        # Compute elapsed time once for both notification methods
+        elapsed: float | None = None
+        if self._processing_start_time is not None:
+            elapsed = time.monotonic() - self._processing_start_time
+            self._processing_start_time = None
+        self._maybe_send_notification(elapsed)
+        self._notify_sound(elapsed)
 
-    def _maybe_send_notification(self) -> None:
+    def _maybe_send_notification(self, elapsed: float | None = None) -> None:
         """Send a terminal notification if processing took long enough."""
-        if self._processing_start_time is None:
+        if elapsed is None:
             return
-        elapsed = time.monotonic() - self._processing_start_time
-        self._processing_start_time = None
         nprefs = self._prefs.notifications
         if not nprefs.enabled:
             return
@@ -3991,14 +4026,19 @@ class AmplifierChicApp(App):
         except Exception:
             pass  # Don't crash if the terminal doesn't support these
 
-    def _notify_sound(self) -> None:
+    def _notify_sound(self, elapsed: float | None = None) -> None:
         """Play a terminal bell if notification sound is enabled.
 
         Uses sys.__stdout__ to bypass Textual's stdout capture.
         This is independent of the richer OSC notification system —
         it simply beeps so the user knows the response is ready.
+        Respects min_seconds threshold to avoid beeping on instant responses.
         """
         if not self._prefs.notifications.sound_enabled:
+            return
+        # Respect minimum duration — don't beep for instant responses
+        nprefs = self._prefs.notifications
+        if elapsed is not None and elapsed < nprefs.min_seconds:
             return
         out = sys.__stdout__
         if out is None:
