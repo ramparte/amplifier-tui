@@ -80,6 +80,33 @@ def _get_tool_label(name: str, tool_input: dict | str | None) -> str:
             short = agent.split(":")[-1] if ":" in agent else agent
             base = f"Delegating to {short}"
 
+    elif name == "bash":
+        cmd = inp.get("command", "")
+        if cmd:
+            first_line = cmd.split("\n", 1)[0]
+            if len(first_line) > 25:
+                first_line = first_line[:22] + "\u2026"
+            base = f"Running: {first_line}"
+
+    elif name == "web_fetch":
+        url = inp.get("url", "")
+        if url:
+            try:
+                from urllib.parse import urlparse
+
+                host = urlparse(url).netloc
+                if host:
+                    base = f"Fetching {host}"
+            except Exception:
+                pass
+
+    elif name == "web_search":
+        query = inp.get("query", "")
+        if query:
+            if len(query) > 20:
+                query = query[:17] + "\u2026"
+            base = f"Searching: {query}"
+
     # Truncate to keep status bar tidy, then add ellipsis
     if len(base) > _MAX_LABEL_LEN:
         base = base[: _MAX_LABEL_LEN - 1] + "\u2026"
@@ -2129,6 +2156,33 @@ class AmplifierChicApp(App):
         except Exception:
             pass
 
+    def _ensure_processing_indicator(self, label: str | None = None) -> None:
+        """Ensure the processing indicator is visible with the given label.
+
+        If the indicator widget exists, updates it in place.
+        If it was removed (e.g. by streaming), re-mounts a fresh one.
+        """
+        if label is not None:
+            self._processing_label = label
+        display_label = self._processing_label or "Thinking"
+        frame = self._SPINNER[self._spinner_frame % len(self._SPINNER)]
+        text = f" {frame} {display_label}..."
+
+        try:
+            indicator = self.query_one("#processing-indicator", ProcessingIndicator)
+            indicator.update(text)
+        except Exception:
+            if not self.is_processing:
+                return
+            chat_view = self.query_one("#chat-view", ScrollableContainer)
+            indicator = ProcessingIndicator(
+                text,
+                classes="processing-indicator",
+                id="processing-indicator",
+            )
+            chat_view.mount(indicator)
+            self._scroll_if_auto(indicator)
+
     # ── Auto-scroll ──────────────────────────────────────────────────────────────
 
     def _scroll_if_auto(self, widget: Static | Collapsible) -> None:
@@ -2340,13 +2394,15 @@ class AmplifierChicApp(App):
 
         def on_tool_start(name: str, tool_input: dict) -> None:
             label = _get_tool_label(name, tool_input)
-            self._processing_label = label.rstrip(".")
-            self.call_from_thread(self._remove_processing_indicator)
+            bare = label.rstrip(".")
+            self._processing_label = bare
+            self.call_from_thread(self._ensure_processing_indicator, bare)
             self.call_from_thread(self._update_status, label)
 
         def on_tool_end(name: str, tool_input: dict, result: str) -> None:
             self._processing_label = "Thinking"
             self.call_from_thread(self._add_tool_use, name, tool_input, result)
+            self.call_from_thread(self._ensure_processing_indicator, "Thinking")
             self.call_from_thread(self._update_status, "Thinking...")
 
         def on_usage():
