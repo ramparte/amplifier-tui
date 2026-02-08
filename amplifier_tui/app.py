@@ -96,7 +96,25 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/colors",
     "/pin",
     "/draft",
+    "/tokens",
 )
+
+# Known context window sizes (tokens) for popular models.
+# Used as fallback when the provider doesn't report context_window.
+MODEL_CONTEXT_WINDOWS: dict[str, int] = {
+    "claude-sonnet": 200_000,
+    "claude-haiku": 200_000,
+    "claude-opus": 200_000,
+    "gpt-4o-mini": 128_000,
+    "gpt-4o": 128_000,
+    "gpt-4": 128_000,
+    "gpt-3.5": 16_000,
+    "o1": 200_000,
+    "o3": 200_000,
+    "o4-mini": 200_000,
+    "gemini": 1_000_000,
+}
+DEFAULT_CONTEXT_WINDOW = 200_000
 
 
 def _get_tool_label(name: str, tool_input: dict | str | None) -> str:
@@ -420,6 +438,7 @@ SHORTCUTS_TEXT = """\
   /pin        Pin/unpin session
   /delete     Delete session
   /stats      Session statistics
+  /tokens     Token / context usage
   /copy [N]   Copy last response (or msg N)
   /bookmark   Bookmark last response
   /bookmarks  List / jump to bookmarks
@@ -1464,6 +1483,7 @@ class AmplifierChicApp(App):
             "/timestamps": self._cmd_timestamps,
             "/keys": self._cmd_keys,
             "/stats": self._cmd_stats,
+            "/tokens": self._cmd_tokens,
             "/theme": lambda: self._cmd_theme(text),
             "/export": lambda: self._cmd_export(text),
             "/rename": lambda: self._cmd_rename(text),
@@ -1496,6 +1516,7 @@ class AmplifierChicApp(App):
             "  /prefs        Show preferences\n"
             "  /model        Show model info | /model list | /model <name>\n"
             "  /stats        Show session statistics\n"
+            "  /tokens       Detailed token / context usage breakdown\n"
             "  /copy         Copy last response | /copy N for message N\n"
             "  /bookmark     Bookmark last response (/bm alias, optional label)\n"
             "  /bookmarks    List bookmarks | /bookmarks <N> to jump\n"
@@ -1908,6 +1929,65 @@ class AmplifierChicApp(App):
             f"Model:      {model}"
         )
         self._add_system_message(stats)
+
+    def _cmd_tokens(self) -> None:
+        """Show detailed token / context usage breakdown."""
+        sm = self.session_manager
+        model = (sm.model_name if sm else "") or "unknown"
+        window = self._get_context_window()
+
+        # Real API-reported tokens (accumulated from llm:response hooks)
+        input_tok = sm.total_input_tokens if sm else 0
+        output_tok = sm.total_output_tokens if sm else 0
+        api_total = input_tok + output_tok
+
+        # Character-based estimate from visible messages
+        user_chars = sum(len(t) for r, t, _w in self._search_messages if r == "user")
+        asst_chars = sum(
+            len(t) for r, t, _w in self._search_messages if r == "assistant"
+        )
+        sys_chars = sum(len(t) for r, t, _w in self._search_messages if r == "system")
+        est_user = user_chars // 4
+        est_asst = asst_chars // 4
+        est_sys = sys_chars // 4
+        est_total = est_user + est_asst + est_sys
+
+        # Prefer real API tokens when available; fall back to estimate
+        display_total = api_total if api_total > 0 else est_total
+        pct = (display_total / window * 100) if window > 0 else 0
+
+        fmt = self._format_token_count
+
+        lines = [
+            "Context Usage",
+            "\u2500" * 18,
+        ]
+
+        if api_total > 0:
+            lines += [
+                f"  Input tokens:     ~{fmt(input_tok)}",
+                f"  Output tokens:    ~{fmt(output_tok)}",
+                f"  Total (API):      ~{fmt(api_total)}",
+            ]
+        else:
+            lines.append("  (no API token data yet)")
+
+        lines += [
+            "",
+            "Chat estimate (~4 chars/token):",
+            f"  User messages:    ~{fmt(est_user)}",
+            f"  Assistant msgs:   ~{fmt(est_asst)}",
+            f"  System msgs:      ~{fmt(est_sys)}",
+            f"  Visible total:    ~{fmt(est_total)}",
+            "",
+            f"  Context window:   {fmt(window)}  ({model})",
+            f"  Usage:            ~{pct:.1f}%",
+            "",
+            "Note: Actual context also includes system prompts, tool",
+            "schemas, and other overhead not visible in chat",
+            "(typically ~10-20K tokens). Use /compact to free space.",
+        ]
+        self._add_system_message("\n".join(lines))
 
     def _cmd_theme(self, text: str) -> None:
         """Switch color theme or show current/available themes."""
@@ -2841,6 +2921,31 @@ class AmplifierChicApp(App):
             return f"{count / 1_000:.1f}k"
         return str(count)
 
+    def _get_context_window(self) -> int:
+        """Get context window size for the current model.
+
+        Uses the provider-reported value when available, otherwise falls
+        back to ``MODEL_CONTEXT_WINDOWS`` keyed by model name substring.
+        """
+        sm = self.session_manager
+        if sm and sm.context_window > 0:
+            return sm.context_window
+
+        # Build a model string from whatever is available.
+        model = ""
+        if sm and sm.model_name:
+            model = sm.model_name
+        elif self._prefs.preferred_model:
+            model = self._prefs.preferred_model
+
+        if model:
+            model_lower = model.lower()
+            for key, size in MODEL_CONTEXT_WINDOWS.items():
+                if key in model_lower:
+                    return size
+
+        return DEFAULT_CONTEXT_WINDOW
+
     def _update_token_display(self) -> None:
         """Update the status bar with current token usage and model info."""
         try:
@@ -2862,19 +2967,29 @@ class AmplifierChicApp(App):
                     pname = pname[7:]
                 parts.append(f"[{pname}]")
 
+            # Token usage with context-window percentage
+            pct = 0.0
             if sm:
                 total = sm.total_input_tokens + sm.total_output_tokens
-                if total > 0 and sm.context_window > 0:
+                window = self._get_context_window()
+                if total > 0 and window > 0:
                     used = self._format_token_count(total)
-                    cap = self._format_token_count(sm.context_window)
-                    pct = int(total / sm.context_window * 100)
-                    parts.append(f"{used}/{cap} ({pct}%)")
+                    cap = self._format_token_count(window)
+                    pct = total / window * 100
+                    parts.append(f"~{used}/{cap} ({pct:.0f}%)")
                 elif total > 0:
-                    parts.append(f"{self._format_token_count(total)} tokens")
+                    parts.append(f"~{self._format_token_count(total)} tokens")
 
-            self.query_one("#status-model", Static).update(
-                " | ".join(parts) if parts else ""
-            )
+            widget = self.query_one("#status-model", Static)
+            widget.update(" | ".join(parts) if parts else "")
+
+            # Color-code by context usage percentage
+            if pct > 80:
+                widget.styles.color = "#ff4444"  # red
+            elif pct > 50:
+                widget.styles.color = "#ffaa00"  # yellow
+            else:
+                widget.styles.color = "#44aa44"  # green
         except Exception:
             pass
 
