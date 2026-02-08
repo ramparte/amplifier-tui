@@ -20,7 +20,7 @@ from textual.widgets import Collapsible, Input, Markdown, Static, TextArea, Tree
 from textual import work
 
 from .history import PromptHistory
-from .preferences import load_preferences
+from .preferences import THEMES, load_preferences
 from .theme import CHIC_THEME
 
 # Tool name -> human-friendly status label (without trailing "...")
@@ -732,6 +732,7 @@ class AmplifierChicApp(App):
             "/compact": self._cmd_compact,
             "/copy": self._cmd_copy,
             "/notify": self._cmd_notify,
+            "/theme": lambda: self._cmd_theme(text),
             "/export": lambda: self._cmd_export(text),
         }
 
@@ -756,6 +757,7 @@ class AmplifierChicApp(App):
             "  /copy         Copy last response to clipboard\n"
             "  /export       Export session to markdown file\n"
             "  /notify       Toggle completion notifications\n"
+            "  /theme        Switch color theme (dark, light, solarized)\n"
             "  /compact      Clear chat, keep session\n"
             "  /quit         Quit\n"
             "\n"
@@ -870,6 +872,59 @@ class AmplifierChicApp(App):
         self._add_system_message(
             f"Notifications {state} (notify after {nprefs.min_seconds:.0f}s)"
         )
+
+    def _cmd_theme(self, text: str) -> None:
+        """Switch color theme or show current/available themes."""
+        parts = text.strip().split(None, 1)
+        available = ", ".join(THEMES)
+
+        if len(parts) < 2:
+            # No argument: show current theme info
+            self._add_system_message(
+                f"Available themes: {available}\nUsage: /theme <name>"
+            )
+            return
+
+        name = parts[1].strip().lower()
+        if not self._prefs.apply_theme(name):
+            self._add_system_message(f"Unknown theme: {name}\nAvailable: {available}")
+            return
+
+        self._apply_theme_to_all_widgets()
+        self._add_system_message(f"Theme switched to '{name}'.")
+
+    def _apply_theme_to_all_widgets(self) -> None:
+        """Re-style every visible chat widget with the current theme colors."""
+        try:
+            chat_view = self.query_one("#chat-view", ScrollableContainer)
+        except Exception:
+            return
+
+        for widget in chat_view.children:
+            classes = widget.classes if hasattr(widget, "classes") else set()
+
+            if "user-message" in classes:
+                self._style_user(widget)
+
+            elif "assistant-message" in classes:
+                self._style_assistant(widget)
+
+            elif "system-message" in classes:
+                self._style_system(widget)
+
+            elif "thinking-block" in classes:
+                # Collapsible with an inner Static
+                inner_list = widget.query(".thinking-text")
+                inner = inner_list.first() if inner_list else None
+                if inner is not None:
+                    self._style_thinking(widget, inner)
+
+            elif "tool-use" in classes:
+                # Collapsible with an inner Static
+                inner_list = widget.query(".tool-detail")
+                inner = inner_list.first() if inner_list else None
+                if inner is not None:
+                    self._style_tool(widget, inner)
 
     def _cmd_export(self, text: str) -> None:
         """Export the current session transcript to a markdown file."""

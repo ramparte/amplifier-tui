@@ -14,6 +14,55 @@ import yaml
 
 PREFS_PATH = Path.home() / ".amplifier" / "tui-preferences.yaml"
 
+# Built-in theme presets: each maps color preference keys to hex values.
+THEMES: dict[str, dict[str, str]] = {
+    "dark": {
+        "user_text": "#ffffff",
+        "user_border": "#cb7700",
+        "assistant_text": "#44bb77",
+        "assistant_border": "#336699",
+        "thinking_text": "#666677",
+        "thinking_border": "#665588",
+        "thinking_background": "#110e18",
+        "tool_text": "#555555",
+        "tool_border": "#444444",
+        "tool_background": "#0a0a0a",
+        "system_text": "#88bbcc",
+        "system_border": "#448899",
+        "status_bar": "#888888",
+    },
+    "light": {
+        "user_text": "#1a1a1a",
+        "user_border": "#cc6600",
+        "assistant_text": "#006633",
+        "assistant_border": "#4488aa",
+        "thinking_text": "#888888",
+        "thinking_border": "#9988bb",
+        "thinking_background": "#f0eef5",
+        "tool_text": "#666666",
+        "tool_border": "#aaaaaa",
+        "tool_background": "#f5f5f5",
+        "system_text": "#337788",
+        "system_border": "#66aabb",
+        "status_bar": "#555555",
+    },
+    "solarized": {
+        "user_text": "#fdf6e3",
+        "user_border": "#b58900",
+        "assistant_text": "#859900",
+        "assistant_border": "#268bd2",
+        "thinking_text": "#657b83",
+        "thinking_border": "#6c71c4",
+        "thinking_background": "#002b36",
+        "tool_text": "#586e75",
+        "tool_border": "#073642",
+        "tool_background": "#002b36",
+        "system_text": "#2aa198",
+        "system_border": "#2aa198",
+        "status_bar": "#839496",
+    },
+}
+
 _DEFAULT_YAML = """\
 # Amplifier TUI Preferences
 # Customize colors for the chat interface.
@@ -76,6 +125,16 @@ class Preferences:
     notifications: NotificationPreferences = field(
         default_factory=NotificationPreferences
     )
+
+    def apply_theme(self, name: str) -> bool:
+        """Apply a built-in theme by name. Returns False if unknown."""
+        theme = THEMES.get(name)
+        if theme is None:
+            return False
+        for key, value in theme.items():
+            if hasattr(self.colors, key):
+                setattr(self.colors, key, value)
+        return True
 
 
 def load_preferences(path: Path | None = None) -> Preferences:
