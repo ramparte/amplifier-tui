@@ -148,6 +148,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/templates",
     "/title",
     "/diff",
+    "/git",
     "/ref",
     "/refs",
     "/vim",
@@ -933,6 +934,7 @@ SHORTCUTS_TEXT = """\
  EXPORT & DATA ─────────────────────────
   /export          Export chat (md/html/json/txt)
   /diff            Show git diff (color-coded)
+  /git             Quick git operations (status/log/diff/branch/stash/blame)
   /watch           Watch files for changes
   /run <cmd>       Run shell command inline (/! shorthand)
   /tokens          Token/context usage
@@ -1112,6 +1114,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/search", "Search chat messages", "/search"),
     ("/grep", "Search chat with regex", "/grep"),
     ("/diff", "Show git diff (staged, all, file)", "/diff"),
+    ("/git", "Quick git info (status, log, diff, branch, stash, blame)", "/git"),
     ("/watch", "Watch files for changes", "/watch"),
     ("/sort", "Sort sessions (date, name, project)", "/sort"),
     ("/edit", "Open $EDITOR for input", "/edit"),
@@ -3483,6 +3486,7 @@ class AmplifierChicApp(App):
             "/templates": lambda: self._cmd_template(""),
             "/title": lambda: self._cmd_title(args),
             "/diff": lambda: self._cmd_diff(args),
+            "/git": lambda: self._cmd_git(args),
             "/ref": lambda: self._cmd_ref(text),
             "/refs": lambda: self._cmd_ref(text),
             "/vim": lambda: self._cmd_vim(args),
@@ -3543,6 +3547,7 @@ class AmplifierChicApp(App):
             "  /search       Search chat messages (e.g. /search my query)\n"
             "  /grep         Search with options (/grep <pattern>, /grep -c <pattern> for case-sensitive)\n"
             "  /diff         Show git diff (/diff staged|all|last|<file>|<f1> <f2>|HEAD~N)\n"
+            "  /git          Quick git operations (/git status|log|diff|branch|stash|blame)\n"
             "  /watch        Watch files for changes (/watch <path>, stop, diff)\n"
             "  /sort         Sort sessions: date, name, project (/sort <mode>)\n"
             "  /edit         Open $EDITOR for longer prompts (same as Ctrl+G)\n"
@@ -5226,6 +5231,168 @@ class AmplifierChicApp(App):
             )
 
         self._add_system_message(colored)
+
+    # ------------------------------------------------------------------
+    # /git command
+    # ------------------------------------------------------------------
+
+    def _cmd_git(self, text: str) -> None:
+        """Quick git operations (read-only)."""
+        text = text.strip()
+
+        if not text:
+            self._git_overview()
+            return
+
+        parts = text.split(None, 1)
+        subcmd = parts[0].lower()
+        args = parts[1] if len(parts) > 1 else ""
+
+        handlers = {
+            "status": self._git_status,
+            "st": self._git_status,
+            "log": self._git_log,
+            "diff": self._git_diff_summary,
+            "branch": self._git_branches,
+            "br": self._git_branches,
+            "stash": self._git_stashes,
+            "blame": self._git_blame,
+        }
+
+        handler = handlers.get(subcmd)
+        if handler:
+            handler(args)
+        else:
+            self._add_system_message(
+                f"Unknown git subcommand: {subcmd}\n\n"
+                "Available: status (st), log, diff, branch (br), stash, blame"
+            )
+
+    def _git_overview(self) -> None:
+        """Quick git overview: branch, status summary, ahead/behind."""
+        from rich.markup import escape
+
+        ok, branch = self._run_git("branch", "--show-current")
+        if not ok:
+            self._add_system_message(f"Not a git repo or git error: {branch}")
+            return
+        branch = branch.strip() or "(detached HEAD)"
+
+        # Status summary
+        _, status_out = self._run_git("status", "--porcelain")
+        lines = [ln for ln in status_out.splitlines() if ln.strip()]
+        staged = sum(1 for ln in lines if ln[0] not in (" ", "?"))
+        modified = sum(1 for ln in lines if len(ln) > 1 and ln[1] == "M")
+        untracked = sum(1 for ln in lines if ln.startswith("??"))
+
+        # Ahead/behind
+        ahead, behind = 0, 0
+        ab_ok, ab_out = self._run_git(
+            "rev-list", "--left-right", "--count", "HEAD...@{upstream}"
+        )
+        if ab_ok and ab_out.strip():
+            ab_parts = ab_out.strip().split()
+            if len(ab_parts) == 2:
+                ahead, behind = int(ab_parts[0]), int(ab_parts[1])
+
+        # Last commit
+        _, last_commit = self._run_git("log", "-1", "--format=%h %s (%cr)")
+
+        parts = [f"[bold]Branch:[/bold] {escape(branch)}"]
+        if staged:
+            parts.append(f"  [green]Staged:[/green] {staged}")
+        if modified:
+            parts.append(f"  [yellow]Modified:[/yellow] {modified}")
+        if untracked:
+            parts.append(f"  [dim]Untracked:[/dim] {untracked}")
+        if ahead:
+            parts.append(f"  [cyan]↑ {ahead} ahead[/cyan]")
+        if behind:
+            parts.append(f"  [red]↓ {behind} behind[/red]")
+        if not (staged or modified or untracked):
+            parts.append("  [green]Clean working tree[/green]")
+        if last_commit.strip():
+            parts.append(f"\n[dim]Last:[/dim] {escape(last_commit.strip())}")
+
+        self._add_system_message("\n".join(parts))
+
+    def _git_status(self, args: str) -> None:
+        """Detailed git status."""
+        ok, out = self._run_git("status", "--short", "--branch")
+        if not ok:
+            self._add_system_message(f"git status error: {out}")
+            return
+        self._add_system_message(f"```\n{out}\n```")
+
+    def _git_log(self, args: str) -> None:
+        """Recent commits."""
+        n = "10"
+        if args.strip().isdigit():
+            n = args.strip()
+        ok, out = self._run_git(
+            "log",
+            f"-{n}",
+            "--format=%h %s (%cr) <%an>",
+        )
+        if not ok:
+            self._add_system_message(f"git log error: {out}")
+            return
+        self._add_system_message(f"```\n{out}\n```")
+
+    def _git_diff_summary(self, args: str) -> None:
+        """Diff summary or specific file diff."""
+        if args.strip():
+            ok, out = self._run_git("diff", args.strip())
+        else:
+            ok, out = self._run_git("diff", "--stat")
+        if not ok:
+            self._add_system_message(f"git diff error: {out}")
+            return
+        if not out.strip():
+            self._add_system_message("No changes (working tree clean)")
+            return
+        # Truncate if too long
+        lines = out.splitlines()
+        if len(lines) > 50:
+            out = "\n".join(lines[:50]) + f"\n... ({len(lines) - 50} more lines)"
+        # Use colorized display for actual diffs, plain for --stat
+        if args.strip():
+            self._show_diff(out)
+        else:
+            self._add_system_message(f"```\n{out}\n```")
+
+    def _git_branches(self, args: str) -> None:
+        """List branches."""
+        ok, out = self._run_git("branch", "-vv")
+        if not ok:
+            self._add_system_message(f"git branch error: {out}")
+            return
+        self._add_system_message(f"```\n{out}\n```")
+
+    def _git_stashes(self, args: str) -> None:
+        """List stashes."""
+        ok, out = self._run_git("stash", "list")
+        if not ok:
+            self._add_system_message(f"git stash error: {out}")
+            return
+        if not out.strip():
+            self._add_system_message("No stashes")
+            return
+        self._add_system_message(f"```\n{out}\n```")
+
+    def _git_blame(self, args: str) -> None:
+        """Quick blame view."""
+        if not args.strip():
+            self._add_system_message("Usage: /git blame <file>")
+            return
+        ok, out = self._run_git("blame", "--date=short", args.strip())
+        if not ok:
+            self._add_system_message(f"git blame error: {out}")
+            return
+        lines = out.splitlines()
+        if len(lines) > 50:
+            out = "\n".join(lines[:50]) + f"\n... ({len(lines) - 50} more lines)"
+        self._add_system_message(f"```\n{out}\n```")
 
     # ------------------------------------------------------------------
     # /diff command
