@@ -99,6 +99,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/draft",
     "/tokens",
     "/sort",
+    "/edit",
 )
 
 # Known context window sizes (tokens) for popular models.
@@ -452,6 +453,7 @@ SHORTCUTS_TEXT = """\
   /keys       This overlay
   /search     Search chat messages
   /sort       Sort sessions (date/name/project)
+  /edit       Open $EDITOR for longer prompts
   /draft      Show/save/clear input draft
   /compact    Clear chat, keep session
   /quit       Quit
@@ -1347,9 +1349,27 @@ class AmplifierChicApp(App):
         except Exception:
             pass
 
+    def _resolve_editor(self) -> str | None:
+        """Return the first available editor from $EDITOR, $VISUAL, or common defaults."""
+        for candidate in (
+            os.environ.get("EDITOR"),
+            os.environ.get("VISUAL"),
+            "vim",
+            "nano",
+            "vi",
+        ):
+            if candidate and shutil.which(candidate):
+                return candidate
+        return None
+
     def action_open_editor(self) -> None:
         """Open $EDITOR for composing a longer prompt (Ctrl+G)."""
-        editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "nano"
+        editor = self._resolve_editor()
+        if not editor:
+            self._add_system_message(
+                "No editor found. Set $EDITOR or install vim/nano."
+            )
+            return
 
         inp = self.query_one("#chat-input", ChatInput)
         current_text = inp.text
@@ -1376,10 +1396,13 @@ class AmplifierChicApp(App):
             with open(tmpfile) as f:
                 new_text = f.read().strip()
 
-            if new_text:
-                inp.clear()
-                inp.insert(new_text)
-                inp.focus()
+            if not new_text or new_text == current_text.strip():
+                self._add_system_message("Editor closed with no changes — cancelled.")
+                return
+
+            inp.clear()
+            inp.insert(new_text)
+            inp.focus()
         except Exception as e:
             self._add_system_message(f"Could not open editor: {e}")
         finally:
@@ -1530,6 +1553,7 @@ class AmplifierChicApp(App):
             "/pin": lambda: self._cmd_pin(text),
             "/draft": lambda: self._cmd_draft(text),
             "/sort": lambda: self._cmd_sort(text),
+            "/edit": self.action_open_editor,
         }
 
         handler = handlers.get(cmd)
@@ -1568,6 +1592,7 @@ class AmplifierChicApp(App):
             "  /focus        Toggle focus mode (hide chrome)\n"
             "  /search       Search chat messages (e.g. /search my query)\n"
             "  /sort         Sort sessions: date, name, project (/sort <mode>)\n"
+            "  /edit         Open $EDITOR for longer prompts (same as Ctrl+G)\n"
             "  /draft        Show/save/clear input draft (/draft save, /draft clear)\n"
             "  /compact      Clear chat, keep session\n"
             "  /keys         Keyboard shortcut overlay\n"
