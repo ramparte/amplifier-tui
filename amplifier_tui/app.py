@@ -1776,6 +1776,7 @@ class AmplifierChicApp(App):
         self._spinner_frame = 0
         self._spinner_timer: object | None = None
         self._processing_label: str | None = None
+        self._status_activity_label: str = "Ready"
         self._prefs = load_preferences()
         self._history = PromptHistory()
         self._stash_stack: list[str] = []
@@ -10472,17 +10473,47 @@ class AmplifierChicApp(App):
             return
         self._spinner_frame = (self._spinner_frame + 1) % len(self._SPINNER)
         frame = self._SPINNER[self._spinner_frame]
+        label = self._processing_label or "Thinking"
+        elapsed_str = self._format_elapsed()
+
+        # Build indicator text with optional elapsed timer
+        indicator_text = f" {frame} {label}..."
+        if elapsed_str:
+            indicator_text += f"  [{elapsed_str}]"
+
         try:
             indicator = self.query_one("#processing-indicator", ProcessingIndicator)
-            label = self._processing_label or "Thinking"
-            indicator.update(f" {frame} {label}...")
+            indicator.update(indicator_text)
         except Exception:
             pass
+
+        # Keep status bar in sync with elapsed time
+        if elapsed_str:
+            status_label = self._status_activity_label
+            self._update_status(f"{status_label}  [{elapsed_str}]")
+
+    def _format_elapsed(self) -> str:
+        """Format elapsed processing time for display.
+
+        Returns an empty string for the first few seconds to avoid visual
+        noise on fast responses.
+        """
+        if self._processing_start_time is None:
+            return ""
+        elapsed = time.monotonic() - self._processing_start_time
+        if elapsed < 3:
+            return ""
+        if elapsed < 60:
+            return f"{elapsed:.0f}s"
+        minutes = int(elapsed) // 60
+        seconds = int(elapsed) % 60
+        return f"{minutes}m {seconds:02d}s"
 
     def _start_processing(self, label: str = "Thinking") -> None:
         self.is_processing = True
         self._got_stream_content = False
         self._processing_label = label
+        self._status_activity_label = f"{label}..."
         self._processing_start_time = time.monotonic()
         self._tool_count_this_turn = 0
         inp = self.query_one("#chat-input", ChatInput)
@@ -10526,6 +10557,7 @@ class AmplifierChicApp(App):
             return  # Already finished (e.g. cancel + worker finally)
         self.is_processing = False
         self._processing_label = None
+        self._status_activity_label = "Ready"
         self._tool_count_this_turn = 0
         self._streaming_cancelled = False
         self._stream_accumulated_text = ""
@@ -10680,7 +10712,10 @@ class AmplifierChicApp(App):
             self._processing_label = label
         display_label = self._processing_label or "Thinking"
         frame = self._SPINNER[self._spinner_frame % len(self._SPINNER)]
+        elapsed_str = self._format_elapsed()
         text = f" {frame} {display_label}..."
+        if elapsed_str:
+            text += f"  [{elapsed_str}]"
 
         try:
             indicator = self.query_one("#processing-indicator", ProcessingIndicator)
@@ -10991,11 +11026,13 @@ class AmplifierChicApp(App):
             if self._tool_count_this_turn > 1:
                 bare = f"{bare} [#{self._tool_count_this_turn}]"
             self._processing_label = bare
+            self._status_activity_label = label
             self.call_from_thread(self._ensure_processing_indicator, bare)
             self.call_from_thread(self._update_status, label)
 
         def on_tool_end(name: str, tool_input: dict, result: str) -> None:
             self._processing_label = "Thinking"
+            self._status_activity_label = "Thinking..."
             self.call_from_thread(self._add_tool_use, name, tool_input, result)
             self.call_from_thread(self._ensure_processing_indicator, "Thinking")
             self.call_from_thread(self._update_status, "Thinking...")
