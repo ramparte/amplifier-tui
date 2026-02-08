@@ -211,6 +211,7 @@ class AmplifierChicApp(App):
     TITLE = "Amplifier TUI"
 
     MAX_STASHES = 5
+    SESSION_NAMES_FILE = Path.home() / ".amplifier" / "tui-session-names.json"
 
     BINDINGS = [
         Binding("ctrl+b", "toggle_sidebar", "Sessions", show=True),
@@ -358,6 +359,24 @@ class AmplifierChicApp(App):
 
     # ── Session List Sidebar ────────────────────────────────────
 
+    # ── Session Names ─────────────────────────────────────────────
+
+    def _load_session_names(self) -> dict[str, str]:
+        """Load custom session names from the JSON file."""
+        try:
+            if self.SESSION_NAMES_FILE.exists():
+                return json.loads(self.SESSION_NAMES_FILE.read_text())
+        except Exception:
+            pass
+        return {}
+
+    def _save_session_name(self, session_id: str, name: str) -> None:
+        """Save a custom session name to the JSON file."""
+        names = self._load_session_names()
+        names[session_id] = name
+        self.SESSION_NAMES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        self.SESSION_NAMES_FILE.write_text(json.dumps(names, indent=2))
+
     def _load_session_list(self) -> None:
         """Show loading state then populate in background."""
         if not self._amplifier_available:
@@ -391,6 +410,8 @@ class AmplifierChicApp(App):
             tree.root.add_leaf("No sessions found")
             return
 
+        custom_names = self._load_session_names()
+
         # Group by project, maintaining recency order
         current_group: str | None = None
         group_node = tree.root
@@ -404,20 +425,24 @@ class AmplifierChicApp(App):
                 group_node = tree.root.add(short, expand=True)
 
             date = s["date_str"]
+            sid = s["session_id"]
+            custom = custom_names.get(sid)
             name = s.get("name", "")
             desc = s.get("description", "")
 
-            if name:
+            if custom:
+                label = custom[:28] if len(custom) > 28 else custom
+            elif name:
                 label = name[:28] if len(name) > 28 else name
             elif desc:
                 label = desc[:28] if len(desc) > 28 else desc
             else:
-                label = s["session_id"][:8]
+                label = sid[:8]
 
             # Session is an expandable node: summary on collapse, ID on expand
             display = f"{date}  {label}"
-            session_node = group_node.add(display, data=s["session_id"])
-            session_node.add_leaf(f"id: {s['session_id'][:12]}...")
+            session_node = group_node.add(display, data=sid)
+            session_node.add_leaf(f"id: {sid[:12]}...")
             session_node.collapse()
             self._session_list_data.append(s)
 
@@ -459,6 +484,7 @@ class AmplifierChicApp(App):
             return
 
         q = query.lower().strip()
+        custom_names = self._load_session_names()
 
         # Group by project, maintaining recency order (same as _populate_session_list)
         current_group: str | None = None
@@ -467,11 +493,14 @@ class AmplifierChicApp(App):
         for s in sessions:
             project = s["project"]
             date = s["date_str"]
+            sid = s["session_id"]
+            custom = custom_names.get(sid)
             name = s.get("name", "")
             desc = s.get("description", "")
-            sid = s["session_id"]
 
-            if name:
+            if custom:
+                label = custom[:28] if len(custom) > 28 else custom
+            elif name:
                 label = name[:28] if len(name) > 28 else name
             elif desc:
                 label = desc[:28] if len(desc) > 28 else desc
@@ -796,6 +825,7 @@ class AmplifierChicApp(App):
             "/timestamps": self._cmd_timestamps,
             "/theme": lambda: self._cmd_theme(text),
             "/export": lambda: self._cmd_export(text),
+            "/rename": lambda: self._cmd_rename(text),
         }
 
         handler = handlers.get(cmd)
@@ -817,6 +847,7 @@ class AmplifierChicApp(App):
             "  /prefs        Show preferences\n"
             "  /model        Show model info\n"
             "  /copy         Copy last response to clipboard\n"
+            "  /rename       Rename current session (e.g. /rename My Project)\n"
             "  /export       Export session to markdown file\n"
             "  /notify       Toggle completion notifications\n"
             "  /scroll       Toggle auto-scroll on/off\n"
@@ -1124,6 +1155,45 @@ class AmplifierChicApp(App):
             self._add_system_message(f"Session exported to {out_path}")
         except OSError as e:
             self._add_system_message(f"Export failed: {e}")
+
+    def _cmd_rename(self, text: str) -> None:
+        """Rename the current session in the sidebar."""
+        sm = self.session_manager if hasattr(self, "session_manager") else None
+        sid = getattr(sm, "session_id", None) if sm else None
+        if not sid:
+            self._add_system_message("No active session to rename.")
+            return
+
+        parts = text.strip().split(None, 1)
+        if len(parts) < 2:
+            # No argument: show current name
+            custom_names = self._load_session_names()
+            current = custom_names.get(sid)
+            if current:
+                self._add_system_message(f'Session name: "{current}"')
+            else:
+                self._add_system_message(
+                    f"Session {sid[:8]} has no custom name.\n"
+                    "Usage: /rename My Custom Name"
+                )
+            return
+
+        new_name = parts[1].strip()
+        if not new_name:
+            self._add_system_message("Usage: /rename My Custom Name")
+            return
+
+        try:
+            self._save_session_name(sid, new_name)
+        except Exception as e:
+            self._add_system_message(f"Failed to save name: {e}")
+            return
+
+        # Refresh sidebar if it has data loaded
+        if self._session_list_data:
+            self._populate_session_list(self._session_list_data)
+
+        self._add_system_message(f'Session renamed to "{new_name}"')
 
     # ── Message Display ─────────────────────────────────────────
 
