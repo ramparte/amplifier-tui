@@ -608,7 +608,7 @@ SHORTCUTS_TEXT = """\
   /pin-session     Pin/unpin in sidebar
   /sort            Sort sessions
   /info            Session details
-  /stats           Session statistics
+  /stats           Session statistics (tools, tokens)
 
  CHAT & HISTORY ─────────────────────────
   /clear           Clear chat display
@@ -2292,7 +2292,7 @@ class AmplifierChicApp(App):
             "/scroll": self._cmd_scroll,
             "/timestamps": self._cmd_timestamps,
             "/keys": self._cmd_keys,
-            "/stats": self._cmd_stats,
+            "/stats": lambda: self._cmd_stats(args),
             "/tokens": self._cmd_tokens,
             "/context": self._cmd_context,
             "/info": self._cmd_info,
@@ -2343,7 +2343,7 @@ class AmplifierChicApp(App):
             "  /sessions     Toggle session sidebar\n"
             "  /prefs        Show preferences\n"
             "  /model        Show/switch model | /model list | /model <name>\n"
-            "  /stats        Show session statistics\n"
+            "  /stats        Show session statistics | /stats tools | /stats tokens\n"
             "  /tokens       Detailed token / context usage breakdown\n"
             "  /context      Visual context window usage bar\n"
             "  /info         Show session details (ID, model, project, counts)\n"
@@ -3714,8 +3714,29 @@ class AmplifierChicApp(App):
         """Show the keyboard shortcut overlay."""
         self.action_show_shortcuts()
 
-    def _cmd_stats(self) -> None:
-        """Show session statistics."""
+    def _cmd_stats(self, text: str = "") -> None:
+        """Show session statistics, or a subcommand view.
+
+        Subcommands:
+            /stats          Full overview
+            /stats tools    Detailed tool usage breakdown
+            /stats tokens   Detailed token breakdown with cost estimate
+        """
+        sub = text.strip().lower()
+
+        if sub == "tools":
+            self._cmd_stats_tools()
+            return
+        if sub == "tokens":
+            self._cmd_stats_tokens()
+            return
+        if sub:
+            self._add_system_message(
+                f"Unknown subcommand: /stats {sub}\n"
+                "Usage: /stats | /stats tools | /stats tokens"
+            )
+            return
+
         fmt = self._format_token_count
 
         # --- Duration ---
@@ -3748,11 +3769,18 @@ class AmplifierChicApp(App):
         total_words = self._user_words + self._assistant_words
         est_tokens = int(total_words * 1.3)
 
+        # --- Title ---
+        title = getattr(self, "_session_title", "") or ""
+
         # --- Build output ---
         lines: list[str] = [
             "Session Statistics",
             "─" * 40,
             f"  Session:         {session_id}",
+        ]
+        if title:
+            lines.append(f"  Title:           {title}")
+        lines += [
             f"  Model:           {model}",
             f"  Duration:        {duration}",
             "",
@@ -3773,6 +3801,11 @@ class AmplifierChicApp(App):
                 lines.append(
                     f"  API tokens:      {fmt(inp_tok)} in / {fmt(out_tok)} out"
                 )
+                # Context usage percentage
+                window = self._get_context_window()
+                if window > 0:
+                    pct = min(100.0, inp_tok / window * 100)
+                    lines.append(f"  Context:         {pct:.1f}% of {fmt(window)}")
 
         # --- Response times ---
         if self._response_times:
@@ -3794,6 +3827,111 @@ class AmplifierChicApp(App):
             for name, count in sorted_tools[:5]:
                 label = TOOL_LABELS.get(name, name)
                 lines.append(f"    {label:<20s} {count}")
+            if len(self._tool_usage) > 5:
+                lines.append(
+                    f"    ... {len(self._tool_usage) - 5} more "
+                    "(use /stats tools for full list)"
+                )
+
+        lines.append("")
+        lines.append("Tip: /stats tools | /stats tokens for details")
+
+        self._add_system_message("\n".join(lines))
+
+    def _cmd_stats_tools(self) -> None:
+        """Show detailed tool usage breakdown."""
+        if not self._tool_usage:
+            self._add_system_message("No tools used in this session yet.")
+            return
+
+        sorted_tools = sorted(self._tool_usage.items(), key=lambda x: -x[1])
+        total_calls = sum(self._tool_usage.values())
+
+        lines: list[str] = [
+            "Tool Usage Breakdown",
+            "─" * 40,
+        ]
+
+        for name, count in sorted_tools:
+            label = TOOL_LABELS.get(name, name)
+            pct = count / total_calls * 100
+            bar_w = 15
+            filled = int(pct / 100 * bar_w)
+            bar = "█" * filled + "░" * (bar_w - filled)
+            lines.append(f"  {label:<20s} {count:3d}  {bar} {pct:4.1f}%")
+
+        lines += [
+            "",
+            f"  Total:             {total_calls:3d} calls",
+            f"  Unique tools:      {len(self._tool_usage):3d}",
+        ]
+
+        self._add_system_message("\n".join(lines))
+
+    def _cmd_stats_tokens(self) -> None:
+        """Show detailed token breakdown with cost estimate."""
+        fmt = self._format_token_count
+        sm = self.session_manager
+
+        inp_tok = (getattr(sm, "total_input_tokens", 0) or 0) if sm else 0
+        out_tok = (getattr(sm, "total_output_tokens", 0) or 0) if sm else 0
+        api_total = inp_tok + out_tok
+
+        # Word-based estimates
+        total_words = self._user_words + self._assistant_words
+        est_tokens = int(total_words * 1.3)
+
+        # Context window
+        window = self._get_context_window()
+        model = (sm.model_name if sm else "") or "unknown"
+
+        lines: list[str] = [
+            "Token Breakdown",
+            "─" * 40,
+            f"  Model:             {model}",
+            f"  Context window:    {fmt(window)}",
+            "",
+        ]
+
+        if api_total > 0:
+            pct_in = inp_tok / api_total * 100 if api_total else 0
+            pct_out = out_tok / api_total * 100 if api_total else 0
+            ctx_pct = min(100.0, inp_tok / window * 100) if window > 0 else 0
+
+            lines += [
+                "  API Tokens (actual)",
+                "  " + "─" * 20,
+                f"  Input:             {inp_tok:>10,}  ({pct_in:.1f}%)",
+                f"  Output:            {out_tok:>10,}  ({pct_out:.1f}%)",
+                f"  Total:             {api_total:>10,}",
+                f"  Context used:      {ctx_pct:.1f}%",
+                "",
+            ]
+
+            # Cost estimate (Claude Sonnet pricing: $3/M input, $15/M output)
+            cost_in = inp_tok * 3.0 / 1_000_000
+            cost_out = out_tok * 15.0 / 1_000_000
+            cost_total = cost_in + cost_out
+            lines += [
+                "  Estimated Cost (Sonnet pricing)",
+                "  " + "─" * 33,
+                f"  Input  ($3/M):     ${cost_in:.4f}",
+                f"  Output ($15/M):    ${cost_out:.4f}",
+                f"  Total:             ${cost_total:.4f}",
+                "",
+            ]
+        else:
+            lines.append("  (no API token data yet)")
+            lines.append("")
+
+        lines += [
+            "  Word-based Estimate",
+            "  " + "─" * 21,
+            f"  User words:        {self._user_words:>10,}",
+            f"  Assistant words:   {self._assistant_words:>10,}",
+            f"  Total words:       {total_words:>10,}",
+            f"  Est. tokens:       ~{fmt(est_tokens)}  (words × 1.3)",
+        ]
 
         self._add_system_message("\n".join(lines))
 
