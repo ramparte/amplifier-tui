@@ -342,6 +342,8 @@ class TabState:
     system_preset_name: str = ""  # name of active preset (if any)
     # Unsent input text (preserved across tab switches)
     input_text: str = ""
+    # User-assigned tab name (empty = use auto-generated `name`)
+    custom_name: str = ""
 
 
 @dataclass
@@ -1327,6 +1329,7 @@ SHORTCUTS_TEXT = """\
  SESSIONS ───────────────────────────────
   Ctrl+N           New session
   Ctrl+T           New tab
+  F2               Rename current tab
   Ctrl+W           Close tab (split: switch pane)
   Ctrl+PgUp/Dn    Switch tabs (split: switch pane)
   Alt+Left/Right   Prev/next tab (split: switch pane)
@@ -1351,7 +1354,7 @@ SHORTCUTS_TEXT = """\
  SESSION ────────────────────────────────
   /new             New session
   /sessions        Toggle session sidebar
-  /rename          Rename session
+  /rename          Rename tab (F2)
   /title           View/set session title
   /delete          Delete current session
   /pin-session     Pin/unpin in sidebar
@@ -1542,7 +1545,7 @@ class TabBar(Horizontal):
         """Rebuild the tab bar buttons."""
         self.remove_children()
         for i, tab in enumerate(tabs):
-            label = tab.name
+            label = tab.custom_name or tab.name
             # Mark split panes in tab bar
             if split_left is not None and i == split_left:
                 label = f"\u25e7 {label}"
@@ -1622,7 +1625,8 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/ref", "Save a URL or reference", "/ref"),
     ("/refs", "List saved references", "/refs"),
     ("/title", "View or set session title", "/title"),
-    ("/rename", "Rename current session", "/rename"),
+    ("/rename", "Rename current tab (F2)", "/rename"),
+    ("/rename reset", "Reset tab name to default", "/rename reset"),
     ("/pin", "Pin message (last, by number, or with label)", "/pin"),
     ("/pins", "List pinned messages", "/pins"),
     ("/unpin", "Remove a pin by number", "/unpin"),
@@ -1694,6 +1698,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/tab", "Tab management (new, switch, close, rename, list)", "/tab"),
     ("/tab new", "Open a new conversation tab", "/tab new"),
     ("/tab list", "List all open tabs", "/tab list"),
+    ("/tab rename", "Rename current tab", "/tab rename"),
     ("/tabs", "List all open tabs", "/tabs"),
     ("/keys", "Keyboard shortcuts overlay", "/keys"),
     ("/quit", "Quit the application", "/quit"),
@@ -1956,6 +1961,7 @@ class AmplifierChicApp(App):
         Binding("alt+8", "switch_tab(8)", "Tab 8", show=False),
         Binding("alt+9", "switch_tab(9)", "Tab 9", show=False),
         Binding("alt+0", "switch_tab(0)", "Last Tab", show=False),
+        Binding("f2", "rename_tab", "Rename Tab", show=False),
         Binding("alt+m", "toggle_multiline", "Multiline", show=False),
         Binding("ctrl+q", "quit", "Quit", show=True),
     ]
@@ -2593,8 +2599,10 @@ class AmplifierChicApp(App):
         self.sub_title = self._session_title or ""
 
     def _rename_tab(self, new_name: str) -> None:
-        """Rename the current tab."""
-        self._tabs[self._active_tab_index].name = new_name.strip()
+        """Rename the current tab (max 30 chars)."""
+        name = new_name.strip()[:30]
+        tab = self._tabs[self._active_tab_index]
+        tab.custom_name = name
         self._update_tab_bar()
 
     def _find_tab_by_name_or_index(self, query: str) -> int | None:
@@ -2606,14 +2614,26 @@ class AmplifierChicApp(App):
                 return idx
         except ValueError:
             pass
-        # Try by name (case-insensitive)
+        # Try by name (case-insensitive, prefer custom_name)
         query_lower = query.lower().strip()
         for i, tab in enumerate(self._tabs):
-            if tab.name.lower() == query_lower:
+            display = tab.custom_name or tab.name
+            if display.lower() == query_lower:
                 return i
         return None
 
     # ── Tab Action Methods (keyboard shortcuts) ─────────────────
+
+    def action_rename_tab(self) -> None:
+        """Rename current tab (F2). Pre-fills input with /rename."""
+        tab = self._tabs[self._active_tab_index]
+        current = tab.custom_name or tab.name
+        try:
+            chat_input = self.query_one("#chat-input", ChatInput)
+            chat_input.value = f"/rename {current}"
+            chat_input.focus()
+        except Exception:
+            pass
 
     def action_new_tab(self) -> None:
         """Create a new tab (Ctrl+T)."""
@@ -5020,7 +5040,7 @@ class AmplifierChicApp(App):
             "  /ref          Save a URL/reference (/ref <url> [label], /ref remove/clear/export)\n"
             "  /refs         List all saved references (same as /ref with no args)\n"
             "  /title        View/set session title (/title <text> or /title clear)\n"
-            "  /rename       Rename current session (e.g. /rename My Project)\n"
+            "  /rename       Rename current tab (/rename <name>, /rename reset)\n"
             "  /name         Name session (/name <text>, /name clear, /name to show)\n"
             "  /pin          Pin message (/pin, /pin N, /pin list, /pin clear, /pin remove N)\n"
             "  /pins         List all pinned messages (alias for /pin list)\n"
@@ -5087,6 +5107,7 @@ class AmplifierChicApp(App):
             "  Ctrl+J        Insert newline (alt)\n"
             "  Up/Down       Browse prompt history\n"
             "  F1            Keyboard shortcuts overlay\n"
+            "  F2            Rename current tab\n"
             "  F11           Toggle focus mode (hide chrome)\n"
             "  Ctrl+A        Toggle auto-scroll\n"
             "  Ctrl+F        Find in chat (interactive search bar)\n"
@@ -6251,7 +6272,8 @@ class AmplifierChicApp(App):
                     )
                     if s:
                         sid = f" [{s[:8]}]"
-                lines.append(f"{marker} {i + 1}. {tab.name}{sid}")
+                display_name = tab.custom_name or tab.name
+                lines.append(f"{marker} {i + 1}. {display_name}{sid}")
             lines.append("")
             lines.append(
                 "Usage: /tab new [name] | switch <n> | close [n] | rename <name>"
@@ -6287,8 +6309,9 @@ class AmplifierChicApp(App):
             if not subargs:
                 self._add_system_message("Usage: /tab rename <new-name>")
                 return
-            self._rename_tab(subargs)
-            self._add_system_message(f"Tab renamed to: {subargs}")
+            name = subargs[:30]
+            self._rename_tab(name)
+            self._add_system_message(f'Tab renamed to: "{name}"')
         elif subcmd == "list":
             # Recurse with empty args to show list
             self._cmd_tab("")
@@ -10751,44 +10774,34 @@ class AmplifierChicApp(App):
         self._add_system_message(f"Session title set: {self._session_title}")
 
     def _cmd_rename(self, text: str) -> None:
-        """Rename the current session in the sidebar."""
-        sm = self.session_manager if hasattr(self, "session_manager") else None
-        sid = getattr(sm, "session_id", None) if sm else None
-        if not sid:
-            self._add_system_message("No active session to rename.")
-            return
+        """Rename the current tab.
 
+        Usage:
+            /rename              Show current tab name
+            /rename <name>       Set tab name (max 30 chars)
+            /rename reset|default|auto   Reset to auto-generated name
+        """
         parts = text.strip().split(None, 1)
-        if len(parts) < 2:
-            # No argument: show current name
-            custom_names = self._load_session_names()
-            current = custom_names.get(sid)
-            if current:
-                self._add_system_message(f'Session name: "{current}"')
-            else:
-                self._add_system_message(
-                    f"Session {sid[:8]} has no custom name.\n"
-                    "Usage: /rename My Custom Name"
-                )
+        arg = parts[1].strip() if len(parts) > 1 else ""
+        tab = self._tabs[self._active_tab_index]
+
+        if not arg:
+            current = tab.custom_name or tab.name
+            self._add_system_message(
+                f'Current tab: "{current}"\n'
+                "Usage: /rename <name> to rename, /rename reset to restore default"
+            )
             return
 
-        new_name = parts[1].strip()
-        if not new_name:
-            self._add_system_message("Usage: /rename My Custom Name")
+        if arg.lower() in ("reset", "default", "auto"):
+            tab.custom_name = ""
+            self._update_tab_bar()
+            self._add_system_message(f'Tab name reset to default: "{tab.name}"')
             return
 
-        try:
-            self._save_session_name(sid, new_name)
-        except Exception as e:
-            self._add_system_message(f"Failed to save name: {e}")
-            return
-
-        # Refresh sidebar if it has data loaded
-        if self._session_list_data:
-            self._populate_session_list(self._session_list_data)
-
-        self._add_system_message(f'Session renamed to "{new_name}"')
-        self._update_breadcrumb()
+        name = arg[:30]
+        self._rename_tab(name)
+        self._add_system_message(f'Tab renamed to: "{name}"')
 
     def _cmd_name(self, text: str) -> None:
         """Name the current session (friendly label for search/sidebar/tabs).
