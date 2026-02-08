@@ -597,7 +597,7 @@ SHORTCUTS_TEXT = """\
   /new        New session
   /sessions   Toggle sidebar
   /prefs      Show preferences
-  /model      Model info / list / set
+  /model      Model info / switch (/model <name>)
   /theme      Switch theme
   /colors     View/set colors
   /export     Export chat (md/txt/json)
@@ -2292,7 +2292,7 @@ class AmplifierChicApp(App):
             "  /new          New session\n"
             "  /sessions     Toggle session sidebar\n"
             "  /prefs        Show preferences\n"
-            "  /model        Show model info | /model list | /model <name>\n"
+            "  /model        Show/switch model | /model list | /model <name>\n"
             "  /stats        Show session statistics\n"
             "  /tokens       Detailed token / context usage breakdown\n"
             "  /context      Visual context window usage bar\n"
@@ -2705,11 +2705,11 @@ class AmplifierChicApp(App):
         self._add_system_message("\n".join(lines))
 
     def _cmd_model(self, text: str) -> None:
-        """Show model info, list available models, or set preferred model.
+        """Show model info, list available models, or switch models.
 
-        /model          Show current model and session token usage
-        /model list     Show common models
-        /model <name>   Set preferred model for new sessions
+        /model          Show current model and available models
+        /model list     Show available models
+        /model <name>   Switch to a different model
         """
         parts = text.strip().split(None, 1)
         arg = parts[1].strip() if len(parts) > 1 else ""
@@ -2722,11 +2722,11 @@ class AmplifierChicApp(App):
             self._cmd_model_set(arg)
             return
 
-        # No argument — show current model info
+        # No argument — show current model info + available models
         self._cmd_model_show()
 
     def _cmd_model_show(self) -> None:
-        """Display current model, preferred model, and token usage."""
+        """Display current model, token usage, and available models."""
         sm = self.session_manager
         lines = ["Model Info\n"]
 
@@ -2734,15 +2734,12 @@ class AmplifierChicApp(App):
         preferred = self._prefs.preferred_model
 
         if current:
-            lines.append(f"  Model:      {current}")
+            lines.append(f"  Active:     {current}")
         else:
-            lines.append("  Model:      (not set)")
+            lines.append("  Active:     (no session)")
 
-        if preferred:
-            if preferred != current:
-                lines.append(f"  Preferred:  {preferred}  (used on /new)")
-            else:
-                lines.append(f"  Preferred:  {preferred}  (active)")
+        if preferred and preferred != current:
+            lines.append(f"  Preferred:  {preferred}")
 
         if sm:
             total_in = getattr(sm, "total_input_tokens", 0)
@@ -2772,43 +2769,85 @@ class AmplifierChicApp(App):
             if sid:
                 lines.append(f"  Session:    {sid[:12]}...")
 
+        # Append available models for quick reference
+        available = self._get_available_models()
+        if available:
+            lines.append("")
+            lines.append("Available models:")
+            for model, provider in available:
+                marker = " *" if model == current else "  "
+                lines.append(f"  {marker} {provider:10s}  {model}")
+            lines.append("")
+            lines.append("Switch: /model <name>")
+
         self._add_system_message("\n".join(lines))
+
+    # Well-known models used as a fallback when no session is active.
+    _KNOWN_MODELS: list[tuple[str, str]] = [
+        ("claude-sonnet-4-20250514", "Anthropic"),
+        ("claude-haiku-35-20241022", "Anthropic"),
+        ("gpt-4o", "OpenAI"),
+        ("gpt-4o-mini", "OpenAI"),
+        ("o3", "OpenAI"),
+        ("o3-mini", "OpenAI"),
+    ]
+
+    def _get_available_models(self) -> list[tuple[str, str]]:
+        """Return ``(model_name, provider)`` pairs.
+
+        Tries the live session's providers first, falls back to
+        ``_KNOWN_MODELS``.
+        """
+        sm = self.session_manager
+        if sm and sm.session:
+            dynamic = sm.get_provider_models()
+            if dynamic:
+                return dynamic
+        return list(self._KNOWN_MODELS)
 
     def _cmd_model_list(self) -> None:
         """Show available models the user can select."""
-        models = [
-            ("claude-sonnet-4-20250514", "Anthropic"),
-            ("claude-haiku-35-20241022", "Anthropic"),
-            ("gpt-4o", "OpenAI"),
-            ("gpt-4o-mini", "OpenAI"),
-            ("o3", "OpenAI"),
-            ("o3-mini", "OpenAI"),
-        ]
+        models = self._get_available_models()
         current = self.session_manager.model_name if self.session_manager else ""
-        preferred = self._prefs.preferred_model
 
         lines = ["Available Models\n"]
         for name, provider in models:
             marker = ""
             if name == current:
-                marker = "  (current)"
-            elif name == preferred:
-                marker = "  (preferred)"
+                marker = "  (active)"
             lines.append(f"  {provider:10s}  {name}{marker}")
 
         lines.append("")
-        lines.append("Use /model <name> to set preferred model for new sessions.")
-        lines.append("The change takes effect on /new (next session).")
+        lines.append("Switch: /model <name>")
+        has_session = bool(self.session_manager and self.session_manager.session)
+        if has_session:
+            lines.append("Takes effect immediately on the current session.")
+        else:
+            lines.append("Takes effect when the next session starts.")
         self._add_system_message("\n".join(lines))
 
     def _cmd_model_set(self, name: str) -> None:
-        """Set the preferred model for new sessions."""
+        """Switch the active model and save as preferred default."""
+        # Persist preference for future sessions
         self._prefs.preferred_model = name
         save_preferred_model(name)
+
+        # Try to switch the live session's provider immediately
+        sm = self.session_manager
+        switched = sm.switch_model(name) if sm and sm.session else False
+
         self._update_token_display()
-        self._add_system_message(
-            f"Preferred model set to: {name}\nWill be used for new sessions (/new)."
-        )
+        self._update_breadcrumb()
+
+        if switched:
+            self._add_system_message(
+                f"Model switched to: {name}\nNext AI response will use this model."
+            )
+        else:
+            self._add_system_message(
+                f"Preferred model set to: {name}\n"
+                "Will take effect on the next session start."
+            )
 
     def _cmd_quit(self) -> None:
         # Use call_later so the current handler finishes before quit runs
@@ -5468,7 +5507,10 @@ class AmplifierChicApp(App):
             # Auto-create session on first message
             if not self.session_manager.session:
                 self.call_from_thread(self._update_status, "Starting session...")
-                await self.session_manager.start_new_session()
+                model = self._prefs.preferred_model or ""
+                await self.session_manager.start_new_session(
+                    model_override=model,
+                )
                 self.call_from_thread(self._update_session_display)
                 self.call_from_thread(self._update_token_display)
 
@@ -5509,7 +5551,8 @@ class AmplifierChicApp(App):
             self.call_from_thread(self._display_transcript, transcript_path)
 
             # Resume the actual session (restores LLM context)
-            await self.session_manager.resume_session(session_id)
+            model = self._prefs.preferred_model or ""
+            await self.session_manager.resume_session(session_id, model_override=model)
 
             # Restore session title
             title = self._load_session_title_for(session_id)

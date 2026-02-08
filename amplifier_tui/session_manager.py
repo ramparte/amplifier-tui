@@ -94,8 +94,84 @@ class SessionManager:
         except Exception:
             pass
 
-    async def start_new_session(self, cwd: Path | None = None) -> None:
-        """Start a new Amplifier session."""
+    def switch_model(self, model_name: str) -> bool:
+        """Switch the active model on the current session's provider.
+
+        Mutates the provider's ``default_model`` attribute so the next LLM
+        call uses *model_name*.  Returns ``True`` on success.
+        """
+        if not self.session:
+            return False
+        try:
+            providers = self.session.coordinator.get("providers") or {}
+            for _name, prov in providers.items():
+                if hasattr(prov, "default_model"):
+                    prov.default_model = model_name
+                    self.model_name = model_name
+                    return True
+                if hasattr(prov, "model"):
+                    prov.model = model_name
+                    self.model_name = model_name
+                    return True
+            return False
+        except Exception:
+            return False
+
+    def get_provider_models(self) -> list[tuple[str, str]]:
+        """Return ``(model_name, provider_module)`` pairs from the session.
+
+        Falls back to an empty list when no session is active.
+        """
+        results: list[tuple[str, str]] = []
+        if not self.session:
+            return results
+        try:
+            providers = self.session.coordinator.get("providers") or {}
+            for name, prov in providers.items():
+                model = ""
+                if hasattr(prov, "default_model"):
+                    model = prov.default_model
+                elif hasattr(prov, "model"):
+                    model = prov.model
+                if model:
+                    results.append((model, name))
+        except Exception:
+            pass
+        return results
+
+    @staticmethod
+    def _apply_model_override(config_data: dict, model_override: str) -> None:
+        """Patch *config_data* providers to use *model_override*."""
+        for provider in config_data.get("providers", []):
+            cfg = provider.get("config", {})
+            if "default_model" in cfg:
+                cfg["default_model"] = model_override
+                # Promote to highest priority so this provider is selected
+                cfg["priority"] = 0
+                return
+        # Fallback: patch the first provider that has any config
+        for provider in config_data.get("providers", []):
+            cfg = provider.get("config")
+            if isinstance(cfg, dict):
+                cfg["default_model"] = model_override
+                cfg["priority"] = 0
+                return
+
+    async def start_new_session(
+        self,
+        cwd: Path | None = None,
+        model_override: str = "",
+    ) -> None:
+        """Start a new Amplifier session.
+
+        Parameters
+        ----------
+        cwd:
+            Working directory for the session.
+        model_override:
+            If non-empty, override the provider's default model before
+            session creation.
+        """
         if cwd is None:
             cwd = Path.cwd()
 
@@ -118,6 +194,9 @@ class SessionManager:
             console=None,
         )
 
+        if model_override:
+            self._apply_model_override(config_data, model_override)
+
         session_config = SessionConfig(
             config=config_data,
             search_paths=[cwd],
@@ -136,8 +215,20 @@ class SessionManager:
         self.reset_usage()
         self._extract_model_info()
 
-    async def resume_session(self, session_id: str) -> None:
-        """Resume an existing Amplifier session."""
+    async def resume_session(
+        self,
+        session_id: str,
+        model_override: str = "",
+    ) -> None:
+        """Resume an existing Amplifier session.
+
+        Parameters
+        ----------
+        session_id:
+            The session to resume.
+        model_override:
+            If non-empty, override the provider's default model.
+        """
         from amplifier_app_cli.session_runner import (
             create_initialized_session,
             SessionConfig,
@@ -154,6 +245,9 @@ class SessionManager:
             app_settings=app_settings,
             console=None,
         )
+
+        if model_override:
+            self._apply_model_override(config_data, model_override)
 
         # Load the transcript
         transcript_path = self.get_session_transcript_path(session_id)
