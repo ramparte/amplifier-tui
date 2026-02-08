@@ -216,6 +216,7 @@ SHORTCUTS_TEXT = """\
   Ctrl+G      Open $EDITOR
   Ctrl+S      Stash/restore prompt
   Ctrl+Y      Copy last response
+  Ctrl+M      Bookmark last response
   Ctrl+A      Toggle auto-scroll
   Up/Down     Browse prompt history
   F1          This help
@@ -237,6 +238,8 @@ SHORTCUTS_TEXT = """\
   /delete     Delete session
   /stats      Session statistics
   /copy       Copy last response
+  /bookmark   Bookmark last response
+  /bookmarks  List / jump to bookmarks
   /scroll     Toggle auto-scroll
   /focus      Focus mode
   /notify     Toggle notifications
@@ -276,6 +279,7 @@ class AmplifierChicApp(App):
 
     MAX_STASHES = 5
     SESSION_NAMES_FILE = Path.home() / ".amplifier" / "tui-session-names.json"
+    BOOKMARKS_FILE = Path.home() / ".amplifier" / "tui-bookmarks.json"
 
     BINDINGS = [
         Binding("f1", "show_shortcuts", "Help", show=True),
@@ -287,6 +291,7 @@ class AmplifierChicApp(App):
         Binding("f11", "toggle_focus_mode", "Focus", show=False),
         Binding("ctrl+a", "toggle_auto_scroll", "Scroll", show=False),
         Binding("ctrl+l", "clear_chat", "Clear", show=False),
+        Binding("ctrl+m", "bookmark_last", "Bookmark", show=False),
         Binding("ctrl+q", "quit", "Quit", show=True),
     ]
 
@@ -333,6 +338,11 @@ class AmplifierChicApp(App):
         self._user_words: int = 0
         self._assistant_words: int = 0
         self._session_start_time: float = time.monotonic()
+
+        # Bookmark tracking
+        self._assistant_msg_index: int = 0
+        self._last_assistant_widget: Static | None = None
+        self._session_bookmarks: list[dict] = []
 
         # Streaming display state
         self._stream_widget: Static | None = None
@@ -459,6 +469,48 @@ class AmplifierChicApp(App):
         names[session_id] = name
         self.SESSION_NAMES_FILE.parent.mkdir(parents=True, exist_ok=True)
         self.SESSION_NAMES_FILE.write_text(json.dumps(names, indent=2))
+
+    # ── Bookmarks ─────────────────────────────────────────────
+
+    def _get_session_id(self) -> str | None:
+        """Return the current session ID, or None."""
+        sm = self.session_manager if hasattr(self, "session_manager") else None
+        return getattr(sm, "session_id", None) if sm else None
+
+    def _load_bookmarks(self) -> dict[str, list[dict]]:
+        """Load all bookmarks from the JSON file."""
+        try:
+            if self.BOOKMARKS_FILE.exists():
+                return json.loads(self.BOOKMARKS_FILE.read_text())
+        except Exception:
+            pass
+        return {}
+
+    def _save_bookmark(self, session_id: str, bookmark: dict) -> None:
+        """Append a bookmark for the given session."""
+        all_bm = self._load_bookmarks()
+        if session_id not in all_bm:
+            all_bm[session_id] = []
+        all_bm[session_id].append(bookmark)
+        self.BOOKMARKS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        self.BOOKMARKS_FILE.write_text(json.dumps(all_bm, indent=2))
+
+    def _load_session_bookmarks(self, session_id: str | None = None) -> list[dict]:
+        """Load bookmarks for the current (or given) session."""
+        sid = session_id or self._get_session_id()
+        if not sid:
+            return []
+        return self._load_bookmarks().get(sid, [])
+
+    def _apply_bookmark_classes(self) -> None:
+        """Re-apply the 'bookmarked' CSS class to bookmarked assistant messages."""
+        if not self._session_bookmarks:
+            return
+        bookmarked_indices = {bm["message_index"] for bm in self._session_bookmarks}
+        for widget in self.query(".assistant-message"):
+            idx = getattr(widget, "msg_index", None)
+            if idx is not None and idx in bookmarked_indices:
+                widget.add_class("bookmarked")
 
     def _load_session_list(self) -> None:
         """Show loading state then populate in background."""
@@ -747,6 +799,9 @@ class AmplifierChicApp(App):
         self._tool_call_count = 0
         self._user_words = 0
         self._assistant_words = 0
+        self._assistant_msg_index = 0
+        self._last_assistant_widget = None
+        self._session_bookmarks = []
         self._session_start_time = time.monotonic()
         self._update_word_count_display()
         self.query_one("#chat-input", ChatInput).focus()
@@ -969,6 +1024,9 @@ class AmplifierChicApp(App):
             "/export": lambda: self._cmd_export(text),
             "/rename": lambda: self._cmd_rename(text),
             "/delete": lambda: self._cmd_delete(text),
+            "/bookmark": lambda: self._cmd_bookmark(text),
+            "/bm": lambda: self._cmd_bookmark(text),
+            "/bookmarks": lambda: self._cmd_bookmarks(text),
         }
 
         handler = handlers.get(cmd)
@@ -991,6 +1049,8 @@ class AmplifierChicApp(App):
             "  /model        Show model info | /model list | /model <name>\n"
             "  /stats        Show session statistics\n"
             "  /copy         Copy last response to clipboard\n"
+            "  /bookmark     Bookmark last response (/bm alias, optional label)\n"
+            "  /bookmarks    List bookmarks | /bookmarks <N> to jump\n"
             "  /rename       Rename current session (e.g. /rename My Project)\n"
             "  /delete       Delete session (with confirmation)\n"
             "  /export       Export session to markdown file\n"
@@ -1013,6 +1073,7 @@ class AmplifierChicApp(App):
             "  Ctrl+A        Toggle auto-scroll\n"
             "  Ctrl+G        Open $EDITOR for longer prompts\n"
             "  Ctrl+Y        Copy last response to clipboard\n"
+            "  Ctrl+M        Bookmark last response\n"
             "  Ctrl+S        Stash/restore prompt (stack of 5)\n"
             "  Ctrl+B        Toggle sidebar\n"
             "  Ctrl+N        New session\n"
@@ -1577,6 +1638,112 @@ class AmplifierChicApp(App):
         except Exception:
             pass
 
+    # ── Bookmark Commands ─────────────────────────────────────────────
+
+    def action_bookmark_last(self) -> None:
+        """Bookmark the last assistant message (Ctrl+M)."""
+        self._cmd_bookmark("/bookmark")
+
+    def _cmd_bookmark(self, text: str) -> None:
+        """Bookmark the last assistant message with an optional label."""
+        sid = self._get_session_id()
+        if not sid:
+            self._add_system_message("No active session — send a message first.")
+            return
+
+        # Find the last assistant message widget
+        assistant_widgets = [
+            w
+            for w in self.query(".assistant-message")
+            if isinstance(w, AssistantMessage)
+        ]
+        if not assistant_widgets:
+            self._add_system_message("No assistant message to bookmark.")
+            return
+
+        target = assistant_widgets[-1]
+        msg_idx = getattr(target, "msg_index", None)
+        if msg_idx is None:
+            self._add_system_message("Cannot bookmark this message.")
+            return
+
+        # Check if already bookmarked
+        for bm in self._session_bookmarks:
+            if bm["message_index"] == msg_idx:
+                self._add_system_message(f"Already bookmarked: {bm['label']}")
+                return
+
+        # Parse optional label from command text
+        parts = text.strip().split(None, 1)
+        label = parts[1].strip() if len(parts) > 1 else None
+
+        # Build preview from the message content
+        preview = self._last_assistant_text or ""
+        for line in preview.split("\n"):
+            line = line.strip()
+            if line:
+                preview = line
+                break
+        preview = preview[:80]
+
+        bookmark = {
+            "message_index": msg_idx,
+            "label": label or f"Bookmark {len(self._session_bookmarks) + 1}",
+            "timestamp": datetime.now().strftime("%H:%M"),
+            "preview": preview,
+        }
+
+        # Save and apply visual
+        self._save_bookmark(sid, bookmark)
+        self._session_bookmarks.append(bookmark)
+        target.add_class("bookmarked")
+
+        self._add_system_message(f"Bookmarked: {bookmark['label']}")
+
+    def _cmd_bookmarks(self, text: str) -> None:
+        """List bookmarks or jump to a specific bookmark by number."""
+        parts = text.strip().split(None, 1)
+        arg = parts[1].strip() if len(parts) > 1 else ""
+
+        if not self._session_bookmarks:
+            self._add_system_message("No bookmarks in this session.")
+            return
+
+        # Jump to bookmark by number
+        if arg.isdigit():
+            num = int(arg)
+            if num < 1 or num > len(self._session_bookmarks):
+                self._add_system_message(
+                    f"Bookmark {num} not found. "
+                    f"Valid range: 1-{len(self._session_bookmarks)}"
+                )
+                return
+            bm = self._session_bookmarks[num - 1]
+            target_idx = bm["message_index"]
+            for widget in self.query(".assistant-message"):
+                if getattr(widget, "msg_index", None) == target_idx:
+                    widget.scroll_visible()
+                    self._add_system_message(f"Jumped to bookmark {num}: {bm['label']}")
+                    return
+            self._add_system_message(
+                f"Bookmark {num} widget not found (message may have been cleared)."
+            )
+            return
+
+        # List all bookmarks
+        lines = ["Bookmarks:"]
+        for i, bm in enumerate(self._session_bookmarks, 1):
+            lines.append(f"  {i}. [{bm['timestamp']}] {bm['label']}")
+            if bm.get("preview"):
+                prev = bm["preview"][:60]
+                if len(bm["preview"]) > 60:
+                    prev += "..."
+                lines.append(f"     {prev}")
+        lines.append("")
+        lines.append("Jump to a bookmark: /bookmarks <number>")
+
+        self._add_system_message("\n".join(lines))
+
     # ── Message Display ─────────────────────────────────────────
 
     def _make_timestamp(self, ts: str | None = None) -> Static | None:
@@ -1699,10 +1866,13 @@ class AmplifierChicApp(App):
         if ts_widget:
             chat_view.mount(ts_widget)
         msg = AssistantMessage(text)
+        msg.msg_index = self._assistant_msg_index  # type: ignore[attr-defined]
+        self._assistant_msg_index += 1
         chat_view.mount(msg)
         self._style_assistant(msg)
         self._scroll_if_auto(msg)
         self._last_assistant_text = text
+        self._last_assistant_widget = msg
         words = self._count_words(text)
         self._total_words += words
         self._assistant_message_count += 1
@@ -2180,6 +2350,8 @@ class AmplifierChicApp(App):
             old = self._stream_widget
             if old:
                 msg = AssistantMessage(text)
+                msg.msg_index = self._assistant_msg_index  # type: ignore[attr-defined]
+                self._assistant_msg_index += 1
                 ts_widget = self._make_timestamp()
                 if ts_widget:
                     chat_view.mount(ts_widget, before=old)
@@ -2187,6 +2359,7 @@ class AmplifierChicApp(App):
                 self._style_assistant(msg)
                 old.remove()
                 self._scroll_if_auto(msg)
+                self._last_assistant_widget = msg
                 words = self._count_words(text)
                 self._total_words += words
                 self._assistant_message_count += 1
@@ -2284,6 +2457,8 @@ class AmplifierChicApp(App):
         self._tool_call_count = 0
         self._user_words = 0
         self._assistant_words = 0
+        self._assistant_msg_index = 0
+        self._last_assistant_widget = None
         self._session_start_time = time.monotonic()
         tool_results: dict[str, str] = {}
 
@@ -2314,6 +2489,9 @@ class AmplifierChicApp(App):
                         ts_shown = True
                     self._last_assistant_text = block.content
                     widget = AssistantMessage(block.content)
+                    widget.msg_index = self._assistant_msg_index  # type: ignore[attr-defined]
+                    self._assistant_msg_index += 1
+                    self._last_assistant_widget = widget
                     chat_view.mount(widget)
                     self._style_assistant(widget)
                     words = self._count_words(block.content)
@@ -2348,6 +2526,11 @@ class AmplifierChicApp(App):
                     tool_results[block.tool_id] = block.content
 
         self._update_word_count_display()
+
+        # Restore bookmarks for this session
+        self._session_bookmarks = self._load_session_bookmarks()
+        self._apply_bookmark_classes()
+
         chat_view.scroll_end(animate=False)
 
 

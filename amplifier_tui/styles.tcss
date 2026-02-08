@@ -138,6 +138,13 @@ Screen {
     padding: 0 2;
 }
 
+/* -- Bookmarked messages: gold/amber left accent ------- */
+
+.assistant-message.bookmarked {
+    border-left: tall #d4a017;
+    background: #1a1608;
+}
+
 /* -- Thinking blocks: PURPLE, dim, italic ------------- */
 
 /* Thinking blocks are visually "recessed" - smaller, dimmer, tinted.
