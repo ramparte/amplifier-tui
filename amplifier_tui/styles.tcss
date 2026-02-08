@@ -164,6 +164,12 @@ Screen {
 .tab-split-mode .tab-chat-view {
     width: 1fr;
     max-width: 100%;
+    display: none;
+}
+
+.tab-split-mode .split-left-pane,
+.tab-split-mode .split-right-pane {
+    display: block;
 }
 
 .tab-split-mode .split-right-pane {
@@ -174,9 +180,8 @@ Screen {
     border: solid $accent;
 }
 
-.tab-split-mode .tab-chat-view:not(.split-left-pane):not(.split-right-pane) {
-    display: none;
-}
+/* Note: :not() is unsupported in Textual CSS.
+   Hide-all + show-specific pattern used instead (see rules above). */
 
 .tab-in-split {
     text-style: underline;
