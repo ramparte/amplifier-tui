@@ -1295,14 +1295,22 @@ SHORTCUTS_TEXT = """\
  SESSIONS ───────────────────────────────
   Ctrl+N           New session
   Ctrl+T           New tab
-  Ctrl+W           Close tab
-  Ctrl+PgUp/Dn    Switch tabs
-  Alt+Left/Right   Prev/next tab
+  Ctrl+W           Close tab (split: switch pane)
+  Ctrl+PgUp/Dn    Switch tabs (split: switch pane)
+  Alt+Left/Right   Prev/next tab (split: switch pane)
   Alt+1-9          Jump to tab 1-9
   Alt+0            Jump to last tab
   Ctrl+P           Command palette (fuzzy search)
   F1 / Ctrl+/      This help
   Ctrl+Q           Quit
+
+ SPLIT VIEW ─────────────────────────────
+  /split           Toggle tab split (2+ tabs)
+  /split N         Split with tab N
+  /split swap      Swap left/right panes
+  /split off       Close split view
+  Alt+Left/Right   Switch active pane
+  Ctrl+W           Switch active pane
 
           Slash Commands
 ──────────────────────────────────────────
@@ -1316,6 +1324,7 @@ SHORTCUTS_TEXT = """\
   /delete          Delete current session
   /pin-session     Pin/unpin in sidebar
   /sort            Sort sessions
+  /split           Split view (tab split, pins, chat, file)
   /tab             Tab management
   /tabs            List open tabs
   /info            Session details
@@ -1489,12 +1498,25 @@ class TabButton(Static):
 class TabBar(Horizontal):
     """Horizontal tab bar showing conversation tabs."""
 
-    def update_tabs(self, tabs: list, active_index: int) -> None:
+    def update_tabs(
+        self,
+        tabs: list,
+        active_index: int,
+        split_left: int | None = None,
+        split_right: int | None = None,
+    ) -> None:
         """Rebuild the tab bar buttons."""
         self.remove_children()
         for i, tab in enumerate(tabs):
             label = tab.name
+            # Mark split panes in tab bar
+            if split_left is not None and i == split_left:
+                label = f"\u25e7 {label}"
+            elif split_right is not None and i == split_right:
+                label = f"\u25e8 {label}"
             cls = "tab-btn tab-active" if i == active_index else "tab-btn tab-inactive"
+            if i == split_left or i == split_right:
+                cls += " tab-in-split"
             btn = TabButton(f" {label} ", tab_index=i, classes=cls)
             self.mount(btn)
         # Hide tab bar when there's only one tab
@@ -1618,7 +1640,10 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/undo", "Remove last exchange", "/undo"),
     ("/retry", "Undo last exchange & re-send (or send new text)", "/retry"),
     ("/redo", "Alias for /retry (undo + re-send)", "/redo"),
-    ("/split", "Toggle split view (pins, chat, file)", "/split"),
+    ("/split", "Toggle split view (tab split, pins, chat, file)", "/split"),
+    ("/split N", "Split current tab with tab N", "/split "),
+    ("/split swap", "Swap left and right panes in split view", "/split swap"),
+    ("/split off", "Close split view", "/split off"),
     ("/stream", "Toggle streaming display", "/stream"),
     ("/vim", "Toggle vim keybindings", "/vim"),
     ("/tab", "Tab management (new, switch, close, rename, list)", "/tab"),
@@ -2020,6 +2045,12 @@ class AmplifierChicApp(App):
         self._active_tab_index: int = 0
         self._tab_counter: int = 1
 
+        # Tab split view state (two tabs side by side)
+        self._tab_split_mode: bool = False
+        self._tab_split_left_index: int | None = None
+        self._tab_split_right_index: int | None = None
+        self._tab_split_active: str = "left"  # "left" or "right"
+
         # Auto-save state
         self._autosave_enabled: bool = self._prefs.autosave.enabled
         self._autosave_interval: int = self._prefs.autosave.interval
@@ -2204,7 +2235,14 @@ class AmplifierChicApp(App):
         """Refresh the tab bar UI."""
         try:
             tab_bar = self.query_one("#tab-bar", TabBar)
-            tab_bar.update_tabs(self._tabs, self._active_tab_index)
+            tab_bar.update_tabs(
+                self._tabs,
+                self._active_tab_index,
+                split_left=self._tab_split_left_index if self._tab_split_mode else None,
+                split_right=self._tab_split_right_index
+                if self._tab_split_mode
+                else None,
+            )
         except Exception:
             pass
         self._update_tab_indicator()
@@ -2214,7 +2252,12 @@ class AmplifierChicApp(App):
         try:
             widget = self.query_one("#status-tabs", Static)
             count = len(self._tabs)
-            if count > 1:
+            if self._tab_split_mode:
+                left = (self._tab_split_left_index or 0) + 1
+                right = (self._tab_split_right_index or 0) + 1
+                side = "L" if self._tab_split_active == "left" else "R"
+                widget.update(f"Split {left}|{right} [{side}]")
+            elif count > 1:
                 widget.update(f"Tab {self._active_tab_index + 1}/{count}")
             else:
                 widget.update("")
@@ -2287,6 +2330,12 @@ class AmplifierChicApp(App):
             self._add_system_message("Cannot switch tabs while processing.")
             return
 
+        # Exit tab split mode if active
+        if self._tab_split_mode:
+            self._exit_tab_split()
+            if index == self._active_tab_index:
+                return  # Already on this tab after exiting split
+
         # Save current tab state
         self._save_current_tab_state()
 
@@ -2347,6 +2396,10 @@ class AmplifierChicApp(App):
         if self.is_processing:
             self._add_system_message("Cannot create tab while processing.")
             return
+
+        # Exit tab split mode before creating a new tab
+        if self._tab_split_mode:
+            self._exit_tab_split()
 
         tab_id = f"tab-{self._tab_counter}"
         container_id = f"chat-view-{self._tab_counter}"
@@ -2436,6 +2489,13 @@ class AmplifierChicApp(App):
             self._add_system_message("Cannot close tab while processing.")
             return
 
+        # Exit tab split mode if closing a tab that's part of the split
+        if self._tab_split_mode and index in (
+            self._tab_split_left_index,
+            self._tab_split_right_index,
+        ):
+            self._exit_tab_split()
+
         closing_tab = self._tabs[index]
 
         # Remove the container widget
@@ -2502,7 +2562,10 @@ class AmplifierChicApp(App):
         self._create_new_tab()
 
     def action_close_tab(self) -> None:
-        """Close current tab (Ctrl+W)."""
+        """Close current tab (Ctrl+W), or switch pane in split mode."""
+        if self._tab_split_mode:
+            self._switch_split_pane()
+            return
         if len(self._tabs) <= 1:
             self._add_system_message("Cannot close the last tab.")
             return
@@ -2519,14 +2582,22 @@ class AmplifierChicApp(App):
             self._close_tab()
 
     def action_prev_tab(self) -> None:
-        """Switch to previous tab (Ctrl+PageUp)."""
+        """Switch to previous tab, or left pane in split mode."""
+        if self._tab_split_mode:
+            if self._tab_split_active != "left":
+                self._switch_split_pane()
+            return
         if len(self._tabs) <= 1:
             return
         new_index = (self._active_tab_index - 1) % len(self._tabs)
         self._switch_to_tab(new_index)
 
     def action_next_tab(self) -> None:
-        """Switch to next tab (Ctrl+PageDown)."""
+        """Switch to next tab, or right pane in split mode."""
+        if self._tab_split_mode:
+            if self._tab_split_active != "right":
+                self._switch_split_pane()
+            return
         if len(self._tabs) <= 1:
             return
         new_index = (self._active_tab_index + 1) % len(self._tabs)
@@ -4924,7 +4995,7 @@ class AmplifierChicApp(App):
             "  /undo         Remove last exchange (/undo <N> for last N exchanges)\n"
             "  /retry        Undo last exchange & re-send (/retry <text> to modify)\n"
             "  /redo         Alias for /retry\n"
-            "  /split        Toggle split view (/split pins|chat|file <path>|on|off)\n"
+            "  /split        Toggle split view (/split [N|swap|off|pins|chat|file <path>])\n"
             "  /stream       Toggle streaming display (/stream on, /stream off)\n"
             "  /vim          Toggle vim keybindings (/vim on, /vim off)\n"
             "  /tab          Tab management (/tab new|switch|close|rename|list)\n"
@@ -6921,11 +6992,12 @@ class AmplifierChicApp(App):
     # ── /split – side-by-side reference panel ────────────────────────────
 
     def _cmd_split(self, text: str) -> None:
-        """Toggle or configure split view with a reference panel.
+        """Toggle or configure split view.
 
-        /split          Toggle split view on/off
-        /split on       Open split (default: pins)
-        /split off      Close split
+        /split          Toggle tab split (2+ tabs) or reference panel
+        /split N        Split current tab with tab N
+        /split off      Close any split view
+        /split swap     Swap left and right panes (tab split)
         /split pins     Show pinned messages in right panel
         /split chat     Mirror of chat at independent scroll position
         /split file <p> Show file content in right panel
@@ -6934,26 +7006,35 @@ class AmplifierChicApp(App):
         lower = raw.lower()
 
         if lower == "off":
-            self._close_split()
+            if self._tab_split_mode:
+                self._exit_tab_split()
+            else:
+                self._close_split()
             return
 
-        if lower == "on" or not lower:
-            if self.has_class("split-mode"):
-                self._close_split()
+        if lower == "swap":
+            if self._tab_split_mode:
+                self._swap_tab_split()
             else:
-                self._open_split_pins()
+                self._add_system_message("Swap requires tab split mode")
             return
 
         if lower == "pins":
+            if self._tab_split_mode:
+                self._exit_tab_split()
             self._open_split_pins()
             return
 
         if lower == "chat":
+            if self._tab_split_mode:
+                self._exit_tab_split()
             self._open_split_chat()
             return
 
         # /split file <path> – preserve original case for the path
         if lower.startswith("file ") or lower.startswith("file\t"):
+            if self._tab_split_mode:
+                self._exit_tab_split()
             path = raw[5:].strip()
             if not path:
                 self._add_system_message("Usage: /split file <path>")
@@ -6961,13 +7042,50 @@ class AmplifierChicApp(App):
             self._open_split_file(path)
             return
 
+        # /split N – split with a specific tab number
+        if lower and lower.isdigit():
+            target_index = int(lower) - 1  # 1-based to 0-based
+            if target_index < 0 or target_index >= len(self._tabs):
+                self._add_system_message(
+                    f"Tab {lower} not found (have {len(self._tabs)} tabs)"
+                )
+                return
+            if target_index == self._active_tab_index:
+                self._add_system_message("Cannot split a tab with itself")
+                return
+            if self.has_class("split-mode"):
+                self._close_split()
+            if self._tab_split_mode:
+                self._exit_tab_split()
+            self._enter_tab_split(self._active_tab_index, target_index)
+            return
+
+        if lower == "on" or not lower:
+            # Toggle: if already in any split, exit
+            if self._tab_split_mode:
+                self._exit_tab_split()
+                return
+            if self.has_class("split-mode"):
+                self._close_split()
+                return
+            # Enter tab split if 2+ tabs, otherwise fall back to pins
+            if len(self._tabs) >= 2:
+                next_idx = (self._active_tab_index + 1) % len(self._tabs)
+                self._enter_tab_split(self._active_tab_index, next_idx)
+            else:
+                self._open_split_pins()
+            return
+
         self._add_system_message(
-            "Usage: /split [on|off|pins|chat|file <path>]\n"
-            "  /split          Toggle split view on/off\n"
+            "Usage: /split [on|off|swap|N|pins|chat|file <path>]\n"
+            "  /split          Toggle tab split (2+ tabs) or reference panel\n"
+            "  /split N        Split current tab with tab N\n"
+            "  /split swap     Swap left and right panes\n"
+            "  /split off      Close split view\n"
             "  /split pins     Pinned messages in right panel\n"
             "  /split chat     Chat mirror (independent scroll)\n"
             "  /split file <p> File content in right panel\n"
-            "  Tab             Switch focus between panels"
+            "  Alt+Left/Right  Switch active pane in split mode"
         )
 
     def _open_split_pins(self) -> None:
@@ -7094,7 +7212,7 @@ class AmplifierChicApp(App):
         self._add_system_message(f"Split view: {rel}")
 
     def _close_split(self) -> None:
-        """Close the split panel."""
+        """Close the reference split panel."""
         self.remove_class("split-mode")
         try:
             panel = self.query_one("#split-panel", ScrollableContainer)
@@ -7102,6 +7220,225 @@ class AmplifierChicApp(App):
         except Exception:
             pass
         self._add_system_message("Split view closed")
+
+    # ── Tab split view (two live tabs side by side) ──────────────────────
+
+    def _enter_tab_split(self, left_index: int, right_index: int) -> None:
+        """Enter tab split mode showing two tabs side by side."""
+        if self.is_processing:
+            self._add_system_message("Cannot enter split view while processing.")
+            return
+
+        self._save_current_tab_state()
+
+        self._tab_split_mode = True
+        self._tab_split_left_index = left_index
+        self._tab_split_right_index = right_index
+        self._tab_split_active = "left"
+        self._active_tab_index = left_index
+
+        # Load left tab state
+        self._load_tab_state(self._tabs[left_index])
+
+        # Show both containers side by side
+        left_tab = self._tabs[left_index]
+        right_tab = self._tabs[right_index]
+
+        try:
+            left_container = self.query_one(
+                f"#{left_tab.container_id}", ScrollableContainer
+            )
+            right_container = self.query_one(
+                f"#{right_tab.container_id}", ScrollableContainer
+            )
+
+            # Ensure both are visible
+            left_container.remove_class("tab-chat-hidden")
+            right_container.remove_class("tab-chat-hidden")
+
+            # Add split styling classes
+            left_container.add_class("split-left-pane")
+            right_container.add_class("split-right-pane")
+            left_container.add_class("split-pane-active")
+
+            # Ensure correct DOM order: left before right
+            # (move right after left in case they aren't adjacent)
+            right_container.move_after(left_container)
+        except Exception:
+            self._tab_split_mode = False
+            self._tab_split_left_index = None
+            self._tab_split_right_index = None
+            self._add_system_message("Failed to set up split view")
+            return
+
+        self.add_class("tab-split-mode")
+
+        left_name = self._tabs[left_index].name
+        right_name = self._tabs[right_index].name
+        self._update_tab_bar()
+        self._add_system_message(
+            f"Split view: [{left_name}] | [{right_name}]\n"
+            "Alt+Left/Right or Ctrl+W to switch pane \u2022 /split off to close"
+        )
+
+    def _exit_tab_split(self) -> None:
+        """Exit tab split mode, return to single-pane view."""
+        if not self._tab_split_mode:
+            return
+
+        self._save_current_tab_state()
+
+        left_index = self._tab_split_left_index
+        right_index = self._tab_split_right_index
+        active_index = self._active_tab_index
+
+        # Determine which tab is NOT active (needs to be hidden)
+        if left_index is not None and right_index is not None:
+            other_index = right_index if active_index == left_index else left_index
+        else:
+            other_index = None
+
+        # Clean up CSS classes from both containers
+        for idx in (left_index, right_index):
+            if idx is not None and idx < len(self._tabs):
+                tab = self._tabs[idx]
+                try:
+                    container = self.query_one(
+                        f"#{tab.container_id}", ScrollableContainer
+                    )
+                    container.remove_class(
+                        "split-left-pane",
+                        "split-right-pane",
+                        "split-pane-active",
+                    )
+                except Exception:
+                    pass
+
+        # Hide the non-active tab's container
+        if other_index is not None and other_index < len(self._tabs):
+            other_tab = self._tabs[other_index]
+            try:
+                other_container = self.query_one(
+                    f"#{other_tab.container_id}", ScrollableContainer
+                )
+                other_container.add_class("tab-chat-hidden")
+            except Exception:
+                pass
+
+        self.remove_class("tab-split-mode")
+        self._tab_split_mode = False
+        self._tab_split_left_index = None
+        self._tab_split_right_index = None
+        self._tab_split_active = "left"
+
+        self._update_tab_bar()
+        self._add_system_message("Split view closed")
+
+    def _swap_tab_split(self) -> None:
+        """Swap left and right panes in tab split mode."""
+        if not self._tab_split_mode:
+            return
+
+        left_index = self._tab_split_left_index
+        right_index = self._tab_split_right_index
+
+        if left_index is None or right_index is None:
+            return
+
+        # Swap indices
+        self._tab_split_left_index = right_index
+        self._tab_split_right_index = left_index
+
+        # Update CSS classes on containers
+        old_left_tab = self._tabs[left_index]
+        old_right_tab = self._tabs[right_index]
+
+        try:
+            old_left_container = self.query_one(
+                f"#{old_left_tab.container_id}", ScrollableContainer
+            )
+            old_right_container = self.query_one(
+                f"#{old_right_tab.container_id}", ScrollableContainer
+            )
+
+            # Swap left/right CSS classes
+            old_left_container.remove_class("split-left-pane")
+            old_left_container.add_class("split-right-pane")
+
+            old_right_container.remove_class("split-right-pane")
+            old_right_container.add_class("split-left-pane")
+
+            # Reorder in DOM so new-left appears before new-right
+            old_right_container.move_before(old_left_container)
+        except Exception:
+            pass
+
+        # Update active indicator
+        self._update_split_active_indicator()
+
+        left_name = self._tabs[self._tab_split_left_index].name
+        right_name = self._tabs[self._tab_split_right_index].name
+        self._update_tab_bar()
+        self._add_system_message(f"Panes swapped: [{left_name}] | [{right_name}]")
+
+    def _switch_split_pane(self) -> None:
+        """Switch the active pane in tab split mode."""
+        if not self._tab_split_mode:
+            return
+
+        self._save_current_tab_state()
+
+        # Toggle active side
+        if self._tab_split_active == "left":
+            self._tab_split_active = "right"
+            self._active_tab_index = self._tab_split_right_index or 0
+        else:
+            self._tab_split_active = "left"
+            self._active_tab_index = self._tab_split_left_index or 0
+
+        # Load the newly active tab's state
+        self._load_tab_state(self._tabs[self._active_tab_index])
+
+        # Update visual indicator
+        self._update_split_active_indicator()
+
+        # Update UI
+        self._update_tab_bar()
+        self._update_session_display()
+        self._update_word_count_display()
+        self._update_breadcrumb()
+        self._update_pinned_panel()
+        self.sub_title = self._session_title or ""
+
+        # Restore input text for the new active pane's tab
+        try:
+            input_widget = self.query_one("#chat-input", ChatInput)
+            active_tab = self._tabs[self._active_tab_index]
+            input_widget.clear()
+            if active_tab.input_text:
+                input_widget.insert(active_tab.input_text)
+            input_widget.focus()
+        except Exception:
+            pass
+
+    def _update_split_active_indicator(self) -> None:
+        """Update CSS classes to show which pane is active in tab split."""
+        if not self._tab_split_mode:
+            return
+
+        for idx in (self._tab_split_left_index, self._tab_split_right_index):
+            if idx is not None and idx < len(self._tabs):
+                tab = self._tabs[idx]
+                try:
+                    container = self.query_one(
+                        f"#{tab.container_id}", ScrollableContainer
+                    )
+                    if idx == self._active_tab_index:
+                        container.add_class("split-pane-active")
+                    else:
+                        container.remove_class("split-pane-active")
+                except Exception:
+                    pass
 
     # ── /watch – file change monitoring ──────────────────────────────────
 

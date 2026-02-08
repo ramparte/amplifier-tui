@@ -159,6 +159,29 @@ Screen {
     max-width: 100%;
 }
 
+/* -- Tab Split Mode (two live tabs side by side) ------ */
+
+.tab-split-mode .tab-chat-view {
+    width: 1fr;
+    max-width: 100%;
+}
+
+.tab-split-mode .split-right-pane {
+    border-left: solid $surface-lighten-2;
+}
+
+.tab-split-mode .split-pane-active {
+    border: solid $accent;
+}
+
+.tab-split-mode .tab-chat-view:not(.split-left-pane):not(.split-right-pane) {
+    display: none;
+}
+
+.tab-in-split {
+    text-style: underline;
+}
+
 /* -- No-wrap mode (toggled by /wrap command) ---------- */
 /* When word wrap is off, messages scroll horizontally   */
 /* instead of wrapping long lines.                       */
