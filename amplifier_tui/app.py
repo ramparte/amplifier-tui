@@ -218,6 +218,7 @@ class AmplifierChicApp(App):
         Binding("ctrl+s", "stash_prompt", "Stash", show=True),
         Binding("ctrl+y", "copy_response", "Copy", show=True),
         Binding("ctrl+n", "new_session", "New", show=True),
+        Binding("f11", "toggle_focus_mode", "Focus", show=False),
         Binding("ctrl+a", "toggle_auto_scroll", "Scroll", show=False),
         Binding("ctrl+l", "clear_chat", "Clear", show=False),
         Binding("ctrl+q", "quit", "Quit", show=True),
@@ -249,6 +250,9 @@ class AmplifierChicApp(App):
 
         # Auto-scroll state
         self._auto_scroll = True
+
+        # Focus mode state (zen mode - hides chrome)
+        self._focus_mode = False
 
         # Streaming display state
         self._stream_widget: Static | None = None
@@ -423,8 +427,14 @@ class AmplifierChicApp(App):
             self._filter_sessions(event.value)
 
     def on_key(self, event) -> None:
-        """Clear the session filter on Escape."""
+        """Handle Escape: exit focus mode, or clear session filter."""
         if event.key == "escape":
+            # Exit focus mode first if active
+            if self._focus_mode:
+                self.action_toggle_focus_mode()
+                event.prevent_default()
+                event.stop()
+                return
             try:
                 filt = self.query_one("#session-filter", Input)
                 if filt.has_focus and filt.value:
@@ -602,6 +612,31 @@ class AmplifierChicApp(App):
             except Exception:
                 pass
 
+    def action_toggle_focus_mode(self) -> None:
+        """Toggle focus mode: hide all chrome, show only chat + input."""
+        self._focus_mode = not self._focus_mode
+
+        # Hide/show the status bar
+        try:
+            self.query_one("#status-bar").display = not self._focus_mode
+        except Exception:
+            pass
+
+        # If entering focus mode with sidebar open, close it
+        if self._focus_mode and self._sidebar_visible:
+            self.action_toggle_sidebar()
+
+        if self._focus_mode:
+            self._add_system_message("Focus mode ON (F11 or /focus to exit)")
+        else:
+            self._add_system_message("Focus mode OFF")
+
+        # Keep input focused
+        try:
+            self.query_one("#chat-input", ChatInput).focus()
+        except Exception:
+            pass
+
     def action_open_editor(self) -> None:
         """Open $EDITOR for composing a longer prompt (Ctrl+G)."""
         editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "nano"
@@ -753,6 +788,7 @@ class AmplifierChicApp(App):
             "/model": self._cmd_model,
             "/quit": self._cmd_quit,
             "/exit": self._cmd_quit,
+            "/focus": self._cmd_focus,
             "/compact": self._cmd_compact,
             "/copy": self._cmd_copy,
             "/notify": self._cmd_notify,
@@ -786,6 +822,7 @@ class AmplifierChicApp(App):
             "  /scroll       Toggle auto-scroll on/off\n"
             "  /timestamps   Toggle message timestamps on/off\n"
             "  /theme        Switch color theme (dark, light, solarized)\n"
+            "  /focus        Toggle focus mode (hide chrome)\n"
             "  /compact      Clear chat, keep session\n"
             "  /quit         Quit\n"
             "\n"
@@ -794,6 +831,7 @@ class AmplifierChicApp(App):
             "  Enter         Send message\n"
             "  Ctrl+J        Insert newline\n"
             "  Up/Down       Browse prompt history\n"
+            "  F11           Toggle focus mode (hide chrome)\n"
             "  Ctrl+A        Toggle auto-scroll\n"
             "  Ctrl+G        Open $EDITOR for longer prompts\n"
             "  Ctrl+Y        Copy last response to clipboard\n"
@@ -889,6 +927,10 @@ class AmplifierChicApp(App):
         for child in list(chat_view.children):
             child.remove()
         self._add_system_message("Chat cleared. Session continues.")
+
+    def _cmd_focus(self) -> None:
+        """Toggle focus mode via slash command."""
+        self.action_toggle_focus_mode()
 
     def _cmd_copy(self) -> None:
         self.action_copy_response()
