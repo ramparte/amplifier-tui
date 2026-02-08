@@ -233,7 +233,7 @@ class SessionManager:
                 self.on_tool_post(
                     data.get("tool_name", "unknown"),
                     data.get("tool_input", {}),
-                    str(result)[:500],  # Truncate long results
+                    str(result)[:2000],  # Truncate long results (collapsed by default)
                 )
             return HookResult(action="continue")
 

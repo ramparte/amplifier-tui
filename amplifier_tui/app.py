@@ -1472,6 +1472,53 @@ class AmplifierChicApp(App):
         container.styles.border_left = ("wide", c.tool_border)
         container.styles.background = c.tool_background
 
+    @staticmethod
+    def _tool_title(tool_name: str, tool_input: dict | str | None, result: str) -> str:
+        """Build a descriptive collapsible title for a tool block.
+
+        Format: ``tool_name: key_arg (N lines)``
+        """
+        # Extract the most useful single argument for the summary line.
+        summary = ""
+        if tool_input:
+            if isinstance(tool_input, dict):
+                for key in (
+                    "command",
+                    "query",
+                    "path",
+                    "file_path",
+                    "pattern",
+                    "url",
+                    "instruction",
+                    "agent",
+                    "operation",
+                    "action",
+                    "skill_name",
+                    "content",
+                ):
+                    if key in tool_input:
+                        summary = str(tool_input[key])
+                        break
+                if not summary:
+                    summary = json.dumps(tool_input)
+            else:
+                summary = str(tool_input)
+            # First line only, capped at 80 chars.
+            summary = summary.split("\n")[0]
+            if len(summary) > 80:
+                summary = summary[:77] + "..."
+
+        # Count lines in the result.
+        line_count = len(result.strip().split("\n")) if result.strip() else 0
+
+        # Assemble: "▶ bash: ls -la (12 lines)"
+        title = f"\u25b6 {tool_name}"
+        if summary:
+            title += f": {summary}"
+        if line_count > 0:
+            title += f" ({line_count} line{'s' if line_count != 1 else ''})"
+        return title
+
     def _style_system(self, widget: Static) -> None:
         """Apply preference colors to a system message."""
         c = self._prefs.colors
@@ -1546,19 +1593,20 @@ class AmplifierChicApp(App):
                 if isinstance(tool_input, dict)
                 else str(tool_input)
             )
-            if len(input_str) > 300:
-                input_str = input_str[:300] + "..."
+            if len(input_str) > 800:
+                input_str = input_str[:800] + "..."
             detail_parts.append(f"Input:\n{input_str}")
         if result:
-            r = result[:400] + "..." if len(result) > 400 else result
+            r = result[:1500] + "..." if len(result) > 1500 else result
             detail_parts.append(f"Result:\n{r}")
 
         detail = "\n\n".join(detail_parts) if detail_parts else "(no details)"
 
+        title = self._tool_title(tool_name, tool_input, result)
         inner = Static(detail, classes="tool-detail")
         collapsible = Collapsible(
             inner,
-            title=f"\u25b6 {tool_name}",
+            title=title,
             collapsed=True,
         )
         collapsible.add_class("tool-use")
@@ -2068,25 +2116,7 @@ class AmplifierChicApp(App):
 
                 elif block.kind == "tool_use":
                     result = tool_results.get(block.tool_id, "")
-                    input_str = (
-                        json.dumps(block.tool_input, indent=2)
-                        if isinstance(block.tool_input, dict)
-                        else str(block.tool_input)
-                    )
-                    if len(input_str) > 300:
-                        input_str = input_str[:300] + "..."
-                    detail = f"Input:\n{input_str}"
-                    if result:
-                        detail += f"\n\nResult:\n{result}"
-                    inner = Static(detail, classes="tool-detail")
-                    collapsible = Collapsible(
-                        inner,
-                        title=f"\u25b6 {block.tool_name}",
-                        collapsed=True,
-                    )
-                    collapsible.add_class("tool-use")
-                    chat_view.mount(collapsible)
-                    self._style_tool(collapsible, inner)
+                    self._add_tool_use(block.tool_name, block.tool_input, result)
 
                 elif block.kind == "tool_result":
                     tool_results[block.tool_id] = block.content
