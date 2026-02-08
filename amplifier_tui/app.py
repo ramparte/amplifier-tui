@@ -911,7 +911,7 @@ SHORTCUTS_TEXT = """\
   /scroll          Toggle auto-scroll
 
  EXPORT & DATA ─────────────────────────
-  /export          Export chat (md/txt/json)
+  /export          Export chat (md/html/json/txt)
   /diff            Show git diff (color-coded)
   /watch           Watch files for changes
   /tokens          Token/context usage
@@ -3328,7 +3328,7 @@ class AmplifierChicApp(App):
             "  /unpin <N>    Remove a pin by its pin number\n"
             "  /pin-session  Pin/unpin session (pinned appear at top of sidebar)\n"
             "  /delete       Delete session (with confirmation)\n"
-            "  /export       Export chat (md/txt/json) | /export <file> | /export <fmt>\n"
+            "  /export       Export chat (md/html/json/txt) | /export <fmt> [path] | --clipboard\n"
             "  /notify       Toggle notifications (/notify on|off|sound|silent|<secs>)\n"
             "  /sound        Toggle notification sound (/sound on|off|test)\n"
             "  /scroll       Toggle auto-scroll on/off\n"
@@ -6428,10 +6428,13 @@ class AmplifierChicApp(App):
 
     def _export_markdown(self, messages: list[tuple[str, str, Static | None]]) -> str:
         """Format messages as markdown."""
-        lines = ["# Amplifier Chat Export", ""]
+        lines = [
+            "# Amplifier Conversation",
+            "",
+        ]
         if self._session_title:
             lines.append(f"**Session:** {self._session_title}")
-        lines.append(f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        lines.append(f"*Exported: {datetime.now().strftime('%Y-%m-%d %H:%M')}*")
         lines.append(f"**Messages:** {len(messages)}")
         lines.append("")
         lines.append("---")
@@ -6439,19 +6442,33 @@ class AmplifierChicApp(App):
 
         for role, content, _widget in messages:
             if role == "user":
-                lines.append("## You")
+                lines.append("## User")
             elif role == "assistant":
                 lines.append("## Assistant")
+            elif role == "thinking":
+                lines.append("<details><summary>Thinking</summary>")
+                lines.append("")
+                lines.append(content)
+                lines.append("")
+                lines.append("</details>")
+                lines.append("")
+                lines.append("---")
+                lines.append("")
+                continue
             elif role == "system":
-                lines.append("## System")
+                lines.append(f"> **System**: {content}")
+                lines.append("")
+                lines.append("---")
+                lines.append("")
+                continue
             else:
                 lines.append(f"## {role.title()}")
             lines.append("")
             lines.append(content)
             lines.append("")
+            lines.append("---")
+            lines.append("")
 
-        lines.append("---")
-        lines.append("")
         lines.append("*Exported from Amplifier TUI*")
         return "\n".join(lines)
 
@@ -6459,9 +6476,12 @@ class AmplifierChicApp(App):
         """Format messages as plain text."""
         lines: list[str] = []
         for role, content, _widget in messages:
-            label = {"user": "You", "assistant": "AI", "system": "System"}.get(
-                role, role
-            )
+            label = {
+                "user": "You",
+                "assistant": "AI",
+                "system": "System",
+                "thinking": "Thinking",
+            }.get(role, role)
             lines.append(f"[{label}]")
             lines.append(content)
             lines.append("")
@@ -6470,6 +6490,7 @@ class AmplifierChicApp(App):
     def _export_json(self, messages: list[tuple[str, str, Static | None]]) -> str:
         """Format messages as JSON."""
         data = {
+            "session_id": self._get_session_id(),
             "session_title": self._session_title or "",
             "exported_at": datetime.now().isoformat(),
             "message_count": len(messages),
@@ -6480,67 +6501,235 @@ class AmplifierChicApp(App):
         }
         return json.dumps(data, indent=2, ensure_ascii=False)
 
+    @staticmethod
+    def _html_escape(text: str) -> str:
+        """Escape HTML special characters."""
+        return (
+            text.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+        )
+
+    @staticmethod
+    def _md_to_html(text: str) -> str:
+        """Very basic markdown to HTML conversion."""
+        # Code blocks (fenced)
+        text = re.sub(
+            r"```(\w+)?\n(.*?)\n```",
+            lambda m: (
+                f'<pre><code class="language-{m.group(1) or ""}">'
+                f"{m.group(2)}</code></pre>"
+            ),
+            text,
+            flags=re.DOTALL,
+        )
+        # Inline code
+        text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
+        # Bold
+        text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+        # Italic
+        text = re.sub(r"\*(.+?)\*", r"<em>\1</em>", text)
+        # Line breaks (outside <pre> blocks)
+        parts = re.split(r"(<pre>.*?</pre>)", text, flags=re.DOTALL)
+        for i, part in enumerate(parts):
+            if not part.startswith("<pre>"):
+                parts[i] = part.replace("\n", "<br>\n")
+        return "".join(parts)
+
+    def _export_html(self, messages: list[tuple[str, str, Static | None]]) -> str:
+        """Format messages as styled HTML with dark theme."""
+        now = datetime.now()
+        title_text = (
+            self._html_escape(self._session_title)
+            if self._session_title
+            else "Conversation"
+        )
+        html = [
+            "<!DOCTYPE html>",
+            "<html lang='en'><head>",
+            "<meta charset='utf-8'>",
+            f"<title>Amplifier - {title_text} - {now.strftime('%Y-%m-%d')}</title>",
+            "<style>",
+            "body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;"
+            " max-width: 800px; margin: 0 auto; padding: 20px; background: #1e1e2e; color: #cdd6f4; }",
+            ".message { margin: 16px 0; padding: 12px 16px; border-radius: 8px; }",
+            ".user { background: #313244; border-left: 3px solid #89b4fa; }",
+            ".assistant { background: #1e1e2e; border-left: 3px solid #a6e3a1; }",
+            ".system { background: #181825; border-left: 3px solid #f9e2af; font-style: italic; }",
+            ".thinking { background: #181825; border-left: 3px solid #9399b2; }",
+            ".role { font-weight: bold; margin-bottom: 8px; color: #89b4fa; }",
+            ".assistant .role { color: #a6e3a1; }",
+            ".system .role { color: #f9e2af; }",
+            ".thinking .role { color: #9399b2; }",
+            "pre { background: #11111b; padding: 12px; border-radius: 4px; overflow-x: auto; }",
+            "code { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace; font-size: 0.9em; }",
+            "p code { background: #313244; padding: 2px 5px; border-radius: 3px; }",
+            "details { margin: 8px 0; }",
+            "summary { cursor: pointer; color: #9399b2; font-weight: bold; }",
+            ".meta { color: #6c7086; font-size: 0.85em; margin-top: 12px; }",
+            "h1 { color: #cba6f7; border-bottom: 1px solid #313244; padding-bottom: 8px; }",
+            "a { color: #89b4fa; }",
+            "</style>",
+            "</head><body>",
+            "<h1>Amplifier Conversation</h1>",
+        ]
+        if self._session_title:
+            html.append(f"<p class='meta'><strong>Session:</strong> {title_text}</p>")
+        html.append(
+            f"<p class='meta'>Exported: {now.strftime('%Y-%m-%d %H:%M')}"
+            f" &middot; {len(messages)} messages</p>"
+        )
+
+        for role, content, _widget in messages:
+            escaped = self._html_escape(content)
+            rendered = self._md_to_html(escaped)
+
+            if role == "thinking":
+                html.append(
+                    f"<details class='message thinking'>"
+                    f"<summary class='role'>Thinking</summary>"
+                    f"<div>{rendered}</div></details>"
+                )
+            else:
+                role_label = {
+                    "user": "User",
+                    "assistant": "Assistant",
+                    "system": "System",
+                }.get(role, role.title())
+                html.append(
+                    f"<div class='message {self._html_escape(role)}'>"
+                    f"<div class='role'>{role_label}</div>"
+                    f"<div>{rendered}</div></div>"
+                )
+
+        html.append(
+            "<p class='meta' style='text-align:center; margin-top:32px;'>"
+            "Exported from Amplifier TUI</p>"
+        )
+        html.append("</body></html>")
+        return "\n".join(html)
+
     # ------------------------------------------------------------------
     # /export command
     # ------------------------------------------------------------------
 
     def _cmd_export(self, text: str) -> None:
-        """Export the current chat to markdown, plain text, or JSON."""
-        # text is the full command, e.g. "/export md" or "/export myfile.json"
+        """Export the current chat to markdown, HTML, plain text, or JSON."""
+        # text is the full command, e.g. "/export md" or "/export html ~/out.html"
         parts = text.strip().split(None, 1)
         arg = parts[1].strip() if len(parts) > 1 else ""
+
+        # No arguments: show usage
+        if not arg:
+            self._add_system_message(
+                "Export conversation:\n"
+                "  /export md [path]          Markdown\n"
+                "  /export html [path]        Styled HTML (dark theme)\n"
+                "  /export json [path]        Structured JSON\n"
+                "  /export txt [path]         Plain text\n"
+                "  /export <fmt> --clipboard   Copy to clipboard\n\n"
+                "Default path: ~/amplifier-export-{timestamp}.{ext}"
+            )
+            return
 
         if not self._search_messages:
             self._add_system_message("No messages to export")
             return
 
-        # Determine format and filename
-        fmt = "md"
-        filename = ""
+        # Check for --clipboard flag
+        to_clipboard = "--clipboard" in arg or "--clip" in arg
+        arg = arg.replace("--clipboard", "").replace("--clip", "").strip()
 
-        if arg in ("md", "markdown"):
-            fmt = "md"
-        elif arg in ("txt", "text"):
-            fmt = "txt"
-        elif arg in ("json",):
-            fmt = "json"
-        elif arg:
-            filename = arg
-            if arg.endswith(".json"):
+        # Parse format and optional path
+        tokens = arg.split(None, 1)
+        first = tokens[0].lower() if tokens else ""
+        rest = tokens[1].strip() if len(tokens) > 1 else ""
+
+        fmt = "md"
+        custom_path = ""
+
+        format_map = {
+            "md": "md",
+            "markdown": "md",
+            "html": "html",
+            "json": "json",
+            "txt": "txt",
+            "text": "txt",
+        }
+
+        if first in format_map:
+            fmt = format_map[first]
+            custom_path = rest
+        elif first:
+            # Treat entire arg as a filename; infer format from extension
+            custom_path = arg
+            if arg.endswith(".html"):
+                fmt = "html"
+            elif arg.endswith(".json"):
                 fmt = "json"
             elif arg.endswith(".txt"):
                 fmt = "txt"
             else:
                 fmt = "md"
 
-        # Auto-generate filename if not specified
-        if not filename:
-            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-            filename = f"amplifier-chat-{ts}.{fmt}"
-        elif not filename.endswith(f".{fmt}"):
-            filename = f"{filename}.{fmt}"
-
         # Generate content
+        messages = self._search_messages
         if fmt == "json":
-            content = self._export_json(self._search_messages)
+            content = self._export_json(messages)
+        elif fmt == "html":
+            content = self._export_html(messages)
         elif fmt == "txt":
-            content = self._export_text(self._search_messages)
+            content = self._export_text(messages)
         else:
-            content = self._export_markdown(self._search_messages)
+            content = self._export_markdown(messages)
 
-        # Write file
-        out_path = Path(filename).expanduser()
+        msg_count = len(messages)
+
+        # Clipboard mode
+        if to_clipboard:
+            if _copy_to_clipboard(content):
+                size_str = (
+                    f"{len(content):,} bytes"
+                    if len(content) < 1024
+                    else f"{len(content) / 1024:.1f} KB"
+                )
+                self._add_system_message(
+                    f"Copied {msg_count} messages as {fmt.upper()}"
+                    f" to clipboard ({size_str})"
+                )
+            else:
+                self._add_system_message(
+                    "Failed to copy \u2014 no clipboard tool available"
+                    " (install xclip or xsel)"
+                )
+            return
+
+        # Determine output path
+        if custom_path:
+            out_path = Path(custom_path).expanduser()
+        else:
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            out_path = Path.home() / f"amplifier-export-{ts}.{fmt}"
+
         if not out_path.is_absolute():
             out_path = Path.cwd() / out_path
         out_path = out_path.resolve()
 
+        # Ensure extension matches format
+        ext_map = {"md": ".md", "html": ".html", "json": ".json", "txt": ".txt"}
+        expected_ext = ext_map.get(fmt, f".{fmt}")
+        if not out_path.suffix == expected_ext and not custom_path:
+            out_path = out_path.with_suffix(expected_ext)
+
+        # Write file
         try:
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(content, encoding="utf-8")
             size = out_path.stat().st_size
             size_str = f"{size:,} bytes" if size < 1024 else f"{size / 1024:.1f} KB"
             self._add_system_message(
-                f"Exported {len(self._search_messages)} messages to {out_path}\n"
+                f"Exported {msg_count} messages to {out_path}\n"
                 f"Format: {fmt.upper()}, Size: {size_str}"
             )
         except OSError as e:
@@ -7235,6 +7424,7 @@ class AmplifierChicApp(App):
         )
         chat_view.mount(collapsible)
         self._style_thinking(collapsible, inner)
+        self._search_messages.append(("thinking", text, collapsible))
 
     def _add_tool_use(
         self,
