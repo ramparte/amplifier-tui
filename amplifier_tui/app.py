@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
+import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -70,6 +73,35 @@ def _get_tool_label(name: str, tool_input: dict | str | None) -> str:
     if len(base) > _MAX_LABEL_LEN:
         base = base[: _MAX_LABEL_LEN - 1] + "\u2026"
     return f"{base}..."
+
+
+def _copy_to_clipboard(text: str) -> bool:
+    """Copy text to system clipboard. Tries OSC 52 first, then native tools."""
+    # OSC 52: works in most modern terminals (WezTerm, iTerm2, kitty, etc.)
+    # and even over SSH sessions.
+    try:
+        encoded = base64.b64encode(text.encode()).decode()
+        sys.stdout.write(f"\033]52;c;{encoded}\a")
+        sys.stdout.flush()
+        return True
+    except Exception:
+        pass
+
+    # Fallback: native clipboard tools
+    for cmd in [
+        "xclip -selection clipboard",
+        "xsel --clipboard --input",
+        "pbcopy",
+        "clip.exe",
+    ]:
+        prog = cmd.split()[0]
+        if shutil.which(prog):
+            try:
+                subprocess.run(cmd.split(), input=text.encode(), check=True, timeout=2)
+                return True
+            except Exception:
+                continue
+    return False
 
 
 # ── Widget Classes ──────────────────────────────────────────────────
@@ -183,6 +215,7 @@ class AmplifierChicApp(App):
         Binding("ctrl+b", "toggle_sidebar", "Sessions", show=True),
         Binding("ctrl+g", "open_editor", "Editor", show=True),
         Binding("ctrl+s", "stash_prompt", "Stash", show=True),
+        Binding("ctrl+y", "copy_response", "Copy", show=True),
         Binding("ctrl+n", "new_session", "New", show=True),
         Binding("ctrl+l", "clear_chat", "Clear", show=False),
         Binding("ctrl+q", "quit", "Quit", show=True),
@@ -209,6 +242,7 @@ class AmplifierChicApp(App):
         self._prefs = load_preferences()
         self._history = PromptHistory()
         self._stash_stack: list[str] = []
+        self._last_assistant_text: str = ""
 
         # Streaming display state
         self._stream_widget: Static | None = None
@@ -621,6 +655,18 @@ class AmplifierChicApp(App):
         except Exception:
             pass
 
+    def action_copy_response(self) -> None:
+        """Copy the last assistant response to the system clipboard."""
+        if not self._last_assistant_text:
+            self._add_system_message("No response to copy")
+            return
+        if _copy_to_clipboard(self._last_assistant_text):
+            self._add_system_message("Copied last response to clipboard")
+        else:
+            self._add_system_message(
+                "Clipboard not available — try selecting text manually"
+            )
+
     # ── Input Handling ──────────────────────────────────────────
 
     def on_chat_input_submitted(self, event: ChatInput.Submitted) -> None:
@@ -682,6 +728,7 @@ class AmplifierChicApp(App):
             "/quit": self._cmd_quit,
             "/exit": self._cmd_quit,
             "/compact": self._cmd_compact,
+            "/copy": self._cmd_copy,
         }
 
         handler = handlers.get(cmd)
@@ -702,6 +749,7 @@ class AmplifierChicApp(App):
             "  /sessions     Toggle session sidebar\n"
             "  /prefs        Show preferences\n"
             "  /model        Show model info\n"
+            "  /copy         Copy last response to clipboard\n"
             "  /compact      Clear chat, keep session\n"
             "  /quit         Quit\n"
             "\n"
@@ -711,6 +759,7 @@ class AmplifierChicApp(App):
             "  Ctrl+J        Insert newline\n"
             "  Up/Down       Browse prompt history\n"
             "  Ctrl+G        Open $EDITOR for longer prompts\n"
+            "  Ctrl+Y        Copy last response to clipboard\n"
             "  Ctrl+S        Stash/restore prompt (stack of 5)\n"
             "  Ctrl+B        Toggle sidebar\n"
             "  Ctrl+N        New session\n"
@@ -804,6 +853,9 @@ class AmplifierChicApp(App):
             child.remove()
         self._add_system_message("Chat cleared. Session continues.")
 
+    def _cmd_copy(self) -> None:
+        self.action_copy_response()
+
     # ── Message Display ─────────────────────────────────────────
 
     def _style_user(self, widget: Static) -> None:
@@ -851,6 +903,7 @@ class AmplifierChicApp(App):
         chat_view.mount(msg)
         self._style_assistant(msg)
         msg.scroll_visible()
+        self._last_assistant_text = text
 
     def _add_system_message(self, text: str) -> None:
         """Display a system message (slash command output)."""
@@ -1167,6 +1220,7 @@ class AmplifierChicApp(App):
                 self._stream_container.title = f"\u25b6 Thinking: {preview}"
                 self._stream_container.collapsed = True
         else:
+            self._last_assistant_text = text
             old = self._stream_widget
             if old:
                 msg = AssistantMessage(text)
@@ -1271,6 +1325,7 @@ class AmplifierChicApp(App):
                     self._style_user(widget)
 
                 elif block.kind == "text":
+                    self._last_assistant_text = block.content
                     widget = AssistantMessage(block.content)
                     chat_view.mount(widget)
                     self._style_assistant(widget)
