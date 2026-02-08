@@ -64,6 +64,39 @@ TOOL_LABELS: dict[str, str] = {
 
 _MAX_LABEL_LEN = 38  # Keep status labels under ~40 chars total
 
+# Canonical list of slash commands – used by both _handle_slash_command and
+# ChatInput tab-completion.  Keep in sync with the handlers dict below.
+SLASH_COMMANDS: tuple[str, ...] = (
+    "/help",
+    "/clear",
+    "/new",
+    "/sessions",
+    "/preferences",
+    "/prefs",
+    "/model",
+    "/quit",
+    "/exit",
+    "/focus",
+    "/compact",
+    "/copy",
+    "/notify",
+    "/sound",
+    "/scroll",
+    "/timestamps",
+    "/keys",
+    "/stats",
+    "/theme",
+    "/export",
+    "/rename",
+    "/delete",
+    "/bookmark",
+    "/bm",
+    "/bookmarks",
+    "/search",
+    "/colors",
+    "/pin",
+)
+
 
 def _get_tool_label(name: str, tool_input: dict | str | None) -> str:
     """Map a tool name (+ optional input) to a short, human-friendly label."""
@@ -214,19 +247,89 @@ class ChatInput(TextArea):
     class Submitted(TextArea.Changed):
         """Fired when the user presses Enter."""
 
-    async def _on_key(self, event) -> None:
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        # Tab-completion state for slash commands
+        self._tab_matches: list[str] = []
+        self._tab_index: int = 0
+        self._tab_prefix: str = ""
+
+    # -- Slash command tab-completion ----------------------------------------
+
+    def _complete_slash_command(self, text: str) -> None:
+        """Complete or cycle through matching slash commands."""
+        # If we're mid-cycle and text matches the current suggestion, advance
+        if self._tab_matches and self._tab_prefix and text in self._tab_matches:
+            self._tab_index = (self._tab_index + 1) % len(self._tab_matches)
+            choice = self._tab_matches[self._tab_index]
+            self.clear()
+            self.insert(choice)
+            return
+
+        # Fresh completion: find all commands matching the typed prefix
+        matches = sorted(c for c in SLASH_COMMANDS if c.startswith(text))
+
+        if not matches:
+            return  # nothing to complete
+
+        if len(matches) == 1:
+            # Unique match – complete with a trailing space
+            self.clear()
+            self.insert(matches[0] + " ")
+            self._tab_matches = []
+            self._tab_prefix = ""
+            return
+
+        # Multiple matches – complete to the longest common prefix first
+        prefix = os.path.commonprefix(matches)
+        if len(prefix) > len(text):
+            self.clear()
+            self.insert(prefix)
+            self._tab_matches = []
+            self._tab_prefix = ""
+            return
+
+        # Common prefix == typed text already → start cycling
+        self._tab_matches = matches
+        self._tab_prefix = text
+        self._tab_index = 0
+        self.clear()
+        self.insert(self._tab_matches[0])
+
+    def _reset_tab_state(self) -> None:
+        """Reset tab-completion cycling state."""
+        self._tab_matches = []
+        self._tab_index = 0
+        self._tab_prefix = ""
+
+    # -- Key handling --------------------------------------------------------
+
+    async def _on_key(self, event) -> None:  # noqa: C901
         if event.key == "enter":
             # Submit the message
             event.prevent_default()
             event.stop()
+            self._reset_tab_state()
             self.post_message(self.Submitted(text_area=self))
+        elif event.key == "tab":
+            text = self.text.strip()
+            if text.startswith("/"):
+                event.prevent_default()
+                event.stop()
+                self._complete_slash_command(text)
+                return
+            # Not a slash prefix – let default tab_behavior ("focus") happen
+            self._reset_tab_state()
+            await super()._on_key(event)
         elif event.key == "ctrl+j":
             # Insert a newline (Ctrl+J = linefeed)
             event.prevent_default()
             event.stop()
+            self._reset_tab_state()
             self.insert("\n")
         elif event.key == "up":
             # History navigation when cursor is on the first line
+            self._reset_tab_state()
             history = getattr(self.app, "_history", None)
             if history and history.entry_count > 0 and self.cursor_location[0] == 0:
                 if not history.is_browsing:
@@ -241,6 +344,7 @@ class ChatInput(TextArea):
                 await super()._on_key(event)
         elif event.key == "down":
             # History navigation when cursor is on the last line
+            self._reset_tab_state()
             history = getattr(self.app, "_history", None)
             last_row = self.text.count("\n")
             if history and history.is_browsing and self.cursor_location[0] >= last_row:
@@ -253,6 +357,7 @@ class ChatInput(TextArea):
             else:
                 await super()._on_key(event)
         else:
+            self._reset_tab_state()
             await super()._on_key(event)
 
 
