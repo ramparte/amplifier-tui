@@ -177,9 +177,12 @@ class AmplifierChicApp(App):
     CSS_PATH = "styles.tcss"
     TITLE = "Amplifier TUI"
 
+    MAX_STASHES = 5
+
     BINDINGS = [
         Binding("ctrl+b", "toggle_sidebar", "Sessions", show=True),
         Binding("ctrl+g", "open_editor", "Editor", show=True),
+        Binding("ctrl+s", "stash_prompt", "Stash", show=True),
         Binding("ctrl+n", "new_session", "New", show=True),
         Binding("ctrl+l", "clear_chat", "Clear", show=False),
         Binding("ctrl+q", "quit", "Quit", show=True),
@@ -205,6 +208,7 @@ class AmplifierChicApp(App):
         self._processing_label: str | None = None
         self._prefs = load_preferences()
         self._history = PromptHistory()
+        self._stash_stack: list[str] = []
 
         # Streaming display state
         self._stream_widget: Static | None = None
@@ -231,6 +235,7 @@ class AmplifierChicApp(App):
                 with Horizontal(id="status-bar"):
                     yield Static("No session", id="status-session")
                     yield Static("Ready", id="status-state")
+                    yield Static("", id="status-stash")
                     yield Static("", id="status-model")
 
     async def on_mount(self) -> None:
@@ -501,6 +506,39 @@ class AmplifierChicApp(App):
             except OSError:
                 pass
 
+    def action_stash_prompt(self) -> None:
+        """Toggle stash: push current input or pop most recent stash."""
+        inp = self.query_one("#chat-input", ChatInput)
+        text = inp.text.strip()
+        if text:
+            # Push to stash
+            self._stash_stack.append(text)
+            if len(self._stash_stack) > self.MAX_STASHES:
+                self._stash_stack.pop(0)  # drop oldest
+            inp.clear()
+            self._update_stash_indicator()
+            self._add_system_message(
+                f"Prompt stashed ({len(self._stash_stack)} in stack)"
+            )
+        elif self._stash_stack:
+            # Pop from stash
+            restored = self._stash_stack.pop()
+            inp.clear()
+            inp.insert(restored)
+            self._update_stash_indicator()
+            self._add_system_message("Prompt restored from stash")
+        else:
+            self._add_system_message("Nothing to stash or restore")
+
+    def _update_stash_indicator(self) -> None:
+        """Update the status bar stash indicator."""
+        try:
+            count = len(self._stash_stack)
+            label = f"Stash: {count}" if count > 0 else ""
+            self.query_one("#status-stash", Static).update(label)
+        except Exception:
+            pass
+
     # ── Input Handling ──────────────────────────────────────────
 
     def on_chat_input_submitted(self, event: ChatInput.Submitted) -> None:
@@ -591,6 +629,7 @@ class AmplifierChicApp(App):
             "  Ctrl+J        Insert newline\n"
             "  Up/Down       Browse prompt history\n"
             "  Ctrl+G        Open $EDITOR for longer prompts\n"
+            "  Ctrl+S        Stash/restore prompt (stack of 5)\n"
             "  Ctrl+B        Toggle sidebar\n"
             "  Ctrl+N        New session\n"
             "  Ctrl+L        Clear chat\n"
