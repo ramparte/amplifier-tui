@@ -218,6 +218,13 @@ Screen {
     background: #1a1608;
 }
 
+/* -- Pinned messages: coral/orange left accent ------- */
+
+.pinned {
+    border-left: tall #e06030;
+    background: #1a0c05;
+}
+
 /* -- Message folding (toggled by /fold command) ------- */
 
 .chat-message.folded {

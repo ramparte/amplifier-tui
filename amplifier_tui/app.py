@@ -1146,7 +1146,7 @@ SHORTCUTS_TEXT = """\
   /grep            Search chat (regex)
 
  PINS & BOOKMARKS ──────────────────────
-  /pin [N]         Pin a message
+  /pin             Pin message (N, list, clear, remove N)
   /pins            List pinned messages
   /unpin N         Remove a pin
   /bookmark        Bookmark last response
@@ -1354,7 +1354,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/refs", "List saved references", "/refs"),
     ("/title", "View or set session title", "/title"),
     ("/rename", "Rename current session", "/rename"),
-    ("/pin", "Pin last AI message", "/pin"),
+    ("/pin", "Pin message (last, by number, or with label)", "/pin"),
     ("/pins", "List pinned messages", "/pins"),
     ("/unpin", "Remove a pin by number", "/unpin"),
     ("/pin-session", "Pin or unpin session in sidebar", "/pin-session"),
@@ -3152,7 +3152,7 @@ class AmplifierChicApp(App):
         except Exception:
             pass
 
-    def _add_message_pin(self, index: int, content: str) -> None:
+    def _add_message_pin(self, index: int, content: str, label: str = "") -> None:
         """Pin a message by its _search_messages index."""
         preview = content[:80].replace("\n", " ")
         if len(content) > 80:
@@ -3164,21 +3164,72 @@ class AmplifierChicApp(App):
                 self._add_system_message(f"Message {index + 1} is already pinned")
                 return
 
+        role = self._search_messages[index][0]
         self._message_pins.append(
             {
                 "index": index,
+                "role": role,
                 "preview": preview,
+                "content": content[:2000],
+                "label": label,
                 "pinned_at": datetime.now().isoformat(),
             }
         )
         self._save_message_pins()
 
+        # Apply visual indicator to the message widget
+        widget = self._search_messages[index][2]
+        if widget is not None:
+            widget.add_class("pinned")
+
         pin_num = len(self._message_pins)
-        role = self._search_messages[index][0]
-        label = {"user": "You", "assistant": "AI", "system": "Sys"}.get(role, role)
+        role_label = {"user": "You", "assistant": "AI", "system": "Sys"}.get(role, role)
+        label_suffix = f" [{label}]" if label else ""
         self._add_system_message(
-            f"\U0001f4cc Pinned #{pin_num} ({label} msg #{index + 1}): {preview}"
+            f"\U0001f4cc Pinned #{pin_num} ({role_label} msg #{index + 1}){label_suffix}: {preview}"
         )
+
+    def _apply_pin_classes(self) -> None:
+        """Re-apply the 'pinned' CSS class to pinned messages after session restore."""
+        if not self._message_pins:
+            return
+        total = len(self._search_messages)
+        for pin in self._message_pins:
+            idx = pin["index"]
+            if idx < total:
+                widget = self._search_messages[idx][2]
+                if widget is not None:
+                    widget.add_class("pinned")
+
+    def _remove_all_pin_classes(self) -> None:
+        """Remove 'pinned' CSS class from all currently pinned message widgets."""
+        total = len(self._search_messages)
+        for pin in self._message_pins:
+            idx = pin["index"]
+            if idx < total:
+                widget = self._search_messages[idx][2]
+                if widget is not None:
+                    widget.remove_class("pinned")
+
+    def _remove_pin(self, n: int) -> None:
+        """Remove pin number *n* (1-based) and update visual indicator."""
+        if not self._message_pins:
+            self._add_system_message("No pins to remove.")
+            return
+        if 1 <= n <= len(self._message_pins):
+            removed = self._message_pins.pop(n - 1)
+            # Remove visual indicator
+            idx = removed["index"]
+            if idx < len(self._search_messages):
+                widget = self._search_messages[idx][2]
+                if widget is not None:
+                    widget.remove_class("pinned")
+            self._save_message_pins()
+            preview = removed["preview"][:40]
+            self._add_system_message(f"Unpinned #{n}: {preview}...")
+        else:
+            total = len(self._message_pins)
+            self._add_system_message(f"Pin #{n} not found (valid: 1-{total})")
 
     def _load_session_list(self) -> None:
         """Show loading state then populate in background."""
@@ -4342,8 +4393,8 @@ class AmplifierChicApp(App):
             "  /refs         List all saved references (same as /ref with no args)\n"
             "  /title        View/set session title (/title <text> or /title clear)\n"
             "  /rename       Rename current session (e.g. /rename My Project)\n"
-            "  /pin          Pin last AI message | /pin <N> | /pin clear\n"
-            "  /pins         List all pinned messages\n"
+            "  /pin          Pin message (/pin, /pin N, /pin list, /pin clear, /pin remove N)\n"
+            "  /pins         List all pinned messages (alias for /pin list)\n"
             "  /unpin <N>    Remove a pin by its pin number\n"
             "  /pin-session  Pin/unpin session (pinned appear at top of sidebar)\n"
             "  /delete       Delete session (with confirmation)\n"
@@ -5688,16 +5739,18 @@ class AmplifierChicApp(App):
                 else:
                     role = "?"
                     content = pin.get("preview", "(unavailable)")
-                label = {"user": "You", "assistant": "AI", "system": "Sys"}.get(
+                role_label = {"user": "You", "assistant": "AI", "system": "Sys"}.get(
                     role, role
                 )
+                pin_label = pin.get("label", "")
+                label_str = f" [{pin_label}]" if pin_label else ""
                 # Truncate very long content for display
                 display = content[:500]
                 if len(content) > 500:
                     display += "\n..."
                 panel.mount(
                     Static(
-                        f"[bold]#{i} ({label} msg {idx + 1}):[/bold]\n{display}",
+                        f"[bold]#{i} ({role_label} msg {idx + 1}){label_str}:[/bold]\n{display}",
                         classes="split-panel-content",
                     )
                 )
@@ -8594,17 +8647,25 @@ class AmplifierChicApp(App):
     def _cmd_pin_msg(self, text: str) -> None:
         """Pin a message for quick recall.
 
-        /pin          – pin last assistant message
-        /pin <N>      – pin message number N (1-based)
-        /pin clear    – clear all pins
+        /pin              – pin last assistant message
+        /pin <N>          – pin message number N (1-based)
+        /pin list         – list all pinned messages
+        /pin clear        – clear all pins
+        /pin remove <N>   – remove pin number N
+        /pin <label>      – pin last assistant message with a label
         """
         parts = text.strip().split(None, 1)
         arg = parts[1].strip() if len(parts) > 1 else ""
 
         if arg.lower() == "clear":
+            self._remove_all_pin_classes()
             self._message_pins = []
             self._save_message_pins()
             self._add_system_message("All message pins cleared.")
+            return
+
+        if arg.lower() == "list":
+            self._cmd_pins(text)
             return
 
         if not arg:
@@ -8617,6 +8678,15 @@ class AmplifierChicApp(App):
             self._add_system_message("No assistant message to pin.")
             return
 
+        # /pin remove N
+        sub_parts = arg.split(None, 1)
+        if sub_parts[0].lower() == "remove":
+            if len(sub_parts) > 1 and sub_parts[1].strip().isdigit():
+                self._remove_pin(int(sub_parts[1].strip()))
+                return
+            self._add_system_message("Usage: /pin remove <pin-number>")
+            return
+
         if arg.isdigit():
             idx = int(arg) - 1  # 1-based for user
             if 0 <= idx < len(self._search_messages):
@@ -8627,12 +8697,13 @@ class AmplifierChicApp(App):
                 self._add_system_message(f"Message {arg} not found (valid: 1-{total})")
             return
 
-        self._add_system_message(
-            "Usage: /pin [N] | /pin clear\n"
-            "  /pin        Pin last AI message\n"
-            "  /pin <N>    Pin message number N\n"
-            "  /pin clear  Clear all pins"
-        )
+        # Treat remaining text as a label for the last assistant message
+        for i in range(len(self._search_messages) - 1, -1, -1):
+            role, content, _widget = self._search_messages[i]
+            if role == "assistant":
+                self._add_message_pin(i, content, label=arg)
+                return
+        self._add_system_message("No assistant message to pin.")
 
     def _cmd_pins(self, text: str) -> None:
         """List all pinned messages."""
@@ -8647,11 +8718,19 @@ class AmplifierChicApp(App):
             if idx < total:
                 role = self._search_messages[idx][0]
             else:
-                role = "?"
-            label = {"user": "You", "assistant": "AI", "system": "Sys"}.get(role, role)
-            lines.append(f"  #{i} [{label} msg {idx + 1}]: {pin['preview']}")
+                role = pin.get("role", "?")
+            role_label = {"user": "You", "assistant": "AI", "system": "Sys"}.get(
+                role, role
+            )
+            pin_label = pin.get("label", "")
+            label_str = f" [{pin_label}]" if pin_label else ""
+            lines.append(
+                f"  #{i} [{role_label} msg {idx + 1}]{label_str}: {pin['preview']}"
+            )
         lines.append("")
-        lines.append("Use /unpin <N> to remove, /pin clear to clear all")
+        lines.append(
+            "Use /pin remove <N> or /unpin <N> to remove, /pin clear to clear all"
+        )
         self._add_system_message("\n".join(lines))
 
     def _cmd_unpin(self, text: str) -> None:
@@ -8663,18 +8742,7 @@ class AmplifierChicApp(App):
             self._add_system_message("Usage: /unpin <pin-number>")
             return
 
-        n = int(arg)
-        if 1 <= n <= len(self._message_pins):
-            removed = self._message_pins.pop(n - 1)
-            self._save_message_pins()
-            preview = removed["preview"][:40]
-            self._add_system_message(f"Unpinned #{n}: {preview}...")
-        else:
-            total = len(self._message_pins)
-            if total == 0:
-                self._add_system_message("No pins to remove.")
-            else:
-                self._add_system_message(f"Pin #{n} not found (valid: 1-{total})")
+        self._remove_pin(int(arg))
 
     _SORT_MODES = ("date", "name", "project")
 
@@ -10106,6 +10174,7 @@ class AmplifierChicApp(App):
 
         # Restore message pins for this session
         self._message_pins = self._load_message_pins()
+        self._apply_pin_classes()
 
         # Restore saved references for this session
         self._session_refs = self._load_session_refs()
