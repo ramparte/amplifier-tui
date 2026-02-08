@@ -31,6 +31,8 @@ colors:
   tool_text: "#555555"           # dimmest - mechanical tool output
   tool_border: "#444444"         # gray left bar
   tool_background: "#0a0a0a"     # near-black tint
+  system_text: "#88bbcc"         # teal - slash command output
+  system_border: "#448899"       # teal left bar
   status_bar: "#888888"          # bottom status text
 """
 
@@ -49,6 +51,8 @@ class ColorPreferences:
     tool_text: str = "#555555"
     tool_border: str = "#444444"
     tool_background: str = "#0a0a0a"
+    system_text: str = "#88bbcc"
+    system_border: str = "#448899"
     status_bar: str = "#888888"
 
 

@@ -78,6 +78,13 @@ class ErrorMessage(Static):
     pass
 
 
+class SystemMessage(Static):
+    """A system/command output message (slash command results)."""
+
+    def __init__(self, content: str) -> None:
+        super().__init__(content, classes="chat-message system-message")
+
+
 # ── Main Application ────────────────────────────────────────────────
 
 
@@ -382,6 +389,15 @@ class AmplifierChicApp(App):
             return
         if self.is_processing:
             return
+
+        # Slash commands work even before Amplifier is ready
+        if text.startswith("/"):
+            input_widget.clear()
+            self._clear_welcome()
+            self._add_user_message(text)
+            self._handle_slash_command(text)
+            return
+
         if not self._amplifier_available:
             return
         if not self._amplifier_ready:
@@ -397,6 +413,144 @@ class AmplifierChicApp(App):
         )
         self._start_processing("Starting session" if not has_session else "Thinking")
         self._send_message_worker(text)
+
+    # ── Slash Commands ────────────────────────────────────────
+
+    def _handle_slash_command(self, text: str) -> None:
+        """Route a slash command to the appropriate handler."""
+        parts = text.strip().split(None, 1)
+        cmd = parts[0].lower()
+        # arg = parts[1] if len(parts) > 1 else ""
+
+        handlers = {
+            "/help": self._cmd_help,
+            "/clear": self._cmd_clear,
+            "/new": self._cmd_new,
+            "/sessions": self._cmd_sessions,
+            "/preferences": self._cmd_prefs,
+            "/prefs": self._cmd_prefs,
+            "/model": self._cmd_model,
+            "/quit": self._cmd_quit,
+            "/exit": self._cmd_quit,
+            "/compact": self._cmd_compact,
+        }
+
+        handler = handlers.get(cmd)
+        if handler:
+            handler()
+        else:
+            self._add_system_message(
+                f"Unknown command: {cmd}\nType /help for available commands."
+            )
+
+    def _cmd_help(self) -> None:
+        help_text = (
+            "Amplifier TUI Commands\n"
+            "\n"
+            "  /help         Show this help\n"
+            "  /clear        Clear chat\n"
+            "  /new          New session\n"
+            "  /sessions     Toggle session sidebar\n"
+            "  /prefs        Show preferences\n"
+            "  /model        Show model info\n"
+            "  /compact      Clear chat, keep session\n"
+            "  /quit         Quit\n"
+            "\n"
+            "Key Bindings\n"
+            "\n"
+            "  Enter         Send message\n"
+            "  Ctrl+J        Insert newline\n"
+            "  Ctrl+B        Toggle sidebar\n"
+            "  Ctrl+N        New session\n"
+            "  Ctrl+L        Clear chat\n"
+            "  Ctrl+Q        Quit"
+        )
+        self._add_system_message(help_text)
+
+    def _cmd_clear(self) -> None:
+        self.action_clear_chat()
+        # No system message needed - the chat is cleared
+
+    def _cmd_new(self) -> None:
+        self.action_new_session()
+        # new session shows its own welcome message
+
+    def _cmd_sessions(self) -> None:
+        self.action_toggle_sidebar()
+        state = "opened" if self._sidebar_visible else "closed"
+        self._add_system_message(f"Session sidebar {state}.")
+
+    def _cmd_prefs(self) -> None:
+        from .preferences import PREFS_PATH
+
+        c = self._prefs.colors
+        lines = [
+            "Color Preferences\n",
+            f"  user_text:            {c.user_text}",
+            f"  user_border:          {c.user_border}",
+            f"  assistant_text:       {c.assistant_text}",
+            f"  assistant_border:     {c.assistant_border}",
+            f"  thinking_text:        {c.thinking_text}",
+            f"  thinking_border:      {c.thinking_border}",
+            f"  thinking_background:  {c.thinking_background}",
+            f"  tool_text:            {c.tool_text}",
+            f"  tool_border:          {c.tool_border}",
+            f"  tool_background:      {c.tool_background}",
+            f"  system_text:          {c.system_text}",
+            f"  system_border:        {c.system_border}",
+            f"  status_bar:           {c.status_bar}",
+            f"\nPreferences file: {PREFS_PATH}",
+        ]
+        self._add_system_message("\n".join(lines))
+
+    def _cmd_model(self) -> None:
+        if not self.session_manager:
+            self._add_system_message("No session manager available.")
+            return
+
+        sm = self.session_manager
+        lines = ["Model Info\n"]
+
+        if sm.model_name:
+            lines.append(f"  Model:    {sm.model_name}")
+        else:
+            lines.append("  Model:    (not set)")
+
+        total_in = getattr(sm, "total_input_tokens", 0)
+        total_out = getattr(sm, "total_output_tokens", 0)
+        ctx = getattr(sm, "context_window", 0)
+
+        if total_in or total_out:
+            lines.append(f"  Input:    {self._format_token_count(total_in)} tokens")
+            lines.append(f"  Output:   {self._format_token_count(total_out)} tokens")
+            lines.append(
+                f"  Total:    {self._format_token_count(total_in + total_out)} tokens"
+            )
+        else:
+            lines.append("  Tokens:   (no usage yet)")
+
+        if ctx > 0:
+            pct = int((total_in + total_out) / ctx * 100) if ctx else 0
+            lines.append(
+                f"  Context:  {self._format_token_count(ctx)} window ({pct}% used)"
+            )
+
+        sid = getattr(sm, "session_id", None)
+        if sid:
+            lines.append(f"  Session:  {sid[:12]}...")
+
+        self._add_system_message("\n".join(lines))
+
+    def _cmd_quit(self) -> None:
+        # Use call_later so the current handler finishes before quit runs
+        self.call_later(self.action_quit)
+
+    def _cmd_compact(self) -> None:
+        """Clear chat visually but keep the session alive."""
+        chat_view = self.query_one("#chat-view", ScrollableContainer)
+        for child in list(chat_view.children):
+            child.remove()
+        self._add_system_message("Chat cleared. Session continues.")
 
     # ── Message Display ─────────────────────────────────────────
 
@@ -426,6 +580,12 @@ class AmplifierChicApp(App):
         container.styles.border_left = ("wide", c.tool_border)
         container.styles.background = c.tool_background
 
+    def _style_system(self, widget: Static) -> None:
+        """Apply preference colors to a system message."""
+        c = self._prefs.colors
+        widget.styles.color = c.system_text
+        widget.styles.border_left = ("thick", c.system_border)
+
     def _add_user_message(self, text: str) -> None:
         chat_view = self.query_one("#chat-view", ScrollableContainer)
         msg = UserMessage(text)
@@ -438,6 +598,14 @@ class AmplifierChicApp(App):
         msg = AssistantMessage(text)
         chat_view.mount(msg)
         self._style_assistant(msg)
+        msg.scroll_visible()
+
+    def _add_system_message(self, text: str) -> None:
+        """Display a system message (slash command output)."""
+        chat_view = self.query_one("#chat-view", ScrollableContainer)
+        msg = SystemMessage(text)
+        chat_view.mount(msg)
+        self._style_system(msg)
         msg.scroll_visible()
 
     def _add_thinking_block(self, text: str) -> None:
