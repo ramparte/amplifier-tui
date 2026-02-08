@@ -859,7 +859,7 @@ SHORTCUTS_TEXT = """\
   /vim             Toggle vim keybindings
   /prefs           Preferences
   /notify          Toggle notifications
-  /sound           Toggle notification sound
+  /sound           Toggle notification sound (on|off|test)
   /keys            Show this overlay
   /quit            Quit
 
@@ -2794,7 +2794,7 @@ class AmplifierChicApp(App):
             "  /delete       Delete session (with confirmation)\n"
             "  /export       Export chat (md/txt/json) | /export <file> | /export <fmt>\n"
             "  /notify       Toggle notifications (/notify on|off|sound|silent|<secs>)\n"
-            "  /sound        Toggle notification sound (/sound on, /sound off)\n"
+            "  /sound        Toggle notification sound (/sound on|off|test)\n"
             "  /scroll       Toggle auto-scroll on/off\n"
             "  /timestamps   Toggle message timestamps on/off\n"
             "  /wrap         Toggle word wrap on/off (/wrap on, /wrap off)\n"
@@ -3696,6 +3696,7 @@ class AmplifierChicApp(App):
                     info["size"] = stat.st_size
 
                     self._add_system_message(f"[watch] Changed: {rel}{line_delta_str}")
+                    self._notify_sound(event="file_change")
             except Exception:
                 pass
 
@@ -4113,8 +4114,14 @@ class AmplifierChicApp(App):
             )
 
     def _cmd_sound(self, text: str) -> None:
-        """Toggle notification sound on/off, or set explicitly."""
+        """Toggle notification sound on/off, test, or set explicitly."""
         arg = text.partition(" ")[2].strip().lower() if " " in text else ""
+
+        if arg == "test":
+            # Always play the bell — even when sound is disabled
+            self._play_bell()
+            self._add_system_message("Sound test played (BEL)")
+            return
 
         if arg == "on":
             self._prefs.notifications.sound_enabled = True
@@ -4126,7 +4133,7 @@ class AmplifierChicApp(App):
                 not self._prefs.notifications.sound_enabled
             )
         else:
-            self._add_system_message("Usage: /sound [on|off]")
+            self._add_system_message("Usage: /sound [on|off|test]")
             return
 
         save_notification_sound(self._prefs.notifications.sound_enabled)
@@ -5984,6 +5991,8 @@ class AmplifierChicApp(App):
         msg = ErrorMessage(f"Error: {error_text}", classes="error-message")
         chat_view.mount(msg)
         self._scroll_if_auto(msg)
+        # Beep immediately on errors (no duration gate)
+        self._notify_sound(event="error")
 
     # ── Processing State ────────────────────────────────────────
 
@@ -6080,20 +6089,12 @@ class AmplifierChicApp(App):
         except Exception:
             pass  # Don't crash if the terminal doesn't support these
 
-    def _notify_sound(self, elapsed: float | None = None) -> None:
-        """Play a terminal bell if notification sound is enabled.
+    @staticmethod
+    def _play_bell() -> None:
+        """Write BEL character to the real terminal via *sys.__stdout__*.
 
-        Uses sys.__stdout__ to bypass Textual's stdout capture.
-        This is independent of the richer OSC notification system —
-        it simply beeps so the user knows the response is ready.
-        Respects min_seconds threshold to avoid beeping on instant responses.
+        Textual captures ``sys.stdout``, so we use the original fd directly.
         """
-        if not self._prefs.notifications.sound_enabled:
-            return
-        # Respect minimum duration — don't beep for instant responses
-        nprefs = self._prefs.notifications
-        if elapsed is not None and elapsed < nprefs.min_seconds:
-            return
         out = sys.__stdout__
         if out is None:
             return
@@ -6102,6 +6103,39 @@ class AmplifierChicApp(App):
             out.flush()
         except Exception:
             pass
+
+    def _notify_sound(
+        self,
+        elapsed: float | None = None,
+        *,
+        event: str = "response",
+    ) -> None:
+        """Play a terminal bell if notification sound is enabled for *event*.
+
+        Uses ``_play_bell()`` (writes BEL to ``sys.__stdout__``) to bypass
+        Textual's stdout capture.
+
+        Parameters
+        ----------
+        elapsed:
+            How long the operation took (seconds).  Used to suppress beeps for
+            fast responses (below ``min_seconds``).
+        event:
+            ``"response"`` (default), ``"error"``, or ``"file_change"``.
+            Each event type respects its own per-event toggle in preferences.
+        """
+        nprefs = self._prefs.notifications
+        if not nprefs.sound_enabled:
+            return
+        # Per-event gating
+        if event == "error" and not nprefs.sound_on_error:
+            return
+        if event == "file_change" and not nprefs.sound_on_file_change:
+            return
+        # Respect minimum duration — don't beep for instant responses
+        if event == "response" and elapsed is not None and elapsed < nprefs.min_seconds:
+            return
+        self._play_bell()
 
     def _remove_processing_indicator(self) -> None:
         try:

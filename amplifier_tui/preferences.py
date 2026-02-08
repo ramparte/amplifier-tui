@@ -167,6 +167,8 @@ notifications:
   enabled: true                  # notify when a response completes
   min_seconds: 3.0               # only notify if processing took longer than this
   sound_enabled: false            # terminal bell when response completes (opt-in)
+  sound_on_error: true            # beep on errors (when sound_enabled is true)
+  sound_on_file_change: false     # beep on /watch file changes (when sound_enabled)
 
 display:
   show_timestamps: true          # show HH:MM timestamps on messages
@@ -192,6 +194,10 @@ class NotificationPreferences:
     enabled: bool = True
     min_seconds: float = 3.0  # Only notify if processing took longer than this
     sound_enabled: bool = False  # Terminal bell on response completion (opt-in)
+    sound_on_error: bool = True  # Beep on errors (when sound_enabled)
+    sound_on_file_change: bool = (
+        False  # Beep on /watch file changes (when sound_enabled)
+    )
 
 
 @dataclass
@@ -272,6 +278,12 @@ def load_preferences(path: Path | None = None) -> Preferences:
                     prefs.notifications.min_seconds = float(ndata["min_seconds"])
                 if "sound_enabled" in ndata:
                     prefs.notifications.sound_enabled = bool(ndata["sound_enabled"])
+                if "sound_on_error" in ndata:
+                    prefs.notifications.sound_on_error = bool(ndata["sound_on_error"])
+                if "sound_on_file_change" in ndata:
+                    prefs.notifications.sound_on_file_change = bool(
+                        ndata["sound_on_file_change"]
+                    )
             if isinstance(data.get("display"), dict):
                 ddata = data["display"]
                 if "show_timestamps" in ddata:
