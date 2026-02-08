@@ -1,16 +1,15 @@
 /* Amplifier TUI Styles
  *
- * Visual hierarchy (most prominent -> least):
- * 1. User messages:     ORANGE bar, bright text, most spacing
- * 2. Assistant messages: BLUE bar, full markdown, normal spacing
- * 3. Thinking blocks:   PURPLE bar, italic, dim bg, collapsed by default
- * 4. Tool calls:        GRAY bar, compact, dim bg, collapsed by default
+ * Layout, spacing, and text-style rules live here.
+ * Colors (text, borders, backgrounds) for chat messages are applied
+ * from user preferences (~/.amplifier/tui-preferences.yaml) via Python
+ * inline styles, which override any CSS defaults.
  *
- * Each type is visually distinct at a glance through:
- *   - Left border COLOR (unique per type)
- *   - Background TINT (user/assistant transparent, thinking/tool tinted)
- *   - Text STYLE (user bold, assistant normal, thinking italic, tool mono)
- *   - SPACING (user generous, tool compact)
+ * Visual hierarchy (most prominent -> least):
+ * 1. User messages:     ORANGE bar, WHITE text, bold, most spacing
+ * 2. Assistant messages: BLUE bar, GREEN text, normal spacing
+ * 3. Thinking blocks:   PURPLE bar, DIM GRAY text, italic, collapsed
+ * 4. Tool calls:        GRAY bar, DIMMEST text, compact, collapsed
  */
 
 Screen {
@@ -89,17 +88,16 @@ Screen {
 /* -- User messages: ORANGE, bold, prominent ----------- */
 
 .user-message {
-    border-left: thick $primary;
+    /* border-left and color set by preferences in Python */
     margin: 2 0 1 0;
     padding: 0 2;
-    color: $text;
     text-style: bold;
 }
 
 /* -- Assistant messages: BLUE, clean markdown --------- */
 
 .assistant-message {
-    border-left: wide $secondary;
+    /* border-left and color set by preferences in Python */
     margin: 0 0 1 0;
     padding: 0 2;
 }
@@ -112,10 +110,9 @@ Screen {
  */
 
 .thinking-block {
-    border-left: wide #665588;
+    /* border-left and background set by preferences in Python */
     margin: 0 0 0 4;
     padding: 0;
-    background: #110e18;
 }
 
 .thinking-block CollapsibleTitle {
@@ -131,7 +128,7 @@ Screen {
 }
 
 .thinking-block .thinking-text {
-    color: #666677;
+    /* color set by preferences in Python */
     text-style: italic;
     padding: 0 2;
     margin: 0;
@@ -139,21 +136,18 @@ Screen {
 
 /* Thinking blocks from transcript replay (Static, not Collapsible) */
 .thinking-static {
-    border-left: wide #665588;
+    /* border-left, background, color set by preferences in Python */
     margin: 0 0 0 4;
     padding: 0 2;
-    background: #110e18;
-    color: #666677;
     text-style: italic;
 }
 
 /* -- Tool use blocks: GRAY, compact, mechanical ------- */
 
 .tool-use {
-    border-left: wide #444444;
+    /* border-left and background set by preferences in Python */
     margin: 0 0 0 2;
     padding: 0;
-    background: #0a0a0a;
 }
 
 .tool-use CollapsibleTitle {
@@ -167,10 +161,6 @@ Screen {
     background: #151515;
 }
 
-.tool-use:hover {
-    border-left: wide #666666;
-}
-
 .tool-header {
     color: $text-muted;
     text-style: bold;
@@ -179,7 +169,7 @@ Screen {
 }
 
 .tool-detail {
-    color: #777777;
+    /* color set by preferences in Python */
     padding: 0 2;
     margin: 0;
 }

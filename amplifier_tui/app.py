@@ -11,6 +11,7 @@ from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.widgets import Collapsible, Markdown, Static, TextArea, Tree
 from textual import work
 
+from .preferences import load_preferences
 from .theme import CHIC_THEME
 
 
@@ -110,6 +111,7 @@ class AmplifierChicApp(App):
         self._spinner_frame = 0
         self._spinner_timer: object | None = None
         self._processing_label: str | None = None
+        self._prefs = load_preferences()
 
     # ── Layout ──────────────────────────────────────────────────
 
@@ -390,16 +392,44 @@ class AmplifierChicApp(App):
 
     # ── Message Display ─────────────────────────────────────────
 
+    def _style_user(self, widget: Static) -> None:
+        """Apply preference colors to a user message."""
+        c = self._prefs.colors
+        widget.styles.color = c.user_text
+        widget.styles.border_left = ("thick", c.user_border)
+
+    def _style_assistant(self, widget: Markdown) -> None:
+        """Apply preference colors to an assistant message."""
+        c = self._prefs.colors
+        widget.styles.color = c.assistant_text
+        widget.styles.border_left = ("wide", c.assistant_border)
+
+    def _style_thinking(self, container: Collapsible, inner: Static) -> None:
+        """Apply preference colors to a thinking block."""
+        c = self._prefs.colors
+        inner.styles.color = c.thinking_text
+        container.styles.border_left = ("wide", c.thinking_border)
+        container.styles.background = c.thinking_background
+
+    def _style_tool(self, container: Collapsible, inner: Static) -> None:
+        """Apply preference colors to a tool use block."""
+        c = self._prefs.colors
+        inner.styles.color = c.tool_text
+        container.styles.border_left = ("wide", c.tool_border)
+        container.styles.background = c.tool_background
+
     def _add_user_message(self, text: str) -> None:
         chat_view = self.query_one("#chat-view", ScrollableContainer)
         msg = UserMessage(text)
         chat_view.mount(msg)
+        self._style_user(msg)
         msg.scroll_visible()
 
     def _add_assistant_message(self, text: str) -> None:
         chat_view = self.query_one("#chat-view", ScrollableContainer)
         msg = AssistantMessage(text)
         chat_view.mount(msg)
+        self._style_assistant(msg)
         msg.scroll_visible()
 
     def _add_thinking_block(self, text: str) -> None:
@@ -409,13 +439,15 @@ class AmplifierChicApp(App):
         if len(text) > 55:
             preview += "..."
         full_text = text[:800] + "..." if len(text) > 800 else text
+        inner = Static(full_text, classes="thinking-text")
         collapsible = Collapsible(
-            Static(full_text, classes="thinking-text"),
+            inner,
             title=f"\u25b6 Thinking: {preview}",
             collapsed=True,
             classes="thinking-block",
         )
         chat_view.mount(collapsible)
+        self._style_thinking(collapsible, inner)
 
     def _add_tool_use(
         self,
@@ -441,13 +473,15 @@ class AmplifierChicApp(App):
 
         detail = "\n\n".join(detail_parts) if detail_parts else "(no details)"
 
+        inner = Static(detail, classes="tool-detail")
         collapsible = Collapsible(
-            Static(detail, classes="tool-detail"),
+            inner,
             title=f"\u25b6 {tool_name}",
             collapsed=True,
         )
         collapsible.add_class("tool-use")
         chat_view.mount(collapsible)
+        self._style_tool(collapsible, inner)
         collapsible.scroll_visible()
 
     def _show_error(self, error_text: str) -> None:
@@ -631,10 +665,14 @@ class AmplifierChicApp(App):
             blocks = parse_message_blocks(msg)
             for block in blocks:
                 if block.kind == "user":
-                    chat_view.mount(UserMessage(block.content))
+                    widget = UserMessage(block.content)
+                    chat_view.mount(widget)
+                    self._style_user(widget)
 
                 elif block.kind == "text":
-                    chat_view.mount(AssistantMessage(block.content))
+                    widget = AssistantMessage(block.content)
+                    chat_view.mount(widget)
+                    self._style_assistant(widget)
 
                 elif block.kind == "thinking":
                     preview = block.content.split("\n")[0][:55]
@@ -645,13 +683,15 @@ class AmplifierChicApp(App):
                         if len(block.content) > 800
                         else block.content
                     )
+                    inner = Static(full_text, classes="thinking-text")
                     collapsible = Collapsible(
-                        Static(full_text, classes="thinking-text"),
+                        inner,
                         title=f"\u25b6 Thinking: {preview}",
                         collapsed=True,
                         classes="thinking-block",
                     )
                     chat_view.mount(collapsible)
+                    self._style_thinking(collapsible, inner)
 
                 elif block.kind == "tool_use":
                     result = tool_results.get(block.tool_id, "")
@@ -665,13 +705,15 @@ class AmplifierChicApp(App):
                     detail = f"Input:\n{input_str}"
                     if result:
                         detail += f"\n\nResult:\n{result}"
+                    inner = Static(detail, classes="tool-detail")
                     collapsible = Collapsible(
-                        Static(detail, classes="tool-detail"),
+                        inner,
                         title=f"\u25b6 {block.tool_name}",
                         collapsed=True,
                     )
                     collapsible.add_class("tool-use")
                     chat_view.mount(collapsible)
+                    self._style_tool(collapsible, inner)
 
                 elif block.kind == "tool_result":
                     tool_results[block.tool_id] = block.content
