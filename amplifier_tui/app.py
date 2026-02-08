@@ -2358,17 +2358,24 @@ class AmplifierChicApp(App):
             if not self._aliases:
                 self._add_system_message(
                     "No aliases defined.\n"
-                    "Usage: /alias <name> = <expansion>\n"
-                    "       /alias remove <name>"
+                    "Usage: /alias <name> <command>\n"
+                    "Example: /alias r /clear\n"
+                    "         /alias review /diff all"
                 )
                 return
-            lines = ["Defined aliases:"]
+            lines = ["Aliases:"]
             for name, expansion in sorted(self._aliases.items()):
-                lines.append(f"  /{name} = {expansion}")
+                lines.append(f"  /{name} \u2192 {expansion}")
             lines.append("")
-            lines.append("Usage: /alias <name> = <expansion>")
-            lines.append("       /alias remove <name>")
+            lines.append("Use /alias remove <name> to delete")
             self._add_system_message("\n".join(lines))
+            return
+
+        # Clear all aliases
+        if text == "clear":
+            self._aliases.clear()
+            self._save_aliases()
+            self._add_system_message("All aliases cleared")
             return
 
         # Remove alias
@@ -2377,36 +2384,48 @@ class AmplifierChicApp(App):
             if name in self._aliases:
                 del self._aliases[name]
                 self._save_aliases()
-                self._add_system_message(f"Alias '/{name}' removed")
+                self._add_system_message(f"Alias /{name} removed")
             else:
                 self._add_system_message(f"No alias '/{name}' found")
             return
 
-        # Create/update alias: name = expansion
-        if "=" not in text:
-            self._add_system_message(
-                "Usage: /alias <name> = <expansion>\n       /alias remove <name>"
-            )
-            return
-
-        name, expansion = text.split("=", 1)
-        name = name.strip().lstrip("/")
-        expansion = expansion.strip()
+        # Create/update alias: supports both "name = expansion" and "name expansion"
+        if "=" in text:
+            name, expansion = text.split("=", 1)
+            name = name.strip().lstrip("/")
+            expansion = expansion.strip()
+        else:
+            parts = text.split(None, 1)
+            if len(parts) < 2:
+                self._add_system_message(
+                    "Usage: /alias <name> <command>\n"
+                    "Example: /alias r /clear\n"
+                    "         /alias review /diff all\n"
+                    "         /alias remove <name>\n"
+                    "         /alias clear"
+                )
+                return
+            name = parts[0].lstrip("/")
+            expansion = parts[1]
 
         if not name or not expansion:
             self._add_system_message(
-                "Both name and expansion required: /alias <name> = <expansion>"
+                "Both name and command required: /alias <name> <command>"
             )
             return
 
         # Don't allow overriding built-in commands
         if "/" + name in SLASH_COMMANDS:
-            self._add_system_message(f"Cannot override built-in command '/{name}'")
+            self._add_system_message(f"Cannot override built-in command /{name}")
             return
+
+        # Ensure command aliases start with /
+        if not expansion.startswith("/"):
+            expansion = f"/{expansion}"
 
         self._aliases[name] = expansion
         self._save_aliases()
-        self._add_system_message(f"Alias set: /{name} = {expansion}")
+        self._add_system_message(f"Alias created: /{name} \u2192 {expansion}")
 
     def _cmd_snippet(self, text: str) -> None:
         """List, save, use, send, remove, or edit reusable prompt snippets."""
