@@ -12,7 +12,7 @@ from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
-from textual.widgets import Collapsible, Markdown, Static, TextArea, Tree
+from textual.widgets import Collapsible, Input, Markdown, Static, TextArea, Tree
 from textual import work
 
 from .history import PromptHistory
@@ -221,6 +221,10 @@ class AmplifierChicApp(App):
         with Horizontal(id="main-container"):
             with Vertical(id="session-sidebar"):
                 yield Static(" Sessions", id="sidebar-title")
+                yield Input(
+                    placeholder="Filter sessions...",
+                    id="session-filter",
+                )
                 yield Tree("Sessions", id="session-tree")
             with Vertical(id="chat-area"):
                 yield ScrollableContainer(id="chat-view")
@@ -372,14 +376,92 @@ class AmplifierChicApp(App):
             session_node.collapse()
             self._session_list_data.append(s)
 
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Filter the session tree as the user types in the filter input."""
+        if event.input.id == "session-filter":
+            self._filter_sessions(event.value)
+
+    def on_key(self, event) -> None:
+        """Clear the session filter on Escape."""
+        if event.key == "escape":
+            try:
+                filt = self.query_one("#session-filter", Input)
+                if filt.has_focus and filt.value:
+                    filt.value = ""
+                    event.prevent_default()
+                    event.stop()
+            except Exception:
+                pass
+
+    def _filter_sessions(self, query: str) -> None:
+        """Rebuild the session tree showing only sessions matching *query*.
+
+        Matches against session name/description, session ID, and project path.
+        When the query is empty, all sessions are shown.
+        """
+        tree = self.query_one("#session-tree", Tree)
+        tree.clear()
+        tree.show_root = False
+
+        sessions = self._session_list_data
+        if not sessions:
+            return
+
+        q = query.lower().strip()
+
+        # Group by project, maintaining recency order (same as _populate_session_list)
+        current_group: str | None = None
+        group_node = tree.root
+        matched = 0
+        for s in sessions:
+            project = s["project"]
+            date = s["date_str"]
+            name = s.get("name", "")
+            desc = s.get("description", "")
+            sid = s["session_id"]
+
+            if name:
+                label = name[:28] if len(name) > 28 else name
+            elif desc:
+                label = desc[:28] if len(desc) > 28 else desc
+            else:
+                label = sid[:8]
+
+            display = f"{date}  {label}"
+
+            # Apply filter: match on display label, session ID, or project path
+            if q and not (
+                q in display.lower() or q in sid.lower() or q in project.lower()
+            ):
+                continue
+
+            # Start a new project group if needed
+            if project != current_group:
+                current_group = project
+                parts = project.split("/")
+                short = "/".join(parts[-2:]) if len(parts) > 2 else project
+                group_node = tree.root.add(short, expand=True)
+
+            session_node = group_node.add(display, data=sid)
+            session_node.add_leaf(f"id: {sid[:12]}...")
+            session_node.collapse()
+            matched += 1
+
+        if q and matched == 0:
+            tree.root.add_leaf("No matching sessions")
+
     def action_toggle_sidebar(self) -> None:
         sidebar = self.query_one("#session-sidebar")
         self._sidebar_visible = not self._sidebar_visible
         if self._sidebar_visible:
             sidebar.add_class("visible")
             self._load_session_list()
+            # Focus the filter input so user can start typing immediately
+            self.query_one("#session-filter", Input).focus()
         else:
             sidebar.remove_class("visible")
+            # Clear filter when closing so next open shows all sessions
+            self.query_one("#session-filter", Input).value = ""
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         """Handle session selection from the sidebar tree.

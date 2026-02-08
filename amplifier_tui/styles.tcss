@@ -44,6 +44,20 @@ Screen {
     padding: 0 1;
 }
 
+#session-filter {
+    height: 1;
+    margin: 0;
+    border: none;
+    background: $surface;
+    color: $text;
+    padding: 0 1;
+}
+
+#session-filter:focus {
+    border: none;
+    background: $panel;
+}
+
 #session-tree {
     height: 1fr;
     padding: 0;
