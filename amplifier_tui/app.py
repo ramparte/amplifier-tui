@@ -119,6 +119,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/redo",
     "/snippet",
     "/title",
+    "/diff",
 )
 
 # Known context window sizes (tokens) for popular models.
@@ -617,6 +618,7 @@ SHORTCUTS_TEXT = """\
   /keys       This overlay
   /search     Search chat messages
   /grep       Search chat (/grep -c for case-sensitive)
+  /diff [file|all|staged|last]  Show git changes
   /sort       Sort sessions (date/name/project)
   /edit       Open $EDITOR for longer prompts
   /alias      List/create/remove shortcuts
@@ -2252,6 +2254,7 @@ class AmplifierChicApp(App):
             "/redo": lambda: self._cmd_redo(args),
             "/snippet": lambda: self._cmd_snippet(args),
             "/title": lambda: self._cmd_title(args),
+            "/diff": lambda: self._cmd_diff(args),
         }
 
         handler = handlers.get(cmd)
@@ -2298,6 +2301,7 @@ class AmplifierChicApp(App):
             "  /focus        Toggle focus mode (hide chrome)\n"
             "  /search       Search chat messages (e.g. /search my query)\n"
             "  /grep         Search with options (/grep <pattern>, /grep -c <pattern> for case-sensitive)\n"
+            "  /diff         Show git changes (/diff <file|all|staged|last>)\n"
             "  /sort         Sort sessions: date, name, project (/sort <mode>)\n"
             "  /edit         Open $EDITOR for longer prompts (same as Ctrl+G)\n"
             "  /draft        Show/save/clear/load input draft (/draft save, /draft clear, /draft load)\n"
@@ -2939,6 +2943,111 @@ class AmplifierChicApp(App):
                 first_widget.scroll_visible()
             except Exception:
                 pass
+
+    # ------------------------------------------------------------------
+    # Git helpers
+    # ------------------------------------------------------------------
+
+    def _run_git(self, *args: str, cwd: str | None = None) -> tuple[bool, str]:
+        """Run a git command and return *(success, output)*."""
+        try:
+            result = subprocess.run(
+                ["git", *args],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=cwd or os.getcwd(),
+            )
+            return (
+                result.returncode == 0,
+                result.stdout.strip() or result.stderr.strip(),
+            )
+        except FileNotFoundError:
+            return False, "git not found"
+        except subprocess.TimeoutExpired:
+            return False, "git command timed out"
+        except Exception as exc:
+            return False, str(exc)
+
+    def _cmd_diff(self, text: str) -> None:
+        """Show git diff / status information."""
+        text = text.strip()
+
+        # Check if we're inside a git repo
+        ok, _ = self._run_git("rev-parse", "--is-inside-work-tree")
+        if not ok:
+            self._add_system_message("Not in a git repository")
+            return
+
+        # --- /diff  (no args) -> file summary ---
+        if not text:
+            ok, output = self._run_git("status", "--short")
+            if not ok:
+                self._add_system_message(f"git error: {output}")
+                return
+            if not output:
+                self._add_system_message("No changes detected (working tree clean)")
+                return
+
+            lines = ["Changed files:", ""]
+            for line in output.split("\n"):
+                if line.strip():
+                    lines.append(f"  {line}")
+            lines.append("")
+            lines.append("Use /diff <file> for details, /diff all for everything")
+            self._add_system_message("\n".join(lines))
+            return
+
+        # --- /diff all ---
+        if text == "all":
+            ok, output = self._run_git("diff")
+            if not ok or not output:
+                # Also check staged changes
+                ok2, staged = self._run_git("diff", "--staged")
+                if staged:
+                    output = staged
+                elif not output:
+                    self._add_system_message("No unstaged changes")
+                    return
+            self._add_system_message(f"```diff\n{output}\n```")
+            return
+
+        # --- /diff staged ---
+        if text == "staged":
+            ok, output = self._run_git("diff", "--staged")
+            if not ok or not output:
+                self._add_system_message("No staged changes")
+                return
+            self._add_system_message(f"```diff\n{output}\n```")
+            return
+
+        # --- /diff last ---
+        if text == "last":
+            ok, output = self._run_git("diff", "HEAD~1", "HEAD")
+            if not ok:
+                self._add_system_message(f"git error: {output}")
+                return
+            if not output:
+                self._add_system_message("No changes in last commit")
+                return
+            # Prepend the commit summary line when available
+            ok2, msg = self._run_git("log", "-1", "--oneline")
+            header = f"Last commit: {msg}\n\n" if ok2 and msg else ""
+            self._add_system_message(f"{header}```diff\n{output}\n```")
+            return
+
+        # --- /diff <file> ---
+        ok, output = self._run_git("diff", text)
+        if not ok:
+            self._add_system_message(f"git error: {output}")
+            return
+        if not output:
+            # Try staged changes for this file
+            ok, output = self._run_git("diff", "--staged", text)
+            if not ok or not output:
+                self._add_system_message(f"No changes for '{text}'")
+                return
+        self._add_system_message(f"```diff\n{output}\n```")
 
     def _cmd_focus(self) -> None:
         """Toggle focus mode via slash command."""
