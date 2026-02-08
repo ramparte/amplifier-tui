@@ -1236,7 +1236,7 @@ SHORTCUTS_TEXT = """\
   /scroll          Toggle auto-scroll
 
  EXPORT & DATA ─────────────────────────
-  /export          Export chat (md/html/json/txt)
+  /export          Export chat (md/html/json/txt/clipboard)
   /diff            Show git diff (color-coded)
   /diff msgs       Compare last two assistant messages (or /diff msgs N M)
   /git             Quick git operations (status/log/diff/branch/stash/blame)
@@ -1447,7 +1447,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/note clear", "Remove all session notes", "/note clear"),
     ("/notes", "List all session notes", "/notes"),
     ("/delete", "Delete session (with confirmation)", "/delete"),
-    ("/export", "Export chat (md, html, json, txt)", "/export"),
+    ("/export", "Export chat (md/html/json/txt/clipboard)", "/export"),
     ("/notify", "Toggle notifications (on, off, sound, silent, flash)", "/notify"),
     ("/sound", "Toggle notification sound (on, off, test)", "/sound"),
     ("/scroll", "Toggle auto-scroll on/off", "/scroll"),
@@ -4608,7 +4608,7 @@ class AmplifierChicApp(App):
             "  /notes        List all session notes (alias for /note list)\n"
             "  /pin-session  Pin/unpin session (pinned appear at top of sidebar)\n"
             "  /delete       Delete session (with confirmation)\n"
-            "  /export       Export chat (md/html/json/txt) | /export <fmt> [path] | --clipboard\n"
+            "  /export       Export chat (md default) | /export <fmt> [path] | /export clipboard\n"
             "  /notify       Toggle notifications (/notify on|off|sound|silent|flash|<secs>)\n"
             "  /sound        Toggle notification sound (/sound on|off|test)\n"
             "  /scroll       Toggle auto-scroll on/off\n"
@@ -9373,16 +9373,39 @@ class AmplifierChicApp(App):
     # Export formatters
     # ------------------------------------------------------------------
 
+    def _get_export_metadata(self) -> dict[str, str]:
+        """Gather metadata for export headers."""
+        sm = self.session_manager if hasattr(self, "session_manager") else None
+        session_id = (getattr(sm, "session_id", None) or "") if sm else ""
+        model = (getattr(sm, "model_name", None) or "unknown") if sm else "unknown"
+        total_words = getattr(self, "_user_words", 0) + getattr(
+            self, "_assistant_words", 0
+        )
+        est_tokens = int(total_words * 1.3)
+        return {
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "session_id": session_id,
+            "session_title": self._session_title or "",
+            "model": model,
+            "message_count": str(len(self._search_messages)),
+            "token_estimate": f"~{est_tokens:,}",
+        }
+
     def _export_markdown(self, messages: list[tuple[str, str, Static | None]]) -> str:
         """Format messages as markdown."""
+        meta = self._get_export_metadata()
         lines = [
-            "# Amplifier Conversation",
+            "# Amplifier Chat Export",
             "",
         ]
-        if self._session_title:
-            lines.append(f"**Session:** {self._session_title}")
-        lines.append(f"*Exported: {datetime.now().strftime('%Y-%m-%d %H:%M')}*")
-        lines.append(f"**Messages:** {len(messages)}")
+        lines.append(f"- **Date**: {meta['date']}")
+        if meta["session_id"]:
+            lines.append(f"- **Session**: {meta['session_id'][:12]}")
+        if meta["session_title"]:
+            lines.append(f"- **Title**: {meta['session_title']}")
+        lines.append(f"- **Model**: {meta['model']}")
+        lines.append(f"- **Messages**: {meta['message_count']}")
+        lines.append(f"- **Tokens**: {meta['token_estimate']}")
         lines.append("")
         lines.append("---")
         lines.append("")
@@ -9421,7 +9444,17 @@ class AmplifierChicApp(App):
 
     def _export_text(self, messages: list[tuple[str, str, Static | None]]) -> str:
         """Format messages as plain text."""
-        lines: list[str] = []
+        meta = self._get_export_metadata()
+        lines: list[str] = [
+            f"Amplifier Chat - {meta['date']}",
+            "=" * 40,
+            f"Session: {meta['session_id'][:12] if meta['session_id'] else 'n/a'}",
+            f"Model: {meta['model']}",
+            f"Messages: {meta['message_count']}",
+            f"Tokens: {meta['token_estimate']}",
+            "=" * 40,
+            "",
+        ]
         for role, content, _widget in messages:
             label = {
                 "user": "You",
@@ -9436,11 +9469,14 @@ class AmplifierChicApp(App):
 
     def _export_json(self, messages: list[tuple[str, str, Static | None]]) -> str:
         """Format messages as JSON."""
+        meta = self._get_export_metadata()
         data = {
-            "session_id": self._get_session_id(),
-            "session_title": self._session_title or "",
+            "session_id": meta["session_id"],
+            "session_title": meta["session_title"],
+            "model": meta["model"],
             "exported_at": datetime.now().isoformat(),
             "message_count": len(messages),
+            "token_estimate": meta["token_estimate"],
             "messages": [
                 {"role": role, "content": content}
                 for role, content, _widget in messages
@@ -9486,20 +9522,23 @@ class AmplifierChicApp(App):
 
     def _export_html(self, messages: list[tuple[str, str, Static | None]]) -> str:
         """Format messages as styled HTML with dark theme."""
-        now = datetime.now()
+        meta = self._get_export_metadata()
         title_text = (
-            self._html_escape(self._session_title)
-            if self._session_title
-            else "Conversation"
+            self._html_escape(meta["session_title"])
+            if meta["session_title"]
+            else "Chat Export"
         )
         html = [
             "<!DOCTYPE html>",
             "<html lang='en'><head>",
             "<meta charset='utf-8'>",
-            f"<title>Amplifier - {title_text} - {now.strftime('%Y-%m-%d')}</title>",
+            f"<title>Amplifier - {title_text} - {meta['date']}</title>",
             "<style>",
             "body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;"
             " max-width: 800px; margin: 0 auto; padding: 20px; background: #1e1e2e; color: #cdd6f4; }",
+            ".metadata { color: #6c7086; font-size: 0.85em; border-bottom: 1px solid #313244;"
+            " padding-bottom: 1rem; margin-bottom: 2rem; }",
+            ".metadata span { margin-right: 1.5em; }",
             ".message { margin: 16px 0; padding: 12px 16px; border-radius: 8px; }",
             ".user { background: #313244; border-left: 3px solid #89b4fa; }",
             ".assistant { background: #1e1e2e; border-left: 3px solid #a6e3a1; }",
@@ -9519,14 +9558,22 @@ class AmplifierChicApp(App):
             "a { color: #89b4fa; }",
             "</style>",
             "</head><body>",
-            "<h1>Amplifier Conversation</h1>",
+            "<h1>Amplifier Chat Export</h1>",
         ]
-        if self._session_title:
-            html.append(f"<p class='meta'><strong>Session:</strong> {title_text}</p>")
-        html.append(
-            f"<p class='meta'>Exported: {now.strftime('%Y-%m-%d %H:%M')}"
-            f" &middot; {len(messages)} messages</p>"
-        )
+        sid_short = meta["session_id"][:12] if meta["session_id"] else "n/a"
+        meta_parts = [
+            f"<span><strong>Date:</strong> {meta['date']}</span>",
+            f"<span><strong>Session:</strong> {self._html_escape(sid_short)}</span>",
+            f"<span><strong>Model:</strong> {self._html_escape(meta['model'])}</span>",
+            f"<span><strong>Messages:</strong> {meta['message_count']}</span>",
+            f"<span><strong>Tokens:</strong> {self._html_escape(meta['token_estimate'])}</span>",
+        ]
+        if meta["session_title"]:
+            meta_parts.insert(
+                1,
+                f"<span><strong>Title:</strong> {self._html_escape(meta['session_title'])}</span>",
+            )
+        html.append(f"<div class='metadata'>{''.join(meta_parts)}</div>")
 
         for role, content, _widget in messages:
             escaped = self._html_escape(content)
@@ -9562,21 +9609,33 @@ class AmplifierChicApp(App):
     # ------------------------------------------------------------------
 
     def _cmd_export(self, text: str) -> None:
-        """Export the current chat to markdown, HTML, plain text, or JSON."""
-        # text is the full command, e.g. "/export md" or "/export html ~/out.html"
+        """Export the current chat to markdown, HTML, plain text, or JSON.
+
+        Usage:
+            /export                  Export to markdown (default)
+            /export md [path]        Markdown
+            /export html [path]      Styled HTML (dark theme)
+            /export json [path]      Structured JSON
+            /export txt [path]       Plain text
+            /export clipboard        Copy markdown to clipboard
+            /export <fmt> --clipboard Copy <fmt> to clipboard
+            /export help             Show this help
+        """
         parts = text.strip().split(None, 1)
         arg = parts[1].strip() if len(parts) > 1 else ""
 
-        # No arguments: show usage
-        if not arg:
+        # /export help — show usage
+        if arg.lower() in ("help", "?"):
             self._add_system_message(
                 "Export conversation:\n"
+                "  /export                    Markdown (default)\n"
                 "  /export md [path]          Markdown\n"
                 "  /export html [path]        Styled HTML (dark theme)\n"
                 "  /export json [path]        Structured JSON\n"
                 "  /export txt [path]         Plain text\n"
-                "  /export <fmt> --clipboard   Copy to clipboard\n\n"
-                "Default path: ~/amplifier-export-{timestamp}.{ext}"
+                "  /export clipboard          Copy markdown to clipboard\n"
+                "  /export <fmt> --clipboard  Copy to clipboard\n\n"
+                "Default path: ./amplifier-chat-{timestamp}.{ext}"
             )
             return
 
@@ -9605,7 +9664,11 @@ class AmplifierChicApp(App):
             "text": "txt",
         }
 
-        if first in format_map:
+        if first == "clipboard":
+            # /export clipboard — shorthand for markdown to clipboard
+            to_clipboard = True
+            fmt = "md"
+        elif first in format_map:
             fmt = format_map[first]
             custom_path = rest
         elif first:
@@ -9652,12 +9715,12 @@ class AmplifierChicApp(App):
                 )
             return
 
-        # Determine output path
+        # Determine output path (default: cwd with amplifier-chat-* naming)
         if custom_path:
             out_path = Path(custom_path).expanduser()
         else:
-            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-            out_path = Path.home() / f"amplifier-export-{ts}.{fmt}"
+            ts = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+            out_path = Path.cwd() / f"amplifier-chat-{ts}.{fmt}"
 
         if not out_path.is_absolute():
             out_path = Path.cwd() / out_path
