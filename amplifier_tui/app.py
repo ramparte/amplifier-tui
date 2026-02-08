@@ -164,6 +164,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/undo",
     "/snippet",
     "/snippets",
+    "/snip",
     "/template",
     "/templates",
     "/title",
@@ -688,13 +689,21 @@ class ChatInput(TextArea):
             self.insert(choice)
             return
 
-        # Snippet name completion for /snippet use|send|remove|edit|tag <name>
+        # Snippet name completion for /snippet use|send|remove|delete|edit|tag <name>
+        # Also supports /snip alias
         for prefix_cmd in (
             "/snippet use ",
             "/snippet send ",
             "/snippet remove ",
+            "/snippet delete ",
             "/snippet edit ",
             "/snippet tag ",
+            "/snip use ",
+            "/snip send ",
+            "/snip remove ",
+            "/snip delete ",
+            "/snip edit ",
+            "/snip tag ",
         ):
             if text.startswith(prefix_cmd):
                 partial = text[len(prefix_cmd) :]
@@ -1857,6 +1866,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/drafts clear", "Clear the current session draft", "/drafts clear"),
     ("/snippet", "Manage prompt snippets", "/snippet"),
     ("/snippets", "List all prompt snippets", "/snippets"),
+    ("/snip", "Prompt snippets (alias for /snippet)", "/snippet"),
     ("/template", "Manage prompt templates", "/template"),
     ("/templates", "List all prompt templates", "/templates"),
     ("/alias", "List, create, or remove command aliases", "/alias"),
@@ -2071,23 +2081,43 @@ class AmplifierChicApp(App):
 
     DEFAULT_SNIPPETS: dict[str, dict[str, str]] = {
         "review": {
-            "content": "Please review this code for bugs, security issues, and best practices.",
+            "content": "Review {file_or_code} for bugs, performance issues, and best practices:",
             "category": "prompts",
         },
         "explain": {
-            "content": "Explain this code step by step, focusing on the key logic and design decisions.",
+            "content": "Explain {file_or_code} in detail:",
+            "category": "prompts",
+        },
+        "tests": {
+            "content": "Write comprehensive tests for {file_or_code}:",
+            "category": "prompts",
+        },
+        "fix": {
+            "content": "Fix the bug in {file_or_code}:",
             "category": "prompts",
         },
         "refactor": {
-            "content": "Refactor this code to be more readable, maintainable, and following best practices.",
-            "category": "prompts",
-        },
-        "test": {
-            "content": "Write comprehensive tests for this code, covering edge cases and error conditions.",
+            "content": "Refactor {file_or_code} to be cleaner and more maintainable:",
             "category": "prompts",
         },
         "doc": {
-            "content": "Add clear documentation comments to this code.",
+            "content": "Write documentation for {file_or_code}:",
+            "category": "prompts",
+        },
+        "debug": {
+            "content": "Debug this error:",
+            "category": "prompts",
+        },
+        "plan": {
+            "content": "Create a detailed plan for implementing {feature_or_task}:",
+            "category": "prompts",
+        },
+        "optimize": {
+            "content": "Optimize {file_or_code} for better performance:",
+            "category": "prompts",
+        },
+        "security": {
+            "content": "Review {file_or_code} for security vulnerabilities:",
             "category": "prompts",
         },
     }
@@ -5301,6 +5331,7 @@ class AmplifierChicApp(App):
             "/undo": lambda: self._cmd_undo(args),
             "/snippet": lambda: self._cmd_snippet(args),
             "/snippets": lambda: self._cmd_snippet(""),
+            "/snip": lambda: self._cmd_snippet(args),
             "/template": lambda: self._cmd_template(args),
             "/templates": lambda: self._cmd_template(""),
             "/title": lambda: self._cmd_title(args),
@@ -5399,7 +5430,8 @@ class AmplifierChicApp(App):
             "  /editor       Alias for /edit | /editor submit toggles auto-submit\n"
             "  /draft        Show/save/clear/load input draft (/draft save, /draft clear, /draft load)\n"
             "  /drafts       List all saved drafts across sessions (/drafts clear to clear current)\n"
-            "  /snippet      Prompt snippets (/snippet save|use|remove|search|cat|tag|export|import|<name>)\n"
+            "  /snippet      Prompt snippets (/snippet save|use|delete|search|cat|tag|export|import|<name>)\n"
+            "  /snip         Alias for /snippet (/snip save, /snip use, /snip <name>)\n"
             "  /template     Prompt templates with {{variables}} (/template save|use|remove|clear|<name>)\n"
             "  /alias        List/create/remove custom shortcuts\n"
             "  /compact      Toggle compact view mode (/compact on, /compact off)\n"
@@ -6003,8 +6035,8 @@ class AmplifierChicApp(App):
             if not self._snippets:
                 self._add_system_message(
                     "No snippets saved.\n"
-                    "Save: /snippet save <name> [#category] <text>\n"
-                    "Use:  /snippet <name>"
+                    "Save: /snip save <name> [#category] <text>\n"
+                    "Use:  /snip <name>"
                 )
                 return
             categorized: dict[str, list[str]] = defaultdict(list)
@@ -6034,7 +6066,10 @@ class AmplifierChicApp(App):
                         preview += "..."
                     lines.append(f"    {name}: {preview}")
             lines.append("")
-            lines.append("Insert: /snippet <name>  |  Send: /snippet use <name>")
+            lines.append(
+                "Insert: /snip <name>  |  Send: /snip use <name>"
+                "  |  Save: /snip save <name> <text>"
+            )
             self._add_system_message("\n".join(lines))
             return
 
@@ -6053,15 +6088,15 @@ class AmplifierChicApp(App):
         elif subcmd in ("use", "send"):
             self._cmd_snippet_use(parts)
 
-        elif subcmd == "remove":
+        elif subcmd in ("remove", "delete"):
             if len(parts) < 2:
-                self._add_system_message("Usage: /snippet remove <name>")
+                self._add_system_message("Usage: /snippet delete <name>")
                 return
             sname = parts[1]
             if sname in self._snippets:
                 del self._snippets[sname]
                 self._save_snippets()
-                self._add_system_message(f"Snippet '{sname}' removed")
+                self._add_system_message(f"Snippet '{sname}' deleted")
             else:
                 self._add_system_message(f"No snippet named '{sname}'")
 
@@ -6110,15 +6145,36 @@ class AmplifierChicApp(App):
                 try:
                     inp = self.query_one("#chat-input", ChatInput)
                     inp.clear()
-                    inp.insert(self._snippet_content(self._snippets[subcmd]))
+                    content = self._snippet_content(self._snippets[subcmd])
+                    inp.insert(content)
+                    # If snippet has {placeholder} markers, position the
+                    # cursor at the first one so the user can replace it.
+                    ph_match = re.search(r"\{(\w+)\}", content)
+                    if ph_match:
+                        # Find the (row, col) for the first placeholder
+                        before = content[: ph_match.start()]
+                        row = before.count("\n")
+                        col = (
+                            ph_match.start()
+                            if row == 0
+                            else ph_match.start() - before.rfind("\n") - 1
+                        )
+                        inp.cursor_location = (row, col)
+                        placeholders = re.findall(r"\{(\w+)\}", content)
+                        ph_note = ", ".join(f"{{{p}}}" for p in placeholders)
+                        self._add_system_message(
+                            f"Snippet '{subcmd}' inserted — "
+                            f"fill in placeholders: {ph_note}"
+                        )
+                    else:
+                        self._add_system_message(f"Snippet '{subcmd}' inserted")
                     inp.focus()
-                    self._add_system_message(f"Snippet '{subcmd}' inserted")
                 except Exception:
                     pass
             else:
                 self._add_system_message(
                     f"No snippet '{subcmd}'.\n"
-                    "Use /snippet to list, /snippet save <name> <text> to create."
+                    "Use /snip to list, /snip save <name> <text> to create."
                 )
 
     # -- /snippet sub-command implementations ---------------------------
