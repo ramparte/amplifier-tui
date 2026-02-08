@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import difflib
 import json
 import os
 import platform
@@ -126,6 +127,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/ref",
     "/refs",
     "/vim",
+    "/watch",
 )
 
 # Known context window sizes (tokens) for popular models.
@@ -809,6 +811,7 @@ SHORTCUTS_TEXT = """\
  EXPORT & DATA ─────────────────────────
   /export          Export chat (md/txt/json)
   /diff            Show git changes
+  /watch           Watch files for changes
   /tokens          Token/context usage
   /context         Context window details
 
@@ -1045,6 +1048,10 @@ class AmplifierChicApp(App):
 
         # Session auto-title (extracted from first user message)
         self._session_title: str = ""
+
+        # File watch state (/watch command)
+        self._watched_files: dict[str, dict] = {}
+        self._watch_timer: object | None = None
 
         # Reverse search state (Ctrl+R inline)
         self._rsearch_active: bool = False
@@ -2649,6 +2656,7 @@ class AmplifierChicApp(App):
             "/ref": lambda: self._cmd_ref(text),
             "/refs": lambda: self._cmd_ref(text),
             "/vim": lambda: self._cmd_vim(args),
+            "/watch": lambda: self._cmd_watch(args),
         }
 
         handler = handlers.get(cmd)
@@ -2698,6 +2706,7 @@ class AmplifierChicApp(App):
             "  /search       Search chat messages (e.g. /search my query)\n"
             "  /grep         Search with options (/grep <pattern>, /grep -c <pattern> for case-sensitive)\n"
             "  /diff         Show git changes (/diff <file|all|staged|last>)\n"
+            "  /watch        Watch files for changes (/watch <path>, stop, diff)\n"
             "  /sort         Sort sessions: date, name, project (/sort <mode>)\n"
             "  /edit         Open $EDITOR for longer prompts (same as Ctrl+G)\n"
             "  /draft        Show/save/clear/load input draft (/draft save, /draft clear, /draft load)\n"
@@ -3298,6 +3307,227 @@ class AmplifierChicApp(App):
             self._add_system_message("Vim mode disabled")
 
         self._update_vim_status()
+
+    # ── /watch – file change monitoring ──────────────────────────────────
+
+    def _cmd_watch(self, text: str) -> None:
+        """Watch files for changes, list watches, stop, or show diffs."""
+        text = text.strip()
+
+        # /watch  — list current watches
+        if not text:
+            if not self._watched_files:
+                self._add_system_message(
+                    "No files being watched.\n"
+                    "Watch: /watch <path>\n"
+                    "Stop:  /watch stop <path> | /watch stop all\n"
+                    "Diff:  /watch diff <path>"
+                )
+                return
+            lines = ["Watched files:"]
+            for path, info in self._watched_files.items():
+                rel = os.path.relpath(path)
+                lines.append(f"  {rel} (since {info['added_at'][:16]})")
+            lines.append(f"\n{len(self._watched_files)} file(s) watched")
+            self._add_system_message("\n".join(lines))
+            return
+
+        # /watch stop <path> | /watch stop all
+        if text.startswith("stop ") or text == "stop":
+            target = text[5:].strip() if text.startswith("stop ") else ""
+            if not target:
+                self._add_system_message("Usage: /watch stop <path> | /watch stop all")
+                return
+            if target == "all":
+                count = len(self._watched_files)
+                self._watched_files.clear()
+                self._stop_watch_timer()
+                self._add_system_message(f"Stopped watching {count} file(s)")
+            else:
+                abs_path = os.path.abspath(os.path.expanduser(target))
+                if abs_path in self._watched_files:
+                    del self._watched_files[abs_path]
+                    if not self._watched_files:
+                        self._stop_watch_timer()
+                    self._add_system_message(
+                        f"Stopped watching: {os.path.relpath(abs_path)}"
+                    )
+                else:
+                    self._add_system_message(f"Not watching: {target}")
+            return
+
+        # /watch diff <path>
+        if text.startswith("diff ") or text == "diff":
+            target = text[5:].strip() if text.startswith("diff ") else ""
+            if not target:
+                self._add_system_message("Usage: /watch diff <path>")
+                return
+            abs_path = os.path.abspath(os.path.expanduser(target))
+            if abs_path in self._watched_files:
+                self._show_watch_diff(abs_path)
+            else:
+                self._add_system_message(f"Not watching: {target}")
+            return
+
+        # /watch <path>  — add a watch
+        abs_path = os.path.abspath(os.path.expanduser(text))
+
+        if not os.path.exists(abs_path):
+            self._add_system_message(f"Path not found: {text}")
+            return
+
+        if len(self._watched_files) >= 10:
+            self._add_system_message(
+                "Maximum 10 watched files. Use /watch stop <path> to remove one."
+            )
+            return
+
+        if abs_path in self._watched_files:
+            self._add_system_message(f"Already watching: {os.path.relpath(abs_path)}")
+            return
+
+        stat = os.stat(abs_path)
+        # Read initial content for future diff comparisons
+        initial_content: str | None = None
+        if os.path.isfile(abs_path):
+            try:
+                with open(abs_path, encoding="utf-8", errors="replace") as f:
+                    initial_content = f.read()
+            except OSError:
+                pass
+
+        self._watched_files[abs_path] = {
+            "mtime": stat.st_mtime,
+            "size": stat.st_size,
+            "added_at": datetime.now().isoformat(),
+            "prev_content": None,
+            "last_content": initial_content,
+        }
+
+        self._start_watch_timer()
+        self._add_system_message(f"Watching: {os.path.relpath(abs_path)}")
+
+    def _start_watch_timer(self) -> None:
+        """Start the 2-second polling timer for watched files."""
+        if self._watch_timer is None:
+            self._watch_timer = self.set_interval(2.0, self._check_watched_files)
+
+    def _stop_watch_timer(self) -> None:
+        """Stop the polling timer when no files are watched."""
+        if self._watch_timer is not None:
+            self._watch_timer.stop()
+            self._watch_timer = None
+
+    def _check_watched_files(self) -> None:
+        """Periodic check for file changes (runs every 2s)."""
+        for path, info in list(self._watched_files.items()):
+            try:
+                if not os.path.exists(path):
+                    rel = os.path.relpath(path)
+                    self._add_system_message(f"[watch] File removed: {rel}")
+                    del self._watched_files[path]
+                    continue
+
+                stat = os.stat(path)
+                if stat.st_mtime != info["mtime"] or stat.st_size != info["size"]:
+                    rel = os.path.relpath(path)
+
+                    # Read new content for diff (only on change, not every poll)
+                    new_content: str | None = None
+                    line_delta_str = ""
+                    if os.path.isfile(path):
+                        try:
+                            with open(path, encoding="utf-8", errors="replace") as f:
+                                new_content = f.read()
+                        except OSError:
+                            pass
+
+                        if new_content is not None and info["last_content"] is not None:
+                            old_lines = info["last_content"].splitlines()
+                            new_lines = new_content.splitlines()
+                            added = 0
+                            removed = 0
+                            for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
+                                None, old_lines, new_lines
+                            ).get_opcodes():
+                                if tag == "insert":
+                                    added += j2 - j1
+                                elif tag == "delete":
+                                    removed += i2 - i1
+                                elif tag == "replace":
+                                    added += j2 - j1
+                                    removed += i2 - i1
+                            parts = []
+                            if added:
+                                parts.append(f"+{added}")
+                            if removed:
+                                parts.append(f"-{removed}")
+                            if parts:
+                                line_delta_str = f" ({', '.join(parts)} lines)"
+
+                    # Byte-level fallback when line diff isn't available
+                    size_delta = stat.st_size - info["size"]
+                    if not line_delta_str:
+                        if size_delta > 0:
+                            line_delta_str = f" (+{size_delta} bytes)"
+                        elif size_delta < 0:
+                            line_delta_str = f" ({size_delta} bytes)"
+
+                    # Rotate content snapshots and update tracking
+                    info["prev_content"] = info["last_content"]
+                    info["last_content"] = new_content
+                    info["mtime"] = stat.st_mtime
+                    info["size"] = stat.st_size
+
+                    self._add_system_message(f"[watch] Changed: {rel}{line_delta_str}")
+            except Exception:
+                pass
+
+        if not self._watched_files:
+            self._stop_watch_timer()
+
+    def _show_watch_diff(self, abs_path: str) -> None:
+        """Show a unified diff for the last change to a watched file."""
+        info = self._watched_files[abs_path]
+        rel = os.path.relpath(abs_path)
+
+        prev = info.get("prev_content")
+        current = info.get("last_content")
+
+        if prev is None and current is None:
+            self._add_system_message(f"[watch] No content captured yet for: {rel}")
+            return
+
+        if prev is None:
+            self._add_system_message(
+                f"[watch] No previous version to diff against: {rel}\n"
+                "Waiting for first change..."
+            )
+            return
+
+        diff_lines = list(
+            difflib.unified_diff(
+                prev.splitlines(keepends=True),
+                current.splitlines(keepends=True) if current else [],
+                fromfile=f"a/{rel}",
+                tofile=f"b/{rel}",
+                n=3,
+            )
+        )
+
+        if not diff_lines:
+            self._add_system_message(f"[watch] No diff available for: {rel}")
+            return
+
+        # Truncate very long diffs to keep the chat readable
+        max_lines = 80
+        truncated = len(diff_lines) > max_lines
+        display = diff_lines[:max_lines]
+        text = "".join(display)
+        if truncated:
+            text += f"\n... ({len(diff_lines) - max_lines} more lines)"
+
+        self._add_system_message(f"[watch] Diff for {rel}:\n{text}")
 
     def _cmd_search(self, text: str) -> None:
         """Search all chat messages for a query string."""
