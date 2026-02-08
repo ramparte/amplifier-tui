@@ -57,6 +57,7 @@ from .preferences import (
     save_show_timestamps,
     save_streaming_enabled,
     save_theme_name,
+    save_multiline_default,
     save_vim_mode,
     save_word_wrap,
 )
@@ -180,6 +181,8 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/name",
     "/attach",
     "/cat",
+    "/multiline",
+    "/ml",
 )
 
 # -- System prompt presets -----------------------------------------------------
@@ -605,6 +608,8 @@ class ChatInput(TextArea):
         self._vim_enabled: bool = False
         self._vim_state: str = "insert"  # "normal" or "insert"
         self._vim_key_buffer: str = ""  # for multi-char combos like dd, gg
+        # Multiline mode: Enter = newline, Ctrl+Enter = send
+        self._multiline_mode: bool = False
 
     # -- Slash command tab-completion ----------------------------------------
 
@@ -1092,20 +1097,38 @@ class ChatInput(TextArea):
                 event.stop()
                 return
 
-        if event.key == "shift+enter":
-            # Insert newline (Shift+Enter = multi-line composition)
-            event.prevent_default()
-            event.stop()
-            self._reset_tab_state()
-            self.insert("\n")
-            self._update_line_indicator()
-        elif event.key == "enter":
-            # Submit the message
-            event.prevent_default()
-            event.stop()
-            self._reset_tab_state()
-            self.post_message(self.Submitted(text_area=self))
-        elif event.key == "tab":
+        if self._multiline_mode:
+            # Multiline mode: Enter = newline, Ctrl+J / Shift+Enter = send
+            if event.key == "ctrl+j" or event.key == "shift+enter":
+                event.prevent_default()
+                event.stop()
+                self._reset_tab_state()
+                self.post_message(self.Submitted(text_area=self))
+                return
+            elif event.key == "enter":
+                event.prevent_default()
+                event.stop()
+                self._reset_tab_state()
+                self.insert("\n")
+                self._update_line_indicator()
+                return
+        else:
+            # Normal mode: Enter = send, Shift+Enter / Ctrl+J = newline
+            if event.key == "shift+enter":
+                event.prevent_default()
+                event.stop()
+                self._reset_tab_state()
+                self.insert("\n")
+                self._update_line_indicator()
+                return
+            elif event.key == "enter":
+                event.prevent_default()
+                event.stop()
+                self._reset_tab_state()
+                self.post_message(self.Submitted(text_area=self))
+                return
+
+        if event.key == "tab":
             text = self.text.strip()
             if text.startswith("/"):
                 event.prevent_default()
@@ -1122,8 +1145,9 @@ class ChatInput(TextArea):
             # Not a slash prefix – let default tab_behavior ("focus") happen
             self._reset_tab_state()
             await super()._on_key(event)
-        elif event.key == "ctrl+j":
-            # Insert a newline (Ctrl+J = linefeed)
+        elif event.key == "ctrl+j" and not self._multiline_mode:
+            # Insert a newline (Ctrl+J = linefeed) — normal mode only
+            # (In multiline mode, ctrl+j is handled above as "send")
             event.prevent_default()
             event.stop()
             self._reset_tab_state()
@@ -1274,6 +1298,8 @@ SHORTCUTS_TEXT = """\
  CHAT ───────────────────────────────────
   Enter            Send message
   Shift+Enter      New line (also Ctrl+J)
+  Alt+M            Toggle multiline mode
+                    (ML: Enter=newline, Shift+Enter=send)
   Escape           Cancel AI streaming
   Ctrl+C           Cancel AI response
   Ctrl+L           Clear chat
@@ -1645,6 +1671,12 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/split swap", "Swap left and right panes in split view", "/split swap"),
     ("/split off", "Close split view", "/split off"),
     ("/stream", "Toggle streaming display", "/stream"),
+    (
+        "/multiline",
+        "Toggle multiline mode (Enter=newline, Shift+Enter=send)",
+        "/multiline",
+    ),
+    ("/ml", "Toggle multiline mode (alias for /multiline)", "/ml"),
     ("/vim", "Toggle vim keybindings", "/vim"),
     ("/tab", "Tab management (new, switch, close, rename, list)", "/tab"),
     ("/tab new", "Open a new conversation tab", "/tab new"),
@@ -1911,6 +1943,7 @@ class AmplifierChicApp(App):
         Binding("alt+8", "switch_tab(8)", "Tab 8", show=False),
         Binding("alt+9", "switch_tab(9)", "Tab 9", show=False),
         Binding("alt+0", "switch_tab(0)", "Last Tab", show=False),
+        Binding("alt+m", "toggle_multiline", "Multiline", show=False),
         Binding("ctrl+q", "quit", "Quit", show=True),
     ]
 
@@ -2107,6 +2140,7 @@ class AmplifierChicApp(App):
                     yield Static("Ready", id="status-state")
                     yield Static("", id="status-stash")
                     yield Static("", id="status-vim")
+                    yield Static("", id="status-ml")
                     yield Static("", id="status-system")
                     yield Static("\u2195 ON", id="status-scroll")
                     yield Static("0 words", id="status-wordcount")
@@ -2138,6 +2172,12 @@ class AmplifierChicApp(App):
             input_w._vim_state = "normal"
             input_w._update_vim_border()
             self._update_vim_status()
+
+        # Apply multiline-mode preference (default: off)
+        if self._prefs.display.multiline_default:
+            ml_input = self.query_one("#chat-input", ChatInput)
+            ml_input._multiline_mode = True
+            self._update_multiline_status()
 
         # Initialize tab bar
         self._update_tab_bar()
@@ -4924,6 +4964,8 @@ class AmplifierChicApp(App):
             "/name": lambda: self._cmd_name(args),
             "/attach": lambda: self._cmd_attach(args),
             "/cat": lambda: self._cmd_cat(args),
+            "/multiline": lambda: self._cmd_multiline(args),
+            "/ml": lambda: self._cmd_multiline(args),
         }
 
         handler = handlers.get(cmd)
@@ -4997,6 +5039,7 @@ class AmplifierChicApp(App):
             "  /redo         Alias for /retry\n"
             "  /split        Toggle split view (/split [N|swap|off|pins|chat|file <path>])\n"
             "  /stream       Toggle streaming display (/stream on, /stream off)\n"
+            "  /multiline    Toggle multiline mode (/multiline on, /multiline off, /ml)\n"
             "  /vim          Toggle vim keybindings (/vim on, /vim off)\n"
             "  /tab          Tab management (/tab new|switch|close|rename|list)\n"
             "  /tabs         List all open tabs\n"
@@ -6988,6 +7031,58 @@ class AmplifierChicApp(App):
             self._add_system_message("Vim mode disabled")
 
         self._update_vim_status()
+
+    # ── /multiline – toggle multiline input mode ─────────────────────────
+
+    def _cmd_multiline(self, text: str) -> None:
+        """Toggle multiline input mode.
+
+        /multiline       Toggle multiline mode
+        /multiline on    Enable multiline mode
+        /multiline off   Disable multiline mode
+        /ml              Alias for /multiline
+        """
+        text = text.strip().lower()
+
+        if text in ("on", "true", "1"):
+            ml = True
+        elif text in ("off", "false", "0"):
+            ml = False
+        elif not text:
+            ml = not self._prefs.display.multiline_default
+        else:
+            self._add_system_message("Usage: /multiline [on|off]")
+            return
+
+        self._prefs.display.multiline_default = ml
+        save_multiline_default(ml)
+
+        input_widget = self.query_one("#chat-input", ChatInput)
+        input_widget._multiline_mode = ml
+
+        if ml:
+            self._add_system_message(
+                "Multiline mode ON — Enter inserts newline, "
+                "Shift+Enter sends (Ctrl+J also sends)"
+            )
+        else:
+            self._add_system_message(
+                "Multiline mode OFF — Enter sends, Shift+Enter inserts newline"
+            )
+
+        self._update_multiline_status()
+
+    def _update_multiline_status(self) -> None:
+        """Update the status bar multiline mode indicator."""
+        label = "[ML]" if self._prefs.display.multiline_default else ""
+        try:
+            self.query_one("#status-ml", Static).update(label)
+        except Exception:
+            pass
+
+    def action_toggle_multiline(self) -> None:
+        """Alt+M action: toggle multiline mode."""
+        self._cmd_multiline("")
 
     # ── /split – side-by-side reference panel ────────────────────────────
 

@@ -290,6 +290,7 @@ display:
   compact_mode: false            # dense layout with reduced spacing
   vim_mode: false                # vim-style keybindings in input area
   streaming_enabled: true        # progressive token streaming (tokens appear as they arrive)
+  multiline_default: false       # start in multiline mode (Enter = newline, Ctrl+Enter = send)
 
 model:
   preferred: ""                   # preferred model for new sessions (empty = use default)
@@ -354,6 +355,7 @@ class DisplayPreferences:
     vim_mode: bool = False
     streaming_enabled: bool = True  # Progressive token streaming display
     editor_auto_send: bool = False  # Auto-send message after external editor closes
+    multiline_default: bool = False  # Start in multiline mode
 
 
 @dataclass
@@ -433,6 +435,8 @@ def load_preferences(path: Path | None = None) -> Preferences:
                     prefs.display.vim_mode = bool(ddata["vim_mode"])
                 if "streaming_enabled" in ddata:
                     prefs.display.streaming_enabled = bool(ddata["streaming_enabled"])
+                if "multiline_default" in ddata:
+                    prefs.display.multiline_default = bool(ddata["multiline_default"])
             if isinstance(data.get("model"), dict):
                 mdata = data["model"]
                 if "preferred" in mdata:
@@ -783,6 +787,49 @@ def save_vim_mode(enabled: bool, path: Path | None = None) -> None:
         else:
             # No display section at all — append it
             text = text.rstrip() + f"\n\ndisplay:\n  vim_mode: {value}\n"
+
+        path.write_text(text)
+    except Exception:
+        pass  # Best-effort persistence
+
+
+def save_multiline_default(enabled: bool, path: Path | None = None) -> None:
+    """Persist the multiline_default display preference to the preferences file.
+
+    Surgically updates only the multiline_default value, preserving the rest of the
+    file (including user comments) as-is.
+    """
+    import re
+
+    path = path or PREFS_PATH
+    try:
+        if path.exists():
+            text = path.read_text()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = _DEFAULT_YAML
+
+        value = "true" if enabled else "false"
+        if re.search(r"^\s+multiline_default:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(\s+multiline_default:).*$",
+                f"\\1 {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        elif re.search(r"^display:", text, re.MULTILINE):
+            # display section exists but no multiline_default key
+            text = re.sub(
+                r"^(display:.*)$",
+                f"\\1\n  multiline_default: {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            # No display section at all — append it
+            text = text.rstrip() + f"\n\ndisplay:\n  multiline_default: {value}\n"
 
         path.write_text(text)
     except Exception:
