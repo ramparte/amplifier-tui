@@ -59,7 +59,7 @@ TOOL_LABELS: dict[str, str] = {
     "task": "Delegating to agent",
     "LSP": "Analyzing code",
     "python_check": "Checking code",
-    "todo": "Updating tasks",
+    "todo": "Planning",
     "recipes": "Running recipe",
     "load_skill": "Loading skill",
 }
@@ -176,6 +176,39 @@ def _get_tool_label(name: str, tool_input: dict | str | None) -> str:
             if len(query) > 20:
                 query = query[:17] + "\u2026"
             base = f"Searching: {query}"
+
+    elif name == "glob":
+        pattern = inp.get("pattern", "")
+        if pattern:
+            if len(pattern) > 20:
+                pattern = pattern[:17] + "\u2026"
+            base = f"Finding: {pattern}"
+
+    elif name == "LSP":
+        op = inp.get("operation", "")
+        if op:
+            base = f"Analyzing: {op}"
+
+    elif name == "python_check":
+        paths = inp.get("paths")
+        if paths and isinstance(paths, list) and paths[0]:
+            short = Path(paths[0]).name
+            base = f"Checking {short}"
+
+    elif name == "load_skill":
+        skill = inp.get("skill_name", "") or inp.get("search", "")
+        if skill:
+            base = f"Loading skill: {skill}"
+
+    elif name == "todo":
+        action = inp.get("action", "")
+        if action:
+            base = f"Planning: {action}"
+
+    elif name == "recipes":
+        op = inp.get("operation", "")
+        if op:
+            base = f"Recipe: {op}"
 
     # Truncate to keep status bar tidy, then add ellipsis
     if len(base) > _MAX_LABEL_LEN:
