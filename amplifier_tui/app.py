@@ -869,7 +869,7 @@ SHORTCUTS_TEXT = """\
   Ctrl+F           Search chat messages
   Ctrl+R           Reverse history search (Ctrl+S fwd)
   Ctrl+G           Open external editor
-  Ctrl+Y           Copy last AI response
+  Ctrl+Y           Copy last AI response (Ctrl+Shift+C also works)
   Ctrl+M           Bookmark last response
   Ctrl+S           Stash/restore draft
 
@@ -901,7 +901,7 @@ SHORTCUTS_TEXT = """\
 
  CHAT & HISTORY ─────────────────────────
   /clear           Clear chat display
-  /copy            Copy response (N/all/code)
+  /copy            Copy response (last/N/all/code)
   /undo [N]        Undo last N exchange(s)
   /redo [N]        Resend last message
   /fold            Fold/unfold long messages
@@ -1088,7 +1088,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/tokens", "Detailed token and context usage breakdown", "/tokens"),
     ("/context", "Visual context window usage bar", "/context"),
     ("/info", "Session details (ID, model, project, counts)", "/info"),
-    ("/copy", "Copy last response (N, all, code)", "/copy"),
+    ("/copy", "Copy last response (last, N, all, code)", "/copy"),
     ("/bookmark", "Bookmark last AI response", "/bookmark"),
     ("/bookmarks", "List or jump to bookmarks", "/bookmarks"),
     ("/ref", "Save a URL or reference", "/ref"),
@@ -1155,7 +1155,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
         "action:open_editor",
     ),
     (
-        "Copy Response  Ctrl+Y",
+        "Copy Response  Ctrl+Y / Ctrl+Shift+C",
         "Copy last AI response to clipboard",
         "action:copy_response",
     ),
@@ -1318,6 +1318,7 @@ class AmplifierChicApp(App):
         Binding("ctrl+g", "open_editor", "Editor", show=True),
         Binding("ctrl+s", "stash_prompt", "Stash", show=True),
         Binding("ctrl+y", "copy_response", "Copy", show=True),
+        Binding("ctrl+shift+c", "copy_response", "Copy", show=False),
         Binding("ctrl+n", "new_session", "New", show=True),
         Binding("f11", "toggle_focus_mode", "Focus", show=False),
         Binding("ctrl+a", "toggle_auto_scroll", "Scroll", show=False),
@@ -3334,8 +3335,9 @@ class AmplifierChicApp(App):
             self._add_system_message("No assistant messages to copy")
             return
         if _copy_to_clipboard(text):
+            preview = self._copy_preview(text)
             self._add_system_message(
-                f"Copied last assistant message ({len(text)} chars)"
+                f"Copied last assistant message ({len(text)} chars)\nPreview: {preview}"
             )
         else:
             self._add_system_message(
@@ -3522,7 +3524,7 @@ class AmplifierChicApp(App):
             "  /tokens       Detailed token / context usage breakdown\n"
             "  /context      Visual context window usage bar\n"
             "  /info         Show session details (ID, model, project, counts)\n"
-            "  /copy         Copy last response | /copy N | /copy all | /copy code\n"
+            "  /copy         Copy last response | /copy last | /copy N | /copy all | /copy code\n"
             "  /bookmark     Bookmark last response (/bm alias, optional label)\n"
             "  /bookmarks    List bookmarks | /bookmarks <N> to jump\n"
             "  /ref          Save a URL/reference (/ref <url> [label], /ref remove/clear/export)\n"
@@ -3583,7 +3585,7 @@ class AmplifierChicApp(App):
             "  Ctrl+F        Search chat messages\n"
             "  Ctrl+R        Reverse search prompt history (Ctrl+S for forward)\n"
             "  Ctrl+G        Open $EDITOR for longer prompts\n"
-            "  Ctrl+Y        Copy last response to clipboard\n"
+            "  Ctrl+Y        Copy last response to clipboard (Ctrl+Shift+C also works)\n"
             "  Ctrl+M        Bookmark last response\n"
             "  Ctrl+S        Stash/restore prompt (stack of 5)\n"
             "  Ctrl+B        Toggle sidebar\n"
@@ -5539,17 +5541,31 @@ class AmplifierChicApp(App):
         else:
             self._set_focus_mode(not self._focus_mode)
 
+    @staticmethod
+    def _copy_preview(content: str, max_len: int = 100) -> str:
+        """Return a short single-line preview of *content*."""
+        preview = content[:max_len].replace("\n", " ")
+        if len(content) > max_len:
+            preview += "..."
+        return preview
+
     def _cmd_copy(self, text: str) -> None:
         """Copy a message to clipboard.
 
         /copy        — last assistant response
-        /copy N      — message N (1-based index)
+        /copy last   — same as /copy (last assistant response)
+        /copy N      — message N from bottom (1 = last message)
         /copy all    — entire conversation
         /copy code   — last code block from any message
         """
         parts = text.strip().split(None, 1)
         arg = parts[1].strip() if len(parts) > 1 else ""
         arg_lower = arg.lower()
+
+        # --- /copy last  (alias for default) ---
+        if arg_lower == "last":
+            arg = ""
+            arg_lower = ""
 
         # --- /copy all ---
         if arg_lower == "all":
@@ -5566,10 +5582,12 @@ class AmplifierChicApp(App):
                 lines.append("")
             full_text = "\n".join(lines)
             if _copy_to_clipboard(full_text):
+                preview = self._copy_preview(full_text)
                 self._add_system_message(
                     f"Copied entire conversation"
                     f" ({len(self._search_messages)} messages,"
-                    f" {len(full_text)} chars)"
+                    f" {len(full_text)} chars)\n"
+                    f"Preview: {preview}"
                 )
             else:
                 self._add_system_message(
@@ -5585,11 +5603,9 @@ class AmplifierChicApp(App):
                 if blocks:
                     code = blocks[-1].strip()
                     if _copy_to_clipboard(code):
-                        preview = code[:60].replace("\n", " ")
-                        if len(code) > 60:
-                            preview += "..."
+                        preview = self._copy_preview(code)
                         self._add_system_message(
-                            f"Copied code block ({len(code)} chars): {preview}"
+                            f"Copied code block ({len(code)} chars)\nPreview: {preview}"
                         )
                     else:
                         self._add_system_message(
@@ -5600,15 +5616,19 @@ class AmplifierChicApp(App):
             self._add_system_message("No code blocks found in conversation")
             return
 
-        # --- /copy N ---
+        # --- /copy N  (1 = last message, 2 = second-to-last, etc.) ---
         if arg and arg.isdigit():
-            # Copy specific message by index (1-based, from /search results)
-            idx = int(arg) - 1
-            if 0 <= idx < len(self._search_messages):
+            n = int(arg)
+            total = len(self._search_messages)
+            idx = total - n  # count from bottom
+            if 0 <= idx < total:
                 role, msg_text, _widget = self._search_messages[idx]
                 if _copy_to_clipboard(msg_text):
+                    preview = self._copy_preview(msg_text)
                     self._add_system_message(
-                        f"Copied message #{arg} [{role}] ({len(msg_text)} chars)"
+                        f"Copied message #{arg} [{role}]"
+                        f" ({len(msg_text)} chars)\n"
+                        f"Preview: {preview}"
                     )
                 else:
                     self._add_system_message(
@@ -5616,7 +5636,6 @@ class AmplifierChicApp(App):
                         " (install xclip or xsel)"
                     )
             else:
-                total = len(self._search_messages)
                 self._add_system_message(
                     f"Message {arg} not found (range: 1-{total})"
                     if total
@@ -5626,7 +5645,12 @@ class AmplifierChicApp(App):
 
         if arg:
             self._add_system_message(
-                "Usage: /copy [all|code|N] — copy response, conversation, or code block"
+                "Usage: /copy [target]\n"
+                "  /copy           Last assistant response\n"
+                "  /copy last      Last assistant response\n"
+                "  /copy all       Entire conversation\n"
+                "  /copy code      Last code block\n"
+                "  /copy N         Message #N from bottom (1 = last)"
             )
             return
 
