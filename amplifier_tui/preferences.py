@@ -61,6 +61,51 @@ THEMES: dict[str, dict[str, str]] = {
         "system_border": "#2aa198",
         "status_bar": "#839496",
     },
+    "monokai": {
+        "user_text": "#f8f8f2",
+        "user_border": "#fd971f",
+        "assistant_text": "#a6e22e",
+        "assistant_border": "#3e3d32",
+        "thinking_text": "#75715e",
+        "thinking_border": "#ae81ff",
+        "thinking_background": "#1e1f1c",
+        "tool_text": "#75715e",
+        "tool_border": "#3e3d32",
+        "tool_background": "#1e1f1c",
+        "system_text": "#66d9ef",
+        "system_border": "#66d9ef",
+        "status_bar": "#a6a6a6",
+    },
+    "nord": {
+        "user_text": "#eceff4",
+        "user_border": "#ebcb8b",
+        "assistant_text": "#a3be8c",
+        "assistant_border": "#3b4252",
+        "thinking_text": "#4c566a",
+        "thinking_border": "#b48ead",
+        "thinking_background": "#242933",
+        "tool_text": "#4c566a",
+        "tool_border": "#3b4252",
+        "tool_background": "#242933",
+        "system_text": "#88c0d0",
+        "system_border": "#88c0d0",
+        "status_bar": "#9aa5b4",
+    },
+    "dracula": {
+        "user_text": "#f8f8f2",
+        "user_border": "#ffb86c",
+        "assistant_text": "#50fa7b",
+        "assistant_border": "#44475a",
+        "thinking_text": "#6272a4",
+        "thinking_border": "#bd93f9",
+        "thinking_background": "#21222c",
+        "tool_text": "#6272a4",
+        "tool_border": "#44475a",
+        "tool_background": "#21222c",
+        "system_text": "#8be9fd",
+        "system_border": "#8be9fd",
+        "status_bar": "#9999bb",
+    },
 }
 
 _DEFAULT_YAML = """\
@@ -142,6 +187,7 @@ class Preferences:
     )
     display: DisplayPreferences = field(default_factory=DisplayPreferences)
     preferred_model: str = ""  # Empty means use default from bundle config
+    theme_name: str = "dark"  # Active theme name (persisted for display)
 
     def apply_theme(self, name: str) -> bool:
         """Apply a built-in theme by name. Returns False if unknown."""
@@ -186,6 +232,10 @@ def load_preferences(path: Path | None = None) -> Preferences:
                 mdata = data["model"]
                 if "preferred" in mdata:
                     prefs.preferred_model = str(mdata["preferred"] or "")
+            if isinstance(data.get("theme"), dict):
+                tdata = data["theme"]
+                if "name" in tdata:
+                    prefs.theme_name = str(tdata["name"] or "dark")
         except Exception:
             pass  # Fall back to defaults on any parse error
     else:
@@ -251,6 +301,50 @@ def save_colors(colors: ColorPreferences, path: Path | None = None) -> None:
                     count=1,
                     flags=re.MULTILINE,
                 )
+
+        path.write_text(text)
+    except Exception:
+        pass  # Best-effort persistence
+
+
+def save_theme_name(name: str, path: Path | None = None) -> None:
+    """Persist the active theme name to the preferences file.
+
+    Surgically updates only the theme/name value, preserving the rest of the
+    file (including user comments) as-is.
+    """
+    import re
+
+    path = path or PREFS_PATH
+    try:
+        if path.exists():
+            text = path.read_text()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = _DEFAULT_YAML
+
+        value = f'"{name}"'
+        if re.search(r"^\s+name:", text, re.MULTILINE):
+            # theme/name key exists — update it
+            text = re.sub(
+                r"^(\s+name:).*$",
+                f"\\1 {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        elif re.search(r"^theme:", text, re.MULTILINE):
+            # theme section exists but no name key
+            text = re.sub(
+                r"^(theme:.*)$",
+                f"\\1\n  name: {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            # No theme section at all — append it
+            text = text.rstrip() + f"\n\ntheme:\n  name: {value}\n"
 
         path.write_text(text)
     except Exception:

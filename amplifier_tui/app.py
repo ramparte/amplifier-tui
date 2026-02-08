@@ -39,6 +39,7 @@ from .preferences import (
     save_notification_sound,
     save_preferred_model,
     save_show_timestamps,
+    save_theme_name,
 )
 from .theme import CHIC_THEME
 
@@ -1310,7 +1311,7 @@ class AmplifierChicApp(App):
             "  /sound        Toggle notification sound (/sound on, /sound off)\n"
             "  /scroll       Toggle auto-scroll on/off\n"
             "  /timestamps   Toggle message timestamps on/off\n"
-            "  /theme        Switch color theme (dark, light, solarized)\n"
+            "  /theme        Switch color theme (dark, light, solarized, monokai, nord, dracula)\n"
             "  /colors       View/set colors (/colors reset, /colors <key> <#hex>)\n"
             "  /focus        Toggle focus mode (hide chrome)\n"
             "  /search       Search chat messages (e.g. /search my query)\n"
@@ -1689,10 +1690,15 @@ class AmplifierChicApp(App):
         available = ", ".join(THEMES)
 
         if len(parts) < 2:
-            # No argument: show current theme info
-            self._add_system_message(
-                f"Available themes: {available}\nUsage: /theme <name>"
-            )
+            # No argument: show current theme and list available
+            current = self._prefs.theme_name
+            lines = [
+                f"Current theme: {current}",
+                f"Available: {available}",
+                "",
+                "Usage: /theme <name>",
+            ]
+            self._add_system_message("\n".join(lines))
             return
 
         name = parts[1].strip().lower()
@@ -1700,6 +1706,9 @@ class AmplifierChicApp(App):
             self._add_system_message(f"Unknown theme: {name}\nAvailable: {available}")
             return
 
+        self._prefs.theme_name = name
+        save_colors(self._prefs.colors)
+        save_theme_name(name)
         self._apply_theme_to_all_widgets()
         self._add_system_message(f"Theme switched to '{name}'.")
 
