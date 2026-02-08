@@ -95,6 +95,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/search",
     "/colors",
     "/pin",
+    "/draft",
 )
 
 
@@ -429,6 +430,7 @@ SHORTCUTS_TEXT = """\
   /timestamps Toggle timestamps
   /keys       This overlay
   /search     Search chat messages
+  /draft      Show/save/clear input draft
   /compact    Clear chat, keep session
   /quit       Quit
 
@@ -522,6 +524,7 @@ class AmplifierChicApp(App):
     SESSION_NAMES_FILE = Path.home() / ".amplifier" / "tui-session-names.json"
     BOOKMARKS_FILE = Path.home() / ".amplifier" / "tui-bookmarks.json"
     PINNED_SESSIONS_FILE = Path.home() / ".amplifier" / "tui-pinned-sessions.json"
+    DRAFTS_FILE = Path.home() / ".amplifier" / "tui-drafts.json"
 
     BINDINGS = [
         Binding("f1", "show_shortcuts", "Help", show=True),
@@ -645,6 +648,9 @@ class AmplifierChicApp(App):
         # Load pinned sessions
         self._pinned_sessions = self._load_pinned_sessions()
 
+        # Periodic draft auto-save in case of crash
+        self.set_interval(30, self._auto_save_draft)
+
         # Heavy import in background
         self._init_amplifier_worker()
 
@@ -750,6 +756,82 @@ class AmplifierChicApp(App):
         if session_id in self._pinned_sessions:
             self._pinned_sessions.discard(session_id)
             self._save_pinned_sessions()
+
+    # ── Drafts ────────────────────────────────────────────────
+
+    def _load_drafts(self) -> dict[str, str]:
+        """Load all drafts from the JSON file."""
+        try:
+            if self.DRAFTS_FILE.exists():
+                return json.loads(self.DRAFTS_FILE.read_text())
+        except Exception:
+            pass
+        return {}
+
+    def _save_draft(self) -> None:
+        """Save current input as draft for active session."""
+        try:
+            session_id = self._get_session_id()
+            if not session_id:
+                return
+
+            input_widget = self.query_one("#chat-input", ChatInput)
+            text = input_widget.text.strip()
+
+            drafts = self._load_drafts()
+
+            if text:
+                drafts[session_id] = text
+            elif session_id in drafts:
+                del drafts[session_id]
+            else:
+                return  # Nothing to save or clear
+
+            self.DRAFTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self.DRAFTS_FILE.write_text(json.dumps(drafts, indent=2))
+        except Exception:
+            pass
+
+    def _restore_draft(self) -> None:
+        """Restore draft for current session if one exists."""
+        try:
+            session_id = self._get_session_id()
+            if not session_id:
+                return
+
+            drafts = self._load_drafts()
+            draft_text = drafts.get(session_id, "")
+
+            if draft_text:
+                input_widget = self.query_one("#chat-input", ChatInput)
+                input_widget.clear()
+                input_widget.insert(draft_text)
+                self._add_system_message(f"Draft restored ({len(draft_text)} chars)")
+        except Exception:
+            pass
+
+    def _clear_draft(self) -> None:
+        """Remove draft for current session."""
+        try:
+            session_id = self._get_session_id()
+            if not session_id:
+                return
+            drafts = self._load_drafts()
+            if session_id in drafts:
+                del drafts[session_id]
+                self.DRAFTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+                self.DRAFTS_FILE.write_text(json.dumps(drafts, indent=2))
+        except Exception:
+            pass
+
+    def _auto_save_draft(self) -> None:
+        """Periodic auto-save of input draft (called by timer)."""
+        try:
+            input_widget = self.query_one("#chat-input", ChatInput)
+            if input_widget.text.strip():
+                self._save_draft()
+        except Exception:
+            pass
 
     # ── Bookmarks ─────────────────────────────────────────────
 
@@ -1040,6 +1122,8 @@ class AmplifierChicApp(App):
             session_id = node.parent.data
         if session_id is None:
             return
+        # Save draft for current session before switching
+        self._save_draft()
         # Don't close sidebar - let user close it manually with Ctrl+B
         self._resume_session_worker(session_id)
 
@@ -1084,6 +1168,9 @@ class AmplifierChicApp(App):
         was created in a worker thread with its own asyncio event loop.
         Running async cleanup on Textual's main loop fails silently.
         """
+        # Save any in-progress draft before exiting
+        self._save_draft()
+
         if self.session_manager and getattr(self.session_manager, "session", None):
             self._update_status("Saving session...")
             try:
@@ -1102,6 +1189,8 @@ class AmplifierChicApp(App):
         """Start a fresh session."""
         if self.is_processing:
             return
+        # Save draft for current session before starting new one
+        self._save_draft()
         # End the current session cleanly before starting a new one
         if self.session_manager and hasattr(self.session_manager, "end_session"):
             self._end_and_reset_session()
@@ -1338,6 +1427,7 @@ class AmplifierChicApp(App):
             return
 
         input_widget.clear()
+        self._clear_draft()
 
         self._clear_welcome()
         self._add_user_message(text)
@@ -1384,6 +1474,7 @@ class AmplifierChicApp(App):
             "/search": lambda: self._cmd_search(text),
             "/colors": lambda: self._cmd_colors(text),
             "/pin": lambda: self._cmd_pin(text),
+            "/draft": lambda: self._cmd_draft(text),
         }
 
         handler = handlers.get(cmd)
@@ -1420,6 +1511,7 @@ class AmplifierChicApp(App):
             "  /colors       View/set colors (/colors reset, /colors <key> <#hex>)\n"
             "  /focus        Toggle focus mode (hide chrome)\n"
             "  /search       Search chat messages (e.g. /search my query)\n"
+            "  /draft        Show/save/clear input draft (/draft save, /draft clear)\n"
             "  /compact      Clear chat, keep session\n"
             "  /keys         Keyboard shortcut overlay\n"
             "  /quit         Quit\n"
@@ -1443,6 +1535,34 @@ class AmplifierChicApp(App):
             "  Ctrl+Q        Quit"
         )
         self._add_system_message(help_text)
+
+    def _cmd_draft(self, text: str) -> None:
+        """Show, save, or clear the input draft for this session."""
+        parts = text.strip().split(None, 1)
+        arg = parts[1].strip().lower() if len(parts) > 1 else ""
+
+        if arg == "clear":
+            self._clear_draft()
+            self._add_system_message("Draft cleared")
+            return
+
+        if arg == "save":
+            self._save_draft()
+            self._add_system_message("Draft saved")
+            return
+
+        # Show current draft status
+        session_id = self._get_session_id()
+        drafts = self._load_drafts()
+        if session_id and session_id in drafts:
+            draft = drafts[session_id]
+            preview = draft[:80].replace("\n", " ")
+            suffix = "..." if len(draft) > 80 else ""
+            self._add_system_message(
+                f"Saved draft ({len(draft)} chars): {preview}{suffix}"
+            )
+        else:
+            self._add_system_message("No draft saved for this session")
 
     def _cmd_clear(self) -> None:
         self.action_clear_chat()
@@ -2131,9 +2251,18 @@ class AmplifierChicApp(App):
             s for s in self._session_list_data if s["session_id"] != session_id
         ]
 
-        # Remove custom name and pin state if any
+        # Remove custom name, pin state, and draft if any
         self._remove_session_name(session_id)
         self._remove_pinned_session(session_id)
+        # Clean up draft for deleted session
+        try:
+            drafts = self._load_drafts()
+            if session_id in drafts:
+                del drafts[session_id]
+                self.DRAFTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+                self.DRAFTS_FILE.write_text(json.dumps(drafts, indent=2))
+        except Exception:
+            pass
 
         # Refresh sidebar
         if self._session_list_data:
@@ -3041,6 +3170,10 @@ class AmplifierChicApp(App):
             self.call_from_thread(self._update_session_display)
             self.call_from_thread(self._update_token_display)
             self.call_from_thread(self._update_status, "Ready")
+
+            # Restore any saved draft for this session
+            if not self.initial_prompt:
+                self.call_from_thread(self._restore_draft)
 
             # Handle initial prompt if provided
             if self.initial_prompt:
