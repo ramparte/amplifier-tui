@@ -782,6 +782,8 @@ class AmplifierChicApp(App):
         self._user_words: int = 0
         self._assistant_words: int = 0
         self._session_start_time: float = time.monotonic()
+        self._response_times: list[float] = []
+        self._tool_usage: dict[str, int] = {}
 
         # Custom command aliases
         self._aliases: dict[str, str] = {}
@@ -1697,6 +1699,8 @@ class AmplifierChicApp(App):
         self._tool_call_count = 0
         self._user_words = 0
         self._assistant_words = 0
+        self._response_times = []
+        self._tool_usage = {}
         self._assistant_msg_index = 0
         self._last_assistant_widget = None
         self._session_bookmarks = []
@@ -1715,6 +1719,8 @@ class AmplifierChicApp(App):
         self._tool_call_count = 0
         self._user_words = 0
         self._assistant_words = 0
+        self._response_times = []
+        self._tool_usage = {}
         self._search_messages = []
         self._update_word_count_display()
 
@@ -2995,18 +3001,20 @@ class AmplifierChicApp(App):
 
     def _cmd_stats(self) -> None:
         """Show session statistics."""
-        # Duration
+        fmt = self._format_token_count
+
+        # --- Duration ---
         elapsed = time.monotonic() - self._session_start_time
         if elapsed < 60:
-            duration = f"{int(elapsed)} seconds"
+            duration = f"{int(elapsed)}s"
         elif elapsed < 3600:
-            duration = f"{int(elapsed / 60)} minutes"
+            duration = f"{int(elapsed / 60)}m"
         else:
             hours = int(elapsed / 3600)
             mins = int((elapsed % 3600) / 60)
             duration = f"{hours}h {mins}m"
 
-        # Session ID
+        # --- Session / model ---
         session_id = "none"
         model = "unknown"
         if self.session_manager:
@@ -3014,40 +3022,74 @@ class AmplifierChicApp(App):
             session_id = sid[:12] if sid else "none"
             model = getattr(self.session_manager, "model_name", None) or "unknown"
 
-        # Word counts formatted
+        # --- Message counts ---
+        total_msgs = self._user_message_count + self._assistant_message_count
+
+        # --- Word counts ---
+        user_w = self._format_count(self._user_words)
+        asst_w = self._format_count(self._assistant_words)
+
+        # --- Token estimates (words * 1.3) ---
         total_words = self._user_words + self._assistant_words
-        if total_words >= 1000:
-            total_str = f"{total_words / 1000:.1f}k"
-        else:
-            total_str = str(total_words)
-        if self._user_words >= 1000:
-            user_str = f"{self._user_words / 1000:.1f}k"
-        else:
-            user_str = str(self._user_words)
-        if self._assistant_words >= 1000:
-            asst_str = f"{self._assistant_words / 1000:.1f}k"
-        else:
-            asst_str = str(self._assistant_words)
-
         est_tokens = int(total_words * 1.3)
-        if est_tokens >= 1000:
-            token_str = f"{est_tokens / 1000:.1f}k"
-        else:
-            token_str = str(est_tokens)
 
-        stats = (
-            "Session Statistics\n"
-            "──────────────────\n"
-            f"Session:    {session_id}\n"
-            f"Duration:   {duration}\n"
-            f"Messages:   {self._user_message_count} user · "
-            f"{self._assistant_message_count} assistant\n"
-            f"Tool calls: {self._tool_call_count}\n"
-            f"Words:      {total_str} (user: {user_str} · assistant: {asst_str})\n"
-            f"Est tokens: ~{token_str}\n"
-            f"Model:      {model}"
-        )
-        self._add_system_message(stats)
+        # --- Build output ---
+        lines: list[str] = [
+            "Session Statistics",
+            "─" * 40,
+            f"  Session:         {session_id}",
+            f"  Model:           {model}",
+            f"  Duration:        {duration}",
+            "",
+            f"  Messages:        {total_msgs} total",
+            f"    You:           {self._user_message_count} ({user_w} words)",
+            f"    AI:            {self._assistant_message_count} ({asst_w} words)",
+            f"    Tool calls:    {self._tool_call_count}",
+            "",
+            f"  Est. tokens:     ~{fmt(est_tokens)}",
+        ]
+
+        # Real API token data from session manager
+        sm = self.session_manager
+        if sm:
+            inp_tok = getattr(sm, "total_input_tokens", 0) or 0
+            out_tok = getattr(sm, "total_output_tokens", 0) or 0
+            if inp_tok or out_tok:
+                lines.append(
+                    f"  API tokens:      {fmt(inp_tok)} in / {fmt(out_tok)} out"
+                )
+
+        # --- Response times ---
+        if self._response_times:
+            times = self._response_times
+            avg_t = sum(times) / len(times)
+            min_t = min(times)
+            max_t = max(times)
+            lines.append("")
+            lines.append(f"  Response times:  {len(times)} requests")
+            lines.append(f"    Avg:           {avg_t:.1f}s")
+            lines.append(f"    Min:           {min_t:.1f}s")
+            lines.append(f"    Max:           {max_t:.1f}s")
+
+        # --- Top tools ---
+        if self._tool_usage:
+            lines.append("")
+            lines.append("  Top tools:")
+            sorted_tools = sorted(self._tool_usage.items(), key=lambda x: -x[1])
+            for name, count in sorted_tools[:5]:
+                label = TOOL_LABELS.get(name, name)
+                lines.append(f"    {label:<20s} {count}")
+
+        self._add_system_message("\n".join(lines))
+
+    @staticmethod
+    def _format_count(n: int) -> str:
+        """Format a count with k/M suffix: 1234 -> '1.2k'."""
+        if n >= 1_000_000:
+            return f"{n / 1_000_000:.1f}M"
+        if n >= 1_000:
+            return f"{n / 1_000:.1f}k"
+        return str(n)
 
     def _cmd_info(self) -> None:
         """Show comprehensive session information."""
@@ -3954,6 +3996,7 @@ class AmplifierChicApp(App):
         result: str = "",
     ) -> None:
         self._tool_call_count += 1
+        self._tool_usage[tool_name] = self._tool_usage.get(tool_name, 0) + 1
         chat_view = self.query_one("#chat-view", ScrollableContainer)
 
         detail_parts: list[str] = []
@@ -4046,6 +4089,7 @@ class AmplifierChicApp(App):
         if self._processing_start_time is not None:
             elapsed = time.monotonic() - self._processing_start_time
             self._processing_start_time = None
+            self._response_times.append(elapsed)
         self._maybe_send_notification(elapsed)
         self._notify_sound(elapsed)
 
@@ -4594,6 +4638,8 @@ class AmplifierChicApp(App):
         self._tool_call_count = 0
         self._user_words = 0
         self._assistant_words = 0
+        self._response_times = []
+        self._tool_usage = {}
         self._assistant_msg_index = 0
         self._last_assistant_widget = None
         self._session_start_time = time.monotonic()
