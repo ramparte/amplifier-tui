@@ -181,6 +181,42 @@ THEMES: dict[str, dict[str, str]] = {
         "timestamp": "#6272a4",
         "status_bar": "#9999bb",
     },
+    "gruvbox": {
+        "user_text": "#ebdbb2",
+        "user_border": "#d65d0e",
+        "assistant_text": "#b8bb26",
+        "assistant_border": "#3c3836",
+        "thinking_text": "#665c54",
+        "thinking_border": "#b16286",
+        "thinking_background": "#1d2021",
+        "tool_text": "#665c54",
+        "tool_border": "#3c3836",
+        "tool_background": "#1d2021",
+        "system_text": "#83a598",
+        "system_border": "#83a598",
+        "error_text": "#fb4934",
+        "error_border": "#fb4934",
+        "timestamp": "#665c54",
+        "status_bar": "#a89984",
+    },
+    "catppuccin": {
+        "user_text": "#cdd6f4",
+        "user_border": "#fab387",
+        "assistant_text": "#a6e3a1",
+        "assistant_border": "#313244",
+        "thinking_text": "#585b70",
+        "thinking_border": "#cba6f7",
+        "thinking_background": "#181825",
+        "tool_text": "#585b70",
+        "tool_border": "#313244",
+        "tool_background": "#181825",
+        "system_text": "#89dceb",
+        "system_border": "#89dceb",
+        "error_text": "#f38ba8",
+        "error_border": "#f38ba8",
+        "timestamp": "#585b70",
+        "status_bar": "#9399b2",
+    },
 }
 
 # Human-readable descriptions for each theme (displayed by /theme).
@@ -192,6 +228,8 @@ THEME_DESCRIPTIONS: dict[str, str] = {
     "high-contrast": "Maximum readability",
     "nord": "Arctic, north-bluish",
     "dracula": "Dark theme with vibrant colors",
+    "gruvbox": "Retro groove, warm earthy tones",
+    "catppuccin": "Soothing pastel (Mocha)",
 }
 
 _DEFAULT_YAML = """\

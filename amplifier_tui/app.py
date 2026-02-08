@@ -896,7 +896,7 @@ SHORTCUTS_TEXT = """\
 
  MODEL & DISPLAY ───────────────────────
   /model [name]    View/switch AI model
-  /theme [name]    Switch color theme
+  /theme [name]    Switch color theme (/theme preview)
   /colors          View/set custom colors
   /wrap            Toggle word wrap
   /timestamps      Toggle timestamps
@@ -3329,7 +3329,7 @@ class AmplifierChicApp(App):
             "  /timestamps   Toggle message timestamps on/off\n"
             "  /wrap         Toggle word wrap on/off (/wrap on, /wrap off)\n"
             "  /fold         Fold/unfold long messages (/fold all, /fold none, /fold <n>)\n"
-            "  /theme        Switch color theme (dark, light, solarized, monokai, nord, dracula)\n"
+            "  /theme        Switch color theme (/theme preview for swatches)\n"
             "  /colors       View/set colors (/colors <role> <#hex>, /colors reset)\n"
             "  /focus        Toggle focus mode (/focus on, /focus off)\n"
             "  /search       Search chat messages (e.g. /search my query)\n"
@@ -6208,6 +6208,11 @@ class AmplifierChicApp(App):
             return
 
         name = parts[1].strip().lower()
+
+        if name == "preview":
+            self._cmd_theme_preview()
+            return
+
         if not self._prefs.apply_theme(name):
             available = ", ".join(THEMES)
             self._add_system_message(f"Unknown theme: {name}\nAvailable: {available}")
@@ -6227,6 +6232,29 @@ class AmplifierChicApp(App):
         self._add_system_message(
             f"Theme: {name} — {desc}" if desc else f"Theme: {name}"
         )
+
+    def _cmd_theme_preview(self) -> None:
+        """Show all themes with color swatches."""
+        current = self._prefs.theme_name
+        lines = ["Theme Preview:\n"]
+        for name, colors in THEMES.items():
+            active = " (active)" if name == current else ""
+            desc = THEME_DESCRIPTIONS.get(name, "")
+            # Build swatches for the key color roles
+            user_sw = f"[{colors['user_text']}]\u2588\u2588\u2588\u2588[/]"
+            asst_sw = f"[{colors['assistant_text']}]\u2588\u2588\u2588\u2588[/]"
+            sys_sw = f"[{colors['system_text']}]\u2588\u2588\u2588\u2588[/]"
+            border_sw = f"[{colors['user_border']}]\u2588\u2588[/]"
+            think_sw = f"[{colors['thinking_border']}]\u2588\u2588[/]"
+            lines.append(
+                f"  {name:<14}{active:>9}  "
+                f"{user_sw} {asst_sw} {sys_sw} {border_sw} {think_sw}"
+                f"  {desc}"
+            )
+        lines.append("")
+        lines.append("  Swatches: user  assistant  system  border  thinking")
+        lines.append("  Apply: /theme <name>")
+        self._add_system_message("\n".join(lines))
 
     def _apply_theme_to_all_widgets(self) -> None:
         """Re-style every visible chat widget with the current theme colors."""

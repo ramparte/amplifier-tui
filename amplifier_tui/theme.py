@@ -102,6 +102,32 @@ TEXTUAL_THEMES: dict[str, Theme] = {
         error="#ff5555",
         dark=True,
     ),
+    "gruvbox": Theme(
+        name="chic-gruvbox",
+        primary="#d65d0e",
+        secondary="#689d6a",
+        accent="#b16286",
+        background="#282828",
+        surface="#3c3836",
+        panel="#504945",
+        success="#98971a",
+        warning="#d79921",
+        error="#cc241d",
+        dark=True,
+    ),
+    "catppuccin": Theme(
+        name="chic-catppuccin",
+        primary="#fab387",
+        secondary="#89b4fa",
+        accent="#cba6f7",
+        background="#1e1e2e",
+        surface="#313244",
+        panel="#45475a",
+        success="#a6e3a1",
+        warning="#f9e2af",
+        error="#f38ba8",
+        dark=True,
+    ),
 }
 
 # Backward-compat alias: the default theme object used before multi-theme support.
