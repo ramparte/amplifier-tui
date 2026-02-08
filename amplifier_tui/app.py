@@ -351,6 +351,7 @@ class AmplifierChicApp(App):
                     tab_behavior="focus",
                     compact=True,
                 )
+                yield Static("", id="input-counter")
                 with Horizontal(id="status-bar"):
                     yield Static("No session", id="status-session")
                     yield Static("Ready", id="status-state")
@@ -521,6 +522,37 @@ class AmplifierChicApp(App):
         """Filter the session tree as the user types in the filter input."""
         if event.input.id == "session-filter":
             self._filter_sessions(event.value)
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        """Update the input counter when the chat input changes."""
+        if event.text_area.id == "chat-input":
+            self._update_input_counter(event.text_area.text)
+
+    def _update_input_counter(self, text: str) -> None:
+        """Update the character/line counter below the chat input."""
+        try:
+            counter = self.query_one("#input-counter", Static)
+        except Exception:
+            return
+
+        if not text.strip():
+            counter.update("")
+            counter.display = False
+            return
+
+        chars = len(text)
+        lines = text.count("\n") + 1
+
+        if chars >= 1000:
+            char_str = f"{chars / 1000:.1f}k chars"
+        else:
+            char_str = f"{chars} chars"
+
+        if lines > 1:
+            counter.update(f"{lines} lines \u00b7 {char_str}")
+        else:
+            counter.update(char_str)
+        counter.display = True
 
     def on_key(self, event) -> None:
         """Handle Escape: exit focus mode, or clear session filter."""

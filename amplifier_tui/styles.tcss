@@ -261,6 +261,17 @@ CollapsibleTitle:hover {
     color: $text-muted;
 }
 
+/* -- Input character counter --------------------------- */
+
+#input-counter {
+    height: 1;
+    color: $text-muted;
+    text-align: right;
+    width: 100%;
+    margin: 0 2 0 0;
+    padding: 0 1;
+}
+
 /* -- Status bar --------------------------------------- */
 
 #status-bar {
