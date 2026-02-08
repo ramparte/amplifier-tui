@@ -351,6 +351,12 @@ CollapsibleTitle:hover {
     margin: 0 1;
 }
 
+#status-context {
+    width: auto;
+    color: $text-muted;
+    margin: 0 1;
+}
+
 #status-model {
     width: auto;
     color: $text-muted;

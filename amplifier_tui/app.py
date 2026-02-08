@@ -869,6 +869,7 @@ class AmplifierChicApp(App):
                     yield Static("", id="status-stash")
                     yield Static("\u2195 ON", id="status-scroll")
                     yield Static("0 words", id="status-wordcount")
+                    yield Static("", id="status-context")
                     yield Static("", id="status-model")
 
     async def on_mount(self) -> None:
@@ -4859,6 +4860,31 @@ class AmplifierChicApp(App):
                 widget.styles.color = "#ffaa00"  # yellow
             else:
                 widget.styles.color = "#44aa44"  # green
+
+            # Update the context fuel gauge indicator
+            ctx_pct = pct  # use API-derived percentage first
+            if ctx_pct == 0.0 and self._search_messages:
+                # Fallback: estimate tokens from message content
+                est_tokens = sum(
+                    len(content) // 4 for _role, content, _w in self._search_messages
+                )
+                if est_tokens > 0:
+                    ctx_window = self._get_context_window()
+                    ctx_pct = min(100.0, est_tokens / ctx_window * 100)
+
+            ctx_widget = self.query_one("#status-context", Static)
+            if ctx_pct > 0:
+                filled = int(ctx_pct / 20)  # 5 positions, each = 20%
+                bar = "\u2593" * filled + "\u2591" * (5 - filled)
+                ctx_widget.update(f"ctx:{bar} {ctx_pct:.0f}%")
+                if ctx_pct > 75:
+                    ctx_widget.styles.color = "#ff4444"  # red
+                elif ctx_pct > 50:
+                    ctx_widget.styles.color = "#ffaa00"  # yellow
+                else:
+                    ctx_widget.styles.color = "#44aa44"  # green
+            else:
+                ctx_widget.update("")
         except Exception:
             pass
 
