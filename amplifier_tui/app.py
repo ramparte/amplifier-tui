@@ -1238,6 +1238,7 @@ SHORTCUTS_TEXT = """\
  EXPORT & DATA ─────────────────────────
   /export          Export chat (md/html/json/txt)
   /diff            Show git diff (color-coded)
+  /diff msgs       Compare last two assistant messages (or /diff msgs N M)
   /git             Quick git operations (status/log/diff/branch/stash/blame)
   /watch           Watch files for changes
   /run <cmd>       Run shell command inline (/! shorthand)
@@ -1472,6 +1473,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/grep", "Search chat with regex", "/grep"),
     ("/find", "Interactive find-in-chat (Ctrl+F)", "/find"),
     ("/diff", "Show git diff (staged, all, file)", "/diff"),
+    ("/diff msgs", "Compare assistant messages (last two, or N M)", "/diff msgs"),
     ("/git", "Quick git info (status, log, diff, branch, stash, blame)", "/git"),
     ("/watch", "Watch files for changes", "/watch"),
     ("/sort", "Sort sessions (date, name, project)", "/sort"),
@@ -4621,6 +4623,7 @@ class AmplifierChicApp(App):
             "  /search       Search chat messages (e.g. /search my query)\n"
             "  /grep         Search with options (/grep <pattern>, /grep -c <pattern> for case-sensitive)\n"
             "  /diff         Show git diff (/diff staged|all|last|<file>|<f1> <f2>|HEAD~N)\n"
+            "  /diff msgs    Compare assistant messages (/diff msgs, /diff msgs N M)\n"
             "  /git          Quick git operations (/git status|log|diff|branch|stash|blame)\n"
             "  /watch        Watch files for changes (/watch <path>, stop, diff)\n"
             "  /sort         Sort sessions: date, name, project (/sort <mode>)\n"
@@ -7334,7 +7337,7 @@ class AmplifierChicApp(App):
     # ------------------------------------------------------------------
 
     def _cmd_diff(self, text: str) -> None:
-        """Show git diff with color-coded output.
+        """Show git diff with color-coded output, or compare messages.
 
         /diff              Unstaged changes (or file summary when clean)
         /diff staged       Staged changes
@@ -7344,8 +7347,16 @@ class AmplifierChicApp(App):
         /diff <f1> <f2>    Compare two files
         /diff HEAD~N       Changes since N commits ago
         /diff <commit>     Changes since a commit
+        /diff msgs         Diff last two assistant messages
+        /diff msgs N M     Diff message N vs M (from bottom, 1-based)
+        /diff msgs last    Same as /diff msgs
         """
         text = text.strip()
+
+        # --- /diff msgs ... -> message comparison ---
+        if text == "msgs" or text.startswith("msgs "):
+            self._cmd_diff_msgs(text[4:].strip())
+            return
 
         # Check if we're inside a git repo
         ok, _ = self._run_git("rev-parse", "--is-inside-work-tree")
@@ -7458,6 +7469,119 @@ class AmplifierChicApp(App):
                 self._add_system_message(f"No changes for '{text}'")
                 return
         self._show_diff(output)
+
+    # ------------------------------------------------------------------
+    # /diff msgs  – compare two chat messages
+    # ------------------------------------------------------------------
+
+    def _cmd_diff_msgs(self, text: str) -> None:
+        """Compare two chat messages side-by-side (unified diff).
+
+        /diff msgs          Last two assistant messages
+        /diff msgs last     Same as above
+        /diff msgs N M      Message N vs M (from bottom, 1-based)
+        """
+        from rich.markup import escape
+
+        # Collect non-system messages for indexing
+        messages = [
+            (role, content)
+            for role, content, _ in self._search_messages
+            if role in ("user", "assistant")
+        ]
+
+        if len(messages) < 2:
+            self._add_system_message("Need at least 2 messages to diff")
+            return
+
+        # Parse arguments
+        if not text or text == "last":
+            # Diff last two assistant messages
+            assistant_msgs = [(r, c) for r, c in messages if r == "assistant"]
+            if len(assistant_msgs) < 2:
+                self._add_system_message("Need at least 2 assistant messages to diff")
+                return
+            msg_a = assistant_msgs[-2][1]
+            msg_b = assistant_msgs[-1][1]
+            label_a = "Previous response"
+            label_b = "Latest response"
+        else:
+            parts = text.split()
+            if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                n, m = int(parts[0]), int(parts[1])
+                total = len(messages)
+                if n < 1 or n > total or m < 1 or m > total:
+                    self._add_system_message(
+                        f"Message numbers must be 1\u2013{total} (from bottom)"
+                    )
+                    return
+                if n == m:
+                    self._add_system_message("Messages are identical (same index)")
+                    return
+                msg_a = messages[-n][1]
+                msg_b = messages[-m][1]
+                role_a = messages[-n][0]
+                role_b = messages[-m][0]
+                label_a = f"Message #{n} from bottom ({role_a})"
+                label_b = f"Message #{m} from bottom ({role_b})"
+            else:
+                self._add_system_message("Usage: /diff msgs [N M | last]")
+                return
+
+        # Generate unified diff
+        lines_a = msg_a.splitlines(keepends=True)
+        lines_b = msg_b.splitlines(keepends=True)
+
+        diff = list(
+            difflib.unified_diff(
+                lines_a,
+                lines_b,
+                fromfile=label_a,
+                tofile=label_b,
+                n=3,
+            )
+        )
+
+        if not diff:
+            self._add_system_message("Messages are identical")
+            return
+
+        # Count changes
+        additions = sum(
+            1 for ln in diff if ln.startswith("+") and not ln.startswith("+++")
+        )
+        deletions = sum(
+            1 for ln in diff if ln.startswith("-") and not ln.startswith("---")
+        )
+
+        # Format with Rich markup colors
+        formatted: list[str] = []
+        for line in diff:
+            line = line.rstrip("\n")
+            escaped = escape(line)
+            if line.startswith("+++") or line.startswith("---"):
+                formatted.append(f"[bold]{escaped}[/bold]")
+            elif line.startswith("+"):
+                formatted.append(f"[green]{escaped}[/green]")
+            elif line.startswith("-"):
+                formatted.append(f"[red]{escaped}[/red]")
+            elif line.startswith("@@"):
+                formatted.append(f"[cyan]{escaped}[/cyan]")
+            else:
+                formatted.append(escaped)
+
+        # Truncate very long diffs
+        max_lines = 200
+        truncated = len(formatted) > max_lines
+        if truncated:
+            remaining = len(formatted) - max_lines
+            formatted = formatted[:max_lines]
+            formatted.append(f"\n... and {remaining} more lines (diff truncated)")
+
+        summary = f"\n\n{additions} addition(s), {deletions} deletion(s)"
+        result = "\n".join(formatted) + summary
+
+        self._add_system_message(f"Message diff:\n{result}")
 
     def _cmd_focus(self, text: str = "") -> None:
         """Toggle focus mode via slash command.
