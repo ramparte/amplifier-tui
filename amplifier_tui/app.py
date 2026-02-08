@@ -36,6 +36,7 @@ from .preferences import (
     THEMES,
     load_preferences,
     save_colors,
+    save_notification_sound,
     save_preferred_model,
 )
 from .theme import CHIC_THEME
@@ -316,6 +317,7 @@ SHORTCUTS_TEXT = """\
   /scroll     Toggle auto-scroll
   /focus      Focus mode
   /notify     Toggle notifications
+  /sound      Toggle notification sound
   /timestamps Toggle timestamps
   /keys       This overlay
   /search     Search chat messages
@@ -1188,6 +1190,7 @@ class AmplifierChicApp(App):
             "/compact": self._cmd_compact,
             "/copy": lambda: self._cmd_copy(text),
             "/notify": self._cmd_notify,
+            "/sound": lambda: self._cmd_sound(text),
             "/scroll": self._cmd_scroll,
             "/timestamps": self._cmd_timestamps,
             "/keys": self._cmd_keys,
@@ -1229,6 +1232,7 @@ class AmplifierChicApp(App):
             "  /delete       Delete session (with confirmation)\n"
             "  /export       Export session to markdown file\n"
             "  /notify       Toggle completion notifications\n"
+            "  /sound        Toggle notification sound (/sound on, /sound off)\n"
             "  /scroll       Toggle auto-scroll on/off\n"
             "  /timestamps   Toggle message timestamps on/off\n"
             "  /theme        Switch color theme (dark, light, solarized)\n"
@@ -1512,6 +1516,27 @@ class AmplifierChicApp(App):
         self._add_system_message(
             f"Notifications {state} (notify after {nprefs.min_seconds:.0f}s)"
         )
+
+    def _cmd_sound(self, text: str) -> None:
+        """Toggle notification sound on/off, or set explicitly."""
+        arg = text.partition(" ")[2].strip().lower() if " " in text else ""
+
+        if arg == "on":
+            self._prefs.notifications.sound_enabled = True
+        elif arg == "off":
+            self._prefs.notifications.sound_enabled = False
+        elif not arg:
+            # Toggle
+            self._prefs.notifications.sound_enabled = (
+                not self._prefs.notifications.sound_enabled
+            )
+        else:
+            self._add_system_message("Usage: /sound [on|off]")
+            return
+
+        save_notification_sound(self._prefs.notifications.sound_enabled)
+        state = "on" if self._prefs.notifications.sound_enabled else "off"
+        self._add_system_message(f"Notification sound: {state}")
 
     def _cmd_timestamps(self) -> None:
         """Toggle message timestamps on/off."""
@@ -2330,6 +2355,7 @@ class AmplifierChicApp(App):
         self._update_token_display()
         self._update_status("Ready")
         self._maybe_send_notification()
+        self._notify_sound()
 
     def _maybe_send_notification(self) -> None:
         """Send a terminal notification if processing took long enough."""
@@ -2367,6 +2393,24 @@ class AmplifierChicApp(App):
             out.flush()
         except Exception:
             pass  # Don't crash if the terminal doesn't support these
+
+    def _notify_sound(self) -> None:
+        """Play a terminal bell if notification sound is enabled.
+
+        Uses sys.__stdout__ to bypass Textual's stdout capture.
+        This is independent of the richer OSC notification system —
+        it simply beeps so the user knows the response is ready.
+        """
+        if not self._prefs.notifications.sound_enabled:
+            return
+        out = sys.__stdout__
+        if out is None:
+            return
+        try:
+            out.write("\a")
+            out.flush()
+        except Exception:
+            pass
 
     def _remove_processing_indicator(self) -> None:
         try:

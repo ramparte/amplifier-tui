@@ -87,6 +87,7 @@ colors:
 notifications:
   enabled: true                  # notify when a response completes
   min_seconds: 3.0               # only notify if processing took longer than this
+  sound_enabled: false            # terminal bell when response completes (opt-in)
 
 display:
   show_timestamps: true          # show HH:MM timestamps on messages
@@ -102,6 +103,7 @@ class NotificationPreferences:
 
     enabled: bool = True
     min_seconds: float = 3.0  # Only notify if processing took longer than this
+    sound_enabled: bool = False  # Terminal bell on response completion (opt-in)
 
 
 @dataclass
@@ -174,6 +176,8 @@ def load_preferences(path: Path | None = None) -> Preferences:
                     prefs.notifications.enabled = bool(ndata["enabled"])
                 if "min_seconds" in ndata:
                     prefs.notifications.min_seconds = float(ndata["min_seconds"])
+                if "sound_enabled" in ndata:
+                    prefs.notifications.sound_enabled = bool(ndata["sound_enabled"])
             if isinstance(data.get("display"), dict):
                 ddata = data["display"]
                 if "show_timestamps" in ddata:
@@ -291,6 +295,49 @@ def save_preferred_model(model: str, path: Path | None = None) -> None:
         else:
             # No model section at all — append it
             text = text.rstrip() + f"\n\nmodel:\n  preferred: {value}\n"
+
+        path.write_text(text)
+    except Exception:
+        pass  # Best-effort persistence
+
+
+def save_notification_sound(enabled: bool, path: Path | None = None) -> None:
+    """Persist the notification sound preference to the preferences file.
+
+    Surgically updates only the sound_enabled value, preserving the rest of the
+    file (including user comments) as-is.
+    """
+    import re
+
+    path = path or PREFS_PATH
+    try:
+        if path.exists():
+            text = path.read_text()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = _DEFAULT_YAML
+
+        value = "true" if enabled else "false"
+        if re.search(r"^\s+sound_enabled:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(\s+sound_enabled:).*$",
+                f"\\1 {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        elif re.search(r"^notifications:", text, re.MULTILINE):
+            # notifications section exists but no sound_enabled key
+            text = re.sub(
+                r"^(notifications:.*)$",
+                f"\\1\n  sound_enabled: {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            # No notifications section at all — append it
+            text = text.rstrip() + f"\n\nnotifications:\n  sound_enabled: {value}\n"
 
         path.write_text(text)
     except Exception:
