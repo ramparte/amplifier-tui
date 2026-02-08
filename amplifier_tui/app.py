@@ -828,6 +828,70 @@ class ChatInput(TextArea):
         self._tab_index = 0
         self._tab_prefix = ""
 
+    def _complete_snippet_mention(self) -> bool:
+        """Complete @@name snippet mentions in the input.
+
+        Finds the last @@partial token in the input text and completes it
+        against saved snippet names.  Uses the same cycling mechanism as
+        slash-command completion.
+
+        Returns True if a completion was applied, False otherwise.
+        """
+        raw = self.text
+        # Find the last @@token being typed (cursor is always at the end
+        # for practical purposes — Textual TextArea cursor may be mid-text
+        # but we complete the last @@ occurrence for simplicity).
+        match = re.search(r"@@([\w-]*)$", raw)
+        if match is None:
+            return False
+
+        partial = match.group(1)
+        prefix_pos = match.start()  # position of the first @
+
+        app_snippets = getattr(self.app, "_snippets", {})
+        if not app_snippets:
+            return False
+
+        candidates = sorted(n for n in app_snippets if n.startswith(partial))
+        if not candidates:
+            return False
+
+        # Build full-text replacements so cycling works with _tab_matches
+        before = raw[:prefix_pos]
+        full_matches = [before + "@@" + c for c in candidates]
+
+        # Mid-cycle: advance to next match
+        if self._tab_matches and self._tab_prefix and raw in self._tab_matches:
+            self._tab_index = (self._tab_index + 1) % len(self._tab_matches)
+            self.clear()
+            self.insert(self._tab_matches[self._tab_index])
+            return True
+
+        if len(full_matches) == 1:
+            # Unique match — complete with a trailing space
+            self.clear()
+            self.insert(full_matches[0] + " ")
+            self._tab_matches = []
+            self._tab_prefix = ""
+            return True
+
+        # Multiple matches — complete to longest common prefix first
+        common = os.path.commonprefix(full_matches)
+        if len(common) > len(raw):
+            self.clear()
+            self.insert(common)
+            self._tab_matches = []
+            self._tab_prefix = ""
+            return True
+
+        # Common prefix == typed text already → start cycling
+        self._tab_matches = full_matches
+        self._tab_prefix = raw
+        self._tab_index = 0
+        self.clear()
+        self.insert(self._tab_matches[0])
+        return True
+
     # -- Vim mode ------------------------------------------------------------
 
     def _update_vim_border(self) -> None:
@@ -1032,6 +1096,13 @@ class ChatInput(TextArea):
                 event.stop()
                 self._complete_slash_command(text)
                 return
+            # @@snippet tab-completion anywhere in input
+            if "@@" in self.text:
+                completed = self._complete_snippet_mention()
+                if completed:
+                    event.prevent_default()
+                    event.stop()
+                    return
             # Not a slash prefix – let default tab_behavior ("focus") happen
             self._reset_tab_state()
             await super()._on_key(event)
@@ -4437,8 +4508,11 @@ class AmplifierChicApp(App):
         self._clear_welcome()
         self._add_user_message(text)
 
+        # Expand @@snippet mentions (e.g. @@review) before sending
+        expanded = self._expand_snippet_mentions(text)
+
         # Expand @file mentions (e.g. @./src/main.py) before sending
-        expanded = self._expand_at_mentions(text)
+        expanded = self._expand_at_mentions(expanded)
 
         # Prepend attached file contents (if any) and clear them
         expanded = self._build_message_with_attachments(expanded)
@@ -4905,6 +4979,22 @@ class AmplifierChicApp(App):
 
         # Match @path/to/file.ext — only paths starting with ./ ../ ~/ or /
         return re.sub(r"@((?:\.\.?/|~/|/)\S+)", _replace_at_file, text)
+
+    def _expand_snippet_mentions(self, text: str) -> str:
+        """Expand @@name references to snippet content.
+
+        Matches @@word-boundary identifiers (alphanumeric + hyphens/underscores)
+        and replaces them with the saved snippet content.  Unknown @@names are
+        left as-is so the user sees them in the output.
+        """
+
+        def _replace_snippet(match: re.Match[str]) -> str:
+            name = match.group(1)
+            if name in self._snippets:
+                return self._snippet_content(self._snippets[name])
+            return match.group(0)  # keep original if not found
+
+        return re.sub(r"@@([\w-]+)", _replace_snippet, text)
 
     # -- /attach and /cat helpers -----------------------------------------------
 
