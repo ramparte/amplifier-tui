@@ -70,6 +70,8 @@ THEMES: dict[str, dict[str, str]] = {
         "system_border": "#448899",
         "error_text": "#cc0000",
         "error_border": "#cc0000",
+        "note_text": "#e0d080",
+        "note_border": "#c0a030",
         "timestamp": "#444444",
         "status_bar": "#888888",
     },
@@ -88,6 +90,8 @@ THEMES: dict[str, dict[str, str]] = {
         "system_border": "#66aabb",
         "error_text": "#cc0000",
         "error_border": "#cc0000",
+        "note_text": "#806020",
+        "note_border": "#a08030",
         "timestamp": "#999999",
         "status_bar": "#555555",
     },
@@ -106,6 +110,8 @@ THEMES: dict[str, dict[str, str]] = {
         "system_border": "#2aa198",
         "error_text": "#dc322f",
         "error_border": "#dc322f",
+        "note_text": "#b58900",
+        "note_border": "#cb4b16",
         "timestamp": "#586e75",
         "status_bar": "#839496",
     },
@@ -124,6 +130,8 @@ THEMES: dict[str, dict[str, str]] = {
         "system_border": "#66d9ef",
         "error_text": "#f92672",
         "error_border": "#f92672",
+        "note_text": "#e6db74",
+        "note_border": "#fd971f",
         "timestamp": "#75715e",
         "status_bar": "#a6a6a6",
     },
@@ -142,6 +150,8 @@ THEMES: dict[str, dict[str, str]] = {
         "system_border": "#00ff00",
         "error_text": "#ff0000",
         "error_border": "#ff0000",
+        "note_text": "#ffff00",
+        "note_border": "#ffaa00",
         "timestamp": "#808080",
         "status_bar": "#ffffff",
     },
@@ -160,6 +170,8 @@ THEMES: dict[str, dict[str, str]] = {
         "system_border": "#88c0d0",
         "error_text": "#bf616a",
         "error_border": "#bf616a",
+        "note_text": "#ebcb8b",
+        "note_border": "#d08770",
         "timestamp": "#4c566a",
         "status_bar": "#9aa5b4",
     },
@@ -178,6 +190,8 @@ THEMES: dict[str, dict[str, str]] = {
         "system_border": "#8be9fd",
         "error_text": "#ff5555",
         "error_border": "#ff5555",
+        "note_text": "#f1fa8c",
+        "note_border": "#ffb86c",
         "timestamp": "#6272a4",
         "status_bar": "#9999bb",
     },
@@ -196,6 +210,8 @@ THEMES: dict[str, dict[str, str]] = {
         "system_border": "#83a598",
         "error_text": "#fb4934",
         "error_border": "#fb4934",
+        "note_text": "#fabd2f",
+        "note_border": "#d65d0e",
         "timestamp": "#665c54",
         "status_bar": "#a89984",
     },
@@ -214,6 +230,8 @@ THEMES: dict[str, dict[str, str]] = {
         "system_border": "#89dceb",
         "error_text": "#f38ba8",
         "error_border": "#f38ba8",
+        "note_text": "#f9e2af",
+        "note_border": "#fab387",
         "timestamp": "#585b70",
         "status_bar": "#9399b2",
     },
@@ -253,6 +271,8 @@ colors:
   system_border: "#448899"       # teal left bar
   error_text: "#cc0000"          # red - error messages
   error_border: "#cc0000"        # red left bar
+  note_text: "#e0d080"           # warm yellow - session notes
+  note_border: "#c0a030"         # golden left bar
   timestamp: "#444444"           # dim timestamp labels
   status_bar: "#888888"          # bottom status text
 
@@ -318,6 +338,8 @@ class ColorPreferences:
     system_border: str = "#448899"
     error_text: str = "#cc0000"
     error_border: str = "#cc0000"
+    note_text: str = "#e0d080"
+    note_border: str = "#c0a030"
     timestamp: str = "#444444"
     status_bar: str = "#888888"
 
@@ -475,6 +497,8 @@ def save_colors(colors: ColorPreferences, path: Path | None = None) -> None:
             "system_border",
             "error_text",
             "error_border",
+            "note_text",
+            "note_border",
             "timestamp",
             "status_bar",
         ]

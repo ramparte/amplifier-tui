@@ -1171,7 +1171,7 @@ SHORTCUTS_TEXT = """\
  MODEL & DISPLAY ───────────────────────
   /model [name]    View/switch AI model
   /theme [name]    Switch color theme (/theme preview)
-  /colors          View/set custom colors
+  /colors          View/set text colors (/colors presets, /colors use <preset>)
   /wrap            Toggle word wrap
   /timestamps      Toggle timestamps
   /focus           Toggle focus mode
@@ -1392,7 +1392,14 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/fold", "Fold or unfold long messages", "/fold"),
     ("/theme", "Switch color theme", "/theme"),
     ("/theme preview", "Preview all themes with swatches", "/theme preview"),
-    ("/colors", "View or set custom colors", "/colors"),
+    ("/colors", "View or set text colors", "/colors"),
+    (
+        "/colors presets",
+        "Show available color presets with swatches",
+        "/colors presets",
+    ),
+    ("/colors use", "Apply a color preset", "/colors use "),
+    ("/colors reset", "Reset all colors to defaults", "/colors reset"),
     ("/focus", "Toggle focus mode", "/focus"),
     ("/search", "Search chat messages", "/search"),
     ("/grep", "Search chat with regex", "/grep"),
@@ -4484,7 +4491,7 @@ class AmplifierChicApp(App):
             "  /wrap         Toggle word wrap on/off (/wrap on, /wrap off)\n"
             "  /fold         Fold/unfold long messages (/fold all, /fold none, /fold <n>)\n"
             "  /theme        Switch color theme (/theme preview for swatches)\n"
-            "  /colors       View/set colors (/colors <role> <#hex>, /colors reset)\n"
+            "  /colors       View/set text colors (/colors <role> <#hex>, /colors reset, presets, use)\n"
             "  /focus        Toggle focus mode (/focus on, /focus off)\n"
             "  /find         Interactive find-in-chat bar (Ctrl+F) with match navigation\n"
             "  /search       Search chat messages (e.g. /search my query)\n"
@@ -8661,6 +8668,9 @@ class AmplifierChicApp(App):
             elif "error-message" in classes:
                 self._style_error(widget)
 
+            elif "note-message" in classes:
+                self._style_note(widget)
+
             elif "thinking-block" in classes:
                 # Collapsible with an inner Static
                 inner_list = widget.query(".thinking-text")
@@ -8683,6 +8693,7 @@ class AmplifierChicApp(App):
         "error": "error_text",
         "tool": "tool_text",
         "thinking": "thinking_text",
+        "note": "note_text",
         "timestamp": "timestamp",
     }
 
@@ -8710,6 +8721,7 @@ class AmplifierChicApp(App):
                 f"  error       {c.error_text:<10} {_swatch(c.error_text)}",
                 f"  tool        {c.tool_text:<10} {_swatch(c.tool_text)}",
                 f"  thinking    {c.thinking_text:<10} {_swatch(c.thinking_text)}",
+                f"  note        {c.note_text:<10} {_swatch(c.note_text)}",
                 f"  timestamp   {c.timestamp:<10} {_swatch(c.timestamp)}",
                 "",
                 "All keys:",
@@ -8727,14 +8739,18 @@ class AmplifierChicApp(App):
                 f"  system_border       {c.system_border:<10} {_swatch(c.system_border)}",
                 f"  error_text          {c.error_text:<10} {_swatch(c.error_text)}",
                 f"  error_border        {c.error_border:<10} {_swatch(c.error_border)}",
+                f"  note_text           {c.note_text:<10} {_swatch(c.note_text)}",
+                f"  note_border         {c.note_border:<10} {_swatch(c.note_border)}",
                 f"  timestamp           {c.timestamp:<10} {_swatch(c.timestamp)}",
                 f"  status_bar          {c.status_bar:<10} {_swatch(c.status_bar)}",
                 "",
-                "Change: /colors <role> <color>  e.g. /colors user white",
-                "        /colors <key> <color>   e.g. /colors user_border #ff8800",
-                "Reset:  /colors reset",
-                "Roles:  user, assistant, system, error, tool, thinking, timestamp",
-                "Colors: white, gray, cyan, red, green, blue, yellow, magenta, orange, dim, #RRGGBB",
+                "Change:  /colors <role> <color>  e.g. /colors user white",
+                "         /colors <key> <color>   e.g. /colors user_border #ff8800",
+                "Reset:   /colors reset",
+                "Presets: /colors presets          Show available color presets",
+                "         /colors use <preset>     Apply a preset",
+                "Roles:   user, assistant, system, error, tool, thinking, note, timestamp",
+                "Colors:  white, gray, cyan, red, green, blue, yellow, magenta, orange, dim, #RRGGBB",
             ]
             self._add_system_message("\n".join(lines))
             return
@@ -8746,6 +8762,16 @@ class AmplifierChicApp(App):
             self._add_system_message("Colors reset to defaults.")
             return
 
+        if arg == "presets":
+            self._cmd_colors_presets()
+            return
+
+        # /colors use <preset>
+        if arg.startswith("use "):
+            preset_name = arg[4:].strip()
+            self._cmd_colors_use_preset(preset_name)
+            return
+
         # Parse: key value
         tokens = arg.split(None, 1)
         if len(tokens) != 2:
@@ -8753,7 +8779,9 @@ class AmplifierChicApp(App):
                 "Usage: /colors <role> <color>  e.g. /colors user white\n"
                 "       /colors <key> <color>   e.g. /colors user_border #ff8800\n"
                 "       /colors reset           Restore defaults\n"
-                "Roles: user, assistant, system, error, tool, thinking, timestamp\n"
+                "       /colors presets          Show available color presets\n"
+                "       /colors use <preset>     Apply a preset\n"
+                "Roles: user, assistant, system, error, tool, thinking, note, timestamp\n"
                 "Colors: white, gray, cyan, red, green, blue, yellow, magenta, orange, dim, #RRGGBB"
             )
             return
@@ -8788,6 +8816,56 @@ class AmplifierChicApp(App):
         self._apply_theme_to_all_widgets()
         self._add_system_message(
             f"Set {key} to [{resolved}]\u2588\u2588\u2588\u2588[/] {resolved}"
+        )
+
+    def _cmd_colors_presets(self) -> None:
+        """Show available color presets with sample swatches."""
+
+        def _swatch(hex_color: str) -> str:
+            return f"[{hex_color}]\u2588\u2588[/]"
+
+        lines = ["Color Presets:", ""]
+        for name, theme_colors in THEMES.items():
+            desc = THEME_DESCRIPTIONS.get(name, "")
+            user_sw = _swatch(theme_colors.get("user_text", "#ffffff"))
+            asst_sw = _swatch(theme_colors.get("assistant_text", "#999999"))
+            sys_sw = _swatch(theme_colors.get("system_text", "#88bbcc"))
+            note_sw = _swatch(theme_colors.get("note_text", "#e0d080"))
+            err_sw = _swatch(theme_colors.get("error_text", "#cc0000"))
+            active = " \u2190 active" if name == self._prefs.theme_name else ""
+            lines.append(
+                f"  {name:<16} "
+                f"{user_sw} {asst_sw} {sys_sw} {note_sw} {err_sw}"
+                f"  {desc}{active}"
+            )
+        lines.append("")
+        lines.append("  Swatches: user  assistant  system  note  error")
+        lines.append("  Apply: /colors use <preset>")
+        self._add_system_message("\n".join(lines))
+
+    def _cmd_colors_use_preset(self, preset_name: str) -> None:
+        """Apply a color preset (theme colors) by name."""
+        if not preset_name:
+            self._add_system_message(
+                "Usage: /colors use <preset>\nSee available presets: /colors presets"
+            )
+            return
+
+        if preset_name not in THEMES:
+            available = ", ".join(sorted(THEMES.keys()))
+            self._add_system_message(
+                f"Unknown preset '{preset_name}'.\n"
+                f"Available: {available}\n"
+                f"Preview: /colors presets"
+            )
+            return
+
+        self._prefs.apply_theme(preset_name)
+        save_colors(self._prefs.colors)
+        self._apply_theme_to_all_widgets()
+        self._add_system_message(
+            f"Applied color preset '{preset_name}'. "
+            f"Customize further with /colors <role> <color>."
         )
 
     # ------------------------------------------------------------------
@@ -9377,8 +9455,9 @@ class AmplifierChicApp(App):
 
     def _style_note(self, widget: Static) -> None:
         """Apply sticky-note styling to a note message."""
-        widget.styles.color = "#e0d080"
-        widget.styles.border_left = ("thick", "#c0a030")
+        c = self._prefs.colors
+        widget.styles.color = c.note_text
+        widget.styles.border_left = ("thick", c.note_border)
 
     def _replay_notes(self) -> None:
         """Re-mount note widgets when restoring a session."""
