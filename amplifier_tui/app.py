@@ -6,6 +6,7 @@ import base64
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -593,7 +594,7 @@ SHORTCUTS_TEXT = """\
   /stats      Session statistics
   /tokens     Token / context usage
   /info       Session details
-  /copy [N]   Copy last response (or msg N)
+  /copy [N|all|code]  Copy response / conversation / code block
   /bookmark   Bookmark last response
   /bookmarks  List / jump to bookmarks
   /scroll     Toggle auto-scroll
@@ -2025,7 +2026,7 @@ class AmplifierChicApp(App):
             "  /stats        Show session statistics\n"
             "  /tokens       Detailed token / context usage breakdown\n"
             "  /info         Show session details (ID, model, project, counts)\n"
-            "  /copy         Copy last response | /copy N for message N\n"
+            "  /copy         Copy last response | /copy N | /copy all | /copy code\n"
             "  /bookmark     Bookmark last response (/bm alias, optional label)\n"
             "  /bookmarks    List bookmarks | /bookmarks <N> to jump\n"
             "  /rename       Rename current session (e.g. /rename My Project)\n"
@@ -2633,10 +2634,67 @@ class AmplifierChicApp(App):
         self.action_toggle_focus_mode()
 
     def _cmd_copy(self, text: str) -> None:
-        """Copy a message to clipboard. /copy = last assistant, /copy N = message N."""
+        """Copy a message to clipboard.
+
+        /copy        — last assistant response
+        /copy N      — message N (1-based index)
+        /copy all    — entire conversation
+        /copy code   — last code block from any message
+        """
         parts = text.strip().split(None, 1)
         arg = parts[1].strip() if len(parts) > 1 else ""
+        arg_lower = arg.lower()
 
+        # --- /copy all ---
+        if arg_lower == "all":
+            if not self._search_messages:
+                self._add_system_message("No messages to copy")
+                return
+            lines: list[str] = []
+            for role, content, _widget in self._search_messages:
+                label = {"user": "You", "assistant": "AI", "system": "System"}.get(
+                    role, role
+                )
+                lines.append(f"--- {label} ---")
+                lines.append(content)
+                lines.append("")
+            full_text = "\n".join(lines)
+            if _copy_to_clipboard(full_text):
+                self._add_system_message(
+                    f"Copied entire conversation"
+                    f" ({len(self._search_messages)} messages,"
+                    f" {len(full_text)} chars)"
+                )
+            else:
+                self._add_system_message(
+                    "Failed to copy — no clipboard tool available"
+                    " (install xclip or xsel)"
+                )
+            return
+
+        # --- /copy code ---
+        if arg_lower == "code":
+            for _role, content, _widget in reversed(self._search_messages):
+                blocks = re.findall(r"```(?:\w*\n)?(.*?)```", content, re.DOTALL)
+                if blocks:
+                    code = blocks[-1].strip()
+                    if _copy_to_clipboard(code):
+                        preview = code[:60].replace("\n", " ")
+                        if len(code) > 60:
+                            preview += "..."
+                        self._add_system_message(
+                            f"Copied code block ({len(code)} chars): {preview}"
+                        )
+                    else:
+                        self._add_system_message(
+                            "Failed to copy — no clipboard tool available"
+                            " (install xclip or xsel)"
+                        )
+                    return
+            self._add_system_message("No code blocks found in conversation")
+            return
+
+        # --- /copy N ---
         if arg and arg.isdigit():
             # Copy specific message by index (1-based, from /search results)
             idx = int(arg) - 1
@@ -2662,7 +2720,7 @@ class AmplifierChicApp(App):
 
         if arg:
             self._add_system_message(
-                "Usage: /copy (last response) or /copy N (message number)"
+                "Usage: /copy [all|code|N] — copy response, conversation, or code block"
             )
             return
 
