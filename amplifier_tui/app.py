@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -125,20 +126,47 @@ def _copy_to_clipboard(text: str) -> bool:
     except Exception:
         pass
 
-    # Fallback: native clipboard tools
+    # Fallback: native clipboard tools with platform-specific handling
+    try:
+        uname_release = platform.uname().release.lower()
+    except Exception:
+        uname_release = ""
+
+    # WSL: clip.exe expects UTF-16LE
+    if "microsoft" in uname_release and shutil.which("clip.exe"):
+        try:
+            proc = subprocess.Popen(
+                ["clip.exe"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            proc.communicate(text.encode("utf-16-le"))
+            if proc.returncode == 0:
+                return True
+        except Exception:
+            pass
+
+    # macOS
+    if platform.system() == "Darwin" and shutil.which("pbcopy"):
+        try:
+            subprocess.run(["pbcopy"], input=text.encode(), check=True, timeout=2)
+            return True
+        except Exception:
+            pass
+
+    # Linux: try xclip, then xsel
     for cmd in [
-        "xclip -selection clipboard",
-        "xsel --clipboard --input",
-        "pbcopy",
-        "clip.exe",
+        ["xclip", "-selection", "clipboard"],
+        ["xsel", "--clipboard", "--input"],
     ]:
-        prog = cmd.split()[0]
-        if shutil.which(prog):
+        if shutil.which(cmd[0]):
             try:
-                subprocess.run(cmd.split(), input=text.encode(), check=True, timeout=2)
+                subprocess.run(cmd, input=text.encode(), check=True, timeout=2)
                 return True
             except Exception:
                 continue
+
     return False
 
 
@@ -275,7 +303,7 @@ SHORTCUTS_TEXT = """\
   /rename     Rename session
   /delete     Delete session
   /stats      Session statistics
-  /copy       Copy last response
+  /copy [N]   Copy last response (or msg N)
   /bookmark   Bookmark last response
   /bookmarks  List / jump to bookmarks
   /scroll     Toggle auto-scroll
@@ -1065,14 +1093,23 @@ class AmplifierChicApp(App):
 
     def action_copy_response(self) -> None:
         """Copy the last assistant response to the system clipboard."""
-        if not self._last_assistant_text:
-            self._add_system_message("No response to copy")
+        # Try _last_assistant_text first; fall back to _search_messages
+        text = self._last_assistant_text
+        if not text:
+            for role, msg_text, _widget in reversed(self._search_messages):
+                if role == "assistant":
+                    text = msg_text
+                    break
+        if not text:
+            self._add_system_message("No assistant messages to copy")
             return
-        if _copy_to_clipboard(self._last_assistant_text):
-            self._add_system_message("Copied last response to clipboard")
+        if _copy_to_clipboard(text):
+            self._add_system_message(
+                f"Copied last assistant message ({len(text)} chars)"
+            )
         else:
             self._add_system_message(
-                "Clipboard not available — try selecting text manually"
+                "Failed to copy — no clipboard tool available (install xclip or xsel)"
             )
 
     # ── Input Handling ──────────────────────────────────────────
@@ -1142,7 +1179,7 @@ class AmplifierChicApp(App):
             "/exit": self._cmd_quit,
             "/focus": self._cmd_focus,
             "/compact": self._cmd_compact,
-            "/copy": self._cmd_copy,
+            "/copy": lambda: self._cmd_copy(text),
             "/notify": self._cmd_notify,
             "/scroll": self._cmd_scroll,
             "/timestamps": self._cmd_timestamps,
@@ -1177,7 +1214,7 @@ class AmplifierChicApp(App):
             "  /prefs        Show preferences\n"
             "  /model        Show model info | /model list | /model <name>\n"
             "  /stats        Show session statistics\n"
-            "  /copy         Copy last response to clipboard\n"
+            "  /copy         Copy last response | /copy N for message N\n"
             "  /bookmark     Bookmark last response (/bm alias, optional label)\n"
             "  /bookmarks    List bookmarks | /bookmarks <N> to jump\n"
             "  /rename       Rename current session (e.g. /rename My Project)\n"
@@ -1417,7 +1454,41 @@ class AmplifierChicApp(App):
         """Toggle focus mode via slash command."""
         self.action_toggle_focus_mode()
 
-    def _cmd_copy(self) -> None:
+    def _cmd_copy(self, text: str) -> None:
+        """Copy a message to clipboard. /copy = last assistant, /copy N = message N."""
+        parts = text.strip().split(None, 1)
+        arg = parts[1].strip() if len(parts) > 1 else ""
+
+        if arg and arg.isdigit():
+            # Copy specific message by index (1-based, from /search results)
+            idx = int(arg) - 1
+            if 0 <= idx < len(self._search_messages):
+                role, msg_text, _widget = self._search_messages[idx]
+                if _copy_to_clipboard(msg_text):
+                    self._add_system_message(
+                        f"Copied message #{arg} [{role}] ({len(msg_text)} chars)"
+                    )
+                else:
+                    self._add_system_message(
+                        "Failed to copy — no clipboard tool available"
+                        " (install xclip or xsel)"
+                    )
+            else:
+                total = len(self._search_messages)
+                self._add_system_message(
+                    f"Message {arg} not found (range: 1-{total})"
+                    if total
+                    else "No messages yet"
+                )
+            return
+
+        if arg:
+            self._add_system_message(
+                "Usage: /copy (last response) or /copy N (message number)"
+            )
+            return
+
+        # Default: copy last assistant message
         self.action_copy_response()
 
     def _cmd_scroll(self) -> None:
