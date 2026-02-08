@@ -108,6 +108,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/history",
     "/grep",
     "/redo",
+    "/snippet",
 )
 
 # Known context window sizes (tokens) for popular models.
@@ -331,6 +332,41 @@ class ChatInput(TextArea):
             self.clear()
             self.insert(choice)
             return
+
+        # Snippet name completion for /snippet use|send|remove|edit <name>
+        for prefix_cmd in (
+            "/snippet use ",
+            "/snippet send ",
+            "/snippet remove ",
+            "/snippet edit ",
+        ):
+            if text.startswith(prefix_cmd):
+                partial = text[len(prefix_cmd) :]
+                app_snippets = getattr(self.app, "_snippets", {})
+                snippet_matches = sorted(
+                    prefix_cmd + n for n in app_snippets if n.startswith(partial)
+                )
+                if not snippet_matches:
+                    return
+                if len(snippet_matches) == 1:
+                    self.clear()
+                    self.insert(snippet_matches[0])
+                    self._tab_matches = []
+                    self._tab_prefix = ""
+                    return
+                prefix = os.path.commonprefix(snippet_matches)
+                if len(prefix) > len(text):
+                    self.clear()
+                    self.insert(prefix)
+                    self._tab_matches = []
+                    self._tab_prefix = ""
+                    return
+                self._tab_matches = snippet_matches
+                self._tab_prefix = text
+                self._tab_index = 0
+                self.clear()
+                self.insert(self._tab_matches[0])
+                return
 
         # Fresh completion: include built-in commands + user aliases
         app_aliases = getattr(self.app, "_aliases", {})
@@ -575,6 +611,7 @@ SHORTCUTS_TEXT = """\
   /fold       Fold/unfold long messages
   /history    Browse/clear input history
   /redo [N]   Re-send last (or Nth-to-last) message
+  /snippet    Save/use reusable prompt templates
   /quit       Quit
 
        Press Escape to close\
@@ -669,6 +706,15 @@ class AmplifierChicApp(App):
     PINNED_SESSIONS_FILE = Path.home() / ".amplifier" / "tui-pinned-sessions.json"
     DRAFTS_FILE = Path.home() / ".amplifier" / "tui-drafts.json"
     ALIASES_FILE = Path.home() / ".amplifier" / "tui-aliases.json"
+    SNIPPETS_FILE = Path.home() / ".amplifier" / "tui-snippets.json"
+
+    DEFAULT_SNIPPETS: dict[str, str] = {
+        "review": "Please review this code for bugs, security issues, and best practices.",
+        "explain": "Explain this code step by step, focusing on the key logic and design decisions.",
+        "refactor": "Refactor this code to be more readable, maintainable, and following best practices.",
+        "test": "Write comprehensive tests for this code, covering edge cases and error conditions.",
+        "doc": "Add clear documentation comments to this code.",
+    }
 
     BINDINGS = [
         Binding("f1", "show_shortcuts", "Help", show=True),
@@ -736,6 +782,9 @@ class AmplifierChicApp(App):
 
         # Custom command aliases
         self._aliases: dict[str, str] = {}
+
+        # Reusable prompt snippets
+        self._snippets: dict[str, str] = {}
 
         # Bookmark tracking
         self._assistant_msg_index: int = 0
@@ -815,6 +864,9 @@ class AmplifierChicApp(App):
 
         # Load custom command aliases
         self._aliases = self._load_aliases()
+
+        # Load reusable prompt snippets
+        self._snippets = self._load_snippets()
 
         # Periodic draft auto-save in case of crash
         self.set_interval(30, self._auto_save_draft)
@@ -942,6 +994,36 @@ class AmplifierChicApp(App):
             self.ALIASES_FILE.parent.mkdir(parents=True, exist_ok=True)
             self.ALIASES_FILE.write_text(
                 json.dumps(self._aliases, indent=2, sort_keys=True)
+            )
+        except Exception:
+            pass
+
+    # ── Snippets ────────────────────────────────────────────
+
+    def _load_snippets(self) -> dict[str, str]:
+        """Load reusable prompt snippets from the JSON file."""
+        try:
+            if self.SNIPPETS_FILE.exists():
+                return json.loads(self.SNIPPETS_FILE.read_text())
+        except Exception:
+            pass
+        # First run: seed with default snippets
+        defaults = dict(self.DEFAULT_SNIPPETS)
+        try:
+            self.SNIPPETS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self.SNIPPETS_FILE.write_text(
+                json.dumps(defaults, indent=2, sort_keys=True)
+            )
+        except Exception:
+            pass
+        return defaults
+
+    def _save_snippets(self) -> None:
+        """Persist reusable prompt snippets."""
+        try:
+            self.SNIPPETS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self.SNIPPETS_FILE.write_text(
+                json.dumps(self._snippets, indent=2, sort_keys=True)
             )
         except Exception:
             pass
@@ -1917,6 +1999,7 @@ class AmplifierChicApp(App):
             "/history": lambda: self._cmd_history(args),
             "/grep": lambda: self._cmd_grep(text),
             "/redo": lambda: self._cmd_redo(args),
+            "/snippet": lambda: self._cmd_snippet(args),
         }
 
         handler = handlers.get(cmd)
@@ -1961,6 +2044,7 @@ class AmplifierChicApp(App):
             "  /sort         Sort sessions: date, name, project (/sort <mode>)\n"
             "  /edit         Open $EDITOR for longer prompts (same as Ctrl+G)\n"
             "  /draft        Show/save/clear input draft (/draft save, /draft clear)\n"
+            "  /snippet      Save/use reusable prompt templates\n"
             "  /alias        List/create/remove custom shortcuts\n"
             "  /compact      Clear chat, keep session\n"
             "  /history      Browse input history (/history clear, /history <N>)\n"
@@ -2052,6 +2136,192 @@ class AmplifierChicApp(App):
         self._aliases[name] = expansion
         self._save_aliases()
         self._add_system_message(f"Alias set: /{name} = {expansion}")
+
+    def _cmd_snippet(self, text: str) -> None:
+        """List, save, use, send, remove, or edit reusable prompt snippets."""
+        text = text.strip()
+
+        if not text:
+            # List all snippets
+            if not self._snippets:
+                self._add_system_message(
+                    "No snippets saved.\n"
+                    "Usage:\n"
+                    "  /snippet save <name> <text>  Save a snippet\n"
+                    "  /snippet use <name>          Insert into input\n"
+                    "  /snippet send <name>         Insert and send\n"
+                    "  /snippet remove <name>       Delete a snippet\n"
+                    "  /snippet edit <name>         Edit in $EDITOR"
+                )
+                return
+
+            lines = ["Saved snippets:"]
+            for name, content in sorted(self._snippets.items()):
+                preview = content[:60].replace("\n", " ")
+                if len(content) > 60:
+                    preview += "..."
+                lines.append(f"  {name}: {preview}")
+            lines.append("")
+            lines.append("Use: /snippet use <name> or /snippet send <name>")
+            self._add_system_message("\n".join(lines))
+            return
+
+        # Parse subcommand
+        parts = text.split(maxsplit=2)
+        subcmd = parts[0].lower()
+
+        if subcmd == "save":
+            if len(parts) < 3:
+                self._add_system_message("Usage: /snippet save <name> <text>")
+                return
+            sname = parts[1]
+            # Validate name: alphanumeric + hyphens/underscores
+            import re
+
+            if not re.match(r"^[a-zA-Z0-9_-]+$", sname):
+                self._add_system_message(
+                    "Snippet names must be alphanumeric "
+                    "(hyphens and underscores allowed)"
+                )
+                return
+            content = parts[2]
+            self._snippets[sname] = content
+            self._save_snippets()
+            self._add_system_message(f"Snippet '{sname}' saved ({len(content)} chars)")
+
+        elif subcmd == "use":
+            if len(parts) < 2:
+                self._add_system_message("Usage: /snippet use <name>")
+                return
+            sname = parts[1]
+            if sname not in self._snippets:
+                self._add_system_message(f"No snippet named '{sname}'")
+                return
+            try:
+                inp = self.query_one("#chat-input", ChatInput)
+                inp.clear()
+                inp.insert(self._snippets[sname])
+                inp.focus()
+                self._add_system_message(f"Snippet '{sname}' loaded into input")
+            except Exception:
+                pass
+
+        elif subcmd == "send":
+            if len(parts) < 2:
+                self._add_system_message("Usage: /snippet send <name>")
+                return
+            sname = parts[1]
+            if sname not in self._snippets:
+                self._add_system_message(f"No snippet named '{sname}'")
+                return
+            # Guard: don't send while already processing
+            if self.is_processing:
+                self._add_system_message(
+                    "Please wait for the current response to finish."
+                )
+                return
+            if not self._amplifier_available:
+                self._add_system_message("Amplifier is not available.")
+                return
+            if not self._amplifier_ready:
+                self._add_system_message("Still loading Amplifier...")
+                return
+            message = self._snippets[sname]
+            self._add_system_message(f"Sending snippet '{sname}'")
+            self._clear_welcome()
+            self._add_user_message(message)
+            has_session = self.session_manager and getattr(
+                self.session_manager, "session", None
+            )
+            self._start_processing(
+                "Starting session" if not has_session else "Thinking"
+            )
+            self._send_message_worker(message)
+
+        elif subcmd == "remove":
+            if len(parts) < 2:
+                self._add_system_message("Usage: /snippet remove <name>")
+                return
+            sname = parts[1]
+            if sname in self._snippets:
+                del self._snippets[sname]
+                self._save_snippets()
+                self._add_system_message(f"Snippet '{sname}' removed")
+            else:
+                self._add_system_message(f"No snippet named '{sname}'")
+
+        elif subcmd == "edit":
+            if len(parts) < 2:
+                self._add_system_message("Usage: /snippet edit <name>")
+                return
+            sname = parts[1]
+            content = self._snippets.get(sname, "")
+            self._edit_snippet_in_editor(sname, content)
+
+        else:
+            # Maybe they're trying to use a snippet by name directly
+            if subcmd in self._snippets:
+                try:
+                    inp = self.query_one("#chat-input", ChatInput)
+                    inp.clear()
+                    inp.insert(self._snippets[subcmd])
+                    inp.focus()
+                    self._add_system_message(f"Snippet '{subcmd}' loaded")
+                except Exception:
+                    pass
+            else:
+                self._add_system_message(
+                    f"Unknown subcommand '{subcmd}'.\n"
+                    "Use: save, use, send, remove, edit"
+                )
+
+    def _edit_snippet_in_editor(self, name: str, content: str) -> None:
+        """Edit a snippet in $EDITOR, reusing the Ctrl+G infrastructure."""
+        editor = self._resolve_editor()
+        if not editor:
+            self._add_system_message(
+                "No editor found. Set $EDITOR or install vim/nano."
+            )
+            return
+
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".md",
+            prefix=f"snippet-{name}-",
+            delete=False,
+        ) as f:
+            f.write(content)
+            tmpfile = f.name
+
+        try:
+            with self.suspend():
+                result = subprocess.run([editor, tmpfile])
+
+            if result.returncode != 0:
+                self._add_system_message(
+                    f"Editor exited with code {result.returncode}."
+                )
+                return
+
+            with open(tmpfile) as f:
+                new_content = f.read().strip()
+
+            if not new_content:
+                self._add_system_message(f"Snippet '{name}' unchanged (empty content)")
+                return
+
+            self._snippets[name] = new_content
+            self._save_snippets()
+            self._add_system_message(
+                f"Snippet '{name}' updated ({len(new_content)} chars)"
+            )
+        except Exception as e:
+            self._add_system_message(f"Could not open editor: {e}")
+        finally:
+            try:
+                os.unlink(tmpfile)
+            except OSError:
+                pass
 
     def _cmd_draft(self, text: str) -> None:
         """Show, save, or clear the input draft for this session."""
