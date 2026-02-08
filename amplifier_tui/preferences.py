@@ -336,6 +336,7 @@ display:
   show_token_usage: true         # show token/context gauge in status bar
   context_window_size: 0         # override context window size (0 = auto-detect from model)
   fold_threshold: 20             # auto-fold messages longer than this many lines (0 = disabled)
+  progress_labels: true          # show detailed tool progress (Reading file...) vs generic Thinking...
 
 model:
   preferred: ""                   # preferred model for new sessions (empty = use default)
@@ -421,6 +422,9 @@ class DisplayPreferences:
     context_window_size: int = 0  # Override context window (0 = auto-detect from model)
     fold_threshold: int = 20  # Auto-fold messages longer than this (0 = disabled)
     show_suggestions: bool = True  # Show smart prompt suggestions as you type
+    progress_labels: bool = (
+        True  # Show detailed tool progress (vs generic "Thinking...")
+    )
 
 
 @dataclass
@@ -556,6 +560,8 @@ def load_preferences(path: Path | None = None) -> Preferences:
                     prefs.display.context_window_size = int(
                         ddata["context_window_size"] or 0
                     )
+                if "progress_labels" in ddata:
+                    prefs.display.progress_labels = bool(ddata["progress_labels"])
             if isinstance(data.get("model"), dict):
                 mdata = data["model"]
                 if "preferred" in mdata:
@@ -1503,6 +1509,49 @@ def save_show_suggestions(enabled: bool, path: Path | None = None) -> None:
         else:
             # No display section at all — append it
             text = text.rstrip() + f"\n\ndisplay:\n  show_suggestions: {value}\n"
+
+        path.write_text(text)
+    except Exception:
+        pass  # Best-effort persistence
+
+
+def save_progress_labels(enabled: bool, path: Path | None = None) -> None:
+    """Persist the progress_labels display preference to the preferences file.
+
+    Surgically updates only the progress_labels value, preserving the rest of the
+    file (including user comments) as-is.
+    """
+    import re
+
+    path = path or PREFS_PATH
+    try:
+        if path.exists():
+            text = path.read_text()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = _DEFAULT_YAML
+
+        value = "true" if enabled else "false"
+        if re.search(r"^\s+progress_labels:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(\s+progress_labels:).*$",
+                f"\\1 {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        elif re.search(r"^display:", text, re.MULTILINE):
+            # display section exists but no progress_labels key
+            text = re.sub(
+                r"^(display:.*)$",
+                f"\\1\n  progress_labels: {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            # No display section at all — append it
+            text = text.rstrip() + f"\n\ndisplay:\n  progress_labels: {value}\n"
 
         path.write_text(text)
     except Exception:

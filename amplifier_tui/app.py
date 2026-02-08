@@ -63,6 +63,7 @@ from .preferences import (
     save_theme_name,
     save_multiline_default,
     save_show_suggestions,
+    save_progress_labels,
     save_vim_mode,
     save_word_wrap,
 )
@@ -192,6 +193,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/multiline",
     "/ml",
     "/suggest",
+    "/progress",
 )
 
 # -- Prompt templates for smart suggestions ------------------------------------
@@ -1846,6 +1848,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ),
     ("/ml", "Toggle multiline mode (alias for /multiline)", "/ml"),
     ("/suggest", "Toggle smart prompt suggestions (on/off)", "/suggest"),
+    ("/progress", "Toggle detailed progress labels (on/off)", "/progress"),
     ("/vim", "Toggle vim keybindings", "/vim"),
     ("/tab", "Tab management (new, switch, close, rename, list)", "/tab"),
     ("/tab new", "Open a new conversation tab", "/tab new"),
@@ -5281,6 +5284,7 @@ class AmplifierChicApp(App):
             "/multiline": lambda: self._cmd_multiline(args),
             "/ml": lambda: self._cmd_multiline(args),
             "/suggest": lambda: self._cmd_suggest(args),
+            "/progress": lambda: self._cmd_progress(args),
         }
 
         handler = handlers.get(cmd)
@@ -5359,6 +5363,7 @@ class AmplifierChicApp(App):
             "  /stream       Toggle streaming display (/stream on, /stream off)\n"
             "  /multiline    Toggle multiline mode (/multiline on, /multiline off, /ml)\n"
             "  /suggest      Toggle smart prompt suggestions (/suggest on, /suggest off)\n"
+            "  /progress     Toggle detailed progress labels (/progress on, /progress off)\n"
             "  /vim          Toggle vim keybindings (/vim on, /vim off)\n"
             "  /tab          Tab management (/tab new|switch|close|rename|list)\n"
             "  /tabs         List all open tabs\n"
@@ -7444,6 +7449,44 @@ class AmplifierChicApp(App):
                 self.query_one("#suggestion-bar", SuggestionBar).dismiss()
             except Exception:
                 pass
+
+    def _cmd_progress(self, text: str) -> None:
+        """Toggle detailed progress labels on/off.
+
+        /progress       Toggle progress labels
+        /progress on    Enable detailed labels (Reading file..., Searching...)
+        /progress off   Disable labels (always show Thinking...)
+        """
+        text = text.strip().lower()
+
+        if text in ("on", "true", "1"):
+            enabled = True
+        elif text in ("off", "false", "0"):
+            enabled = False
+        elif not text:
+            enabled = not self._prefs.display.progress_labels
+        else:
+            self._add_system_message(
+                "Usage: /progress [on|off]\n"
+                "  /progress      Toggle detailed progress labels\n"
+                "  /progress on   Show tool details (Reading file..., Searching...)\n"
+                "  /progress off  Generic indicator (Thinking...)"
+            )
+            return
+
+        self._prefs.display.progress_labels = enabled
+        save_progress_labels(enabled)
+
+        if enabled:
+            self._add_system_message(
+                "Progress labels: ON\n"
+                "Shows detailed tool activity (Reading file..., Delegating to agent..., etc.)"
+            )
+        else:
+            self._add_system_message(
+                "Progress labels: OFF\n"
+                "Shows generic Thinking... indicator during processing."
+            )
 
     # ── /split – side-by-side reference panel ────────────────────────────
 
@@ -13061,13 +13104,17 @@ class AmplifierChicApp(App):
 
         def on_tool_start(name: str, tool_input: dict) -> None:
             self._tool_count_this_turn += 1
-            label = _get_tool_label(name, tool_input)
-            bare = label.rstrip(".")
-            # Append raw tool name for extra detail
-            bare = f"{bare} ({name})"
-            # Show sequential counter when this isn't the first tool
-            if self._tool_count_this_turn > 1:
-                bare = f"{bare} [#{self._tool_count_this_turn}]"
+            if self._prefs.display.progress_labels:
+                label = _get_tool_label(name, tool_input)
+                bare = label.rstrip(".")
+                # Append raw tool name for extra detail
+                bare = f"{bare} ({name})"
+                # Show sequential counter when this isn't the first tool
+                if self._tool_count_this_turn > 1:
+                    bare = f"{bare} [#{self._tool_count_this_turn}]"
+            else:
+                label = "Thinking..."
+                bare = "Thinking"
             self._processing_label = bare
             self._status_activity_label = label
             self.call_from_thread(self._ensure_processing_indicator, bare)
