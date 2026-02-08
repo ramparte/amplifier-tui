@@ -430,10 +430,9 @@ CollapsibleTitle:hover {
 /* -- Error display ------------------------------------ */
 
 .error-message {
-    border-left: wide $error;
+    /* border-left and color set by preferences in Python */
     margin: 1 0;
     padding: 0 2;
-    color: $error;
 }
 
 /* -- Markdown (inside assistant messages) ------------- */

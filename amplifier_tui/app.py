@@ -36,10 +36,12 @@ from textual import work
 
 from .history import PromptHistory
 from .preferences import (
+    COLOR_NAMES,
     ColorPreferences,
     THEME_DESCRIPTIONS,
     THEMES,
     load_preferences,
+    resolve_color,
     save_colors,
     save_compact_mode,
     save_notification_enabled,
@@ -6176,6 +6178,9 @@ class AmplifierChicApp(App):
             elif "system-message" in classes:
                 self._style_system(widget)
 
+            elif "error-message" in classes:
+                self._style_error(widget)
+
             elif "thinking-block" in classes:
                 # Collapsible with an inner Static
                 inner_list = widget.query(".thinking-text")
@@ -6195,6 +6200,7 @@ class AmplifierChicApp(App):
         "user": "user_text",
         "assistant": "assistant_text",
         "system": "system_text",
+        "error": "error_text",
         "tool": "tool_text",
         "thinking": "thinking_text",
         "timestamp": "timestamp",
@@ -6202,46 +6208,53 @@ class AmplifierChicApp(App):
 
     def _cmd_colors(self, text: str) -> None:
         """View, change, or reset individual color preferences."""
-        import re
         from dataclasses import fields
 
         parts = text.strip().split(None, 1)
         arg = parts[1].strip() if len(parts) > 1 else ""
 
         if not arg:
-            # Show current color settings grouped by role
+            # Show current color settings with colored swatches
             c = self._prefs.colors
+
+            def _swatch(hex_color: str) -> str:
+                """Return a Rich-markup colored swatch block."""
+                return f"[{hex_color}]\u2588\u2588\u2588\u2588[/]"
+
             lines = [
-                "Message colors:",
+                "Text Colors:",
                 "",
-                "  Role shortcuts         Color",
-                f"  user              {c.user_text}",
-                f"  assistant         {c.assistant_text}",
-                f"  system            {c.system_text}",
-                f"  tool              {c.tool_text}",
-                f"  thinking          {c.thinking_text}",
-                f"  timestamp         {c.timestamp}",
+                f"  user        {c.user_text:<10} {_swatch(c.user_text)}",
+                f"  assistant   {c.assistant_text:<10} {_swatch(c.assistant_text)}",
+                f"  system      {c.system_text:<10} {_swatch(c.system_text)}",
+                f"  error       {c.error_text:<10} {_swatch(c.error_text)}",
+                f"  tool        {c.tool_text:<10} {_swatch(c.tool_text)}",
+                f"  thinking    {c.thinking_text:<10} {_swatch(c.thinking_text)}",
+                f"  timestamp   {c.timestamp:<10} {_swatch(c.timestamp)}",
                 "",
-                "  All keys:",
-                f"    user_text           {c.user_text}",
-                f"    user_border         {c.user_border}",
-                f"    assistant_text      {c.assistant_text}",
-                f"    assistant_border    {c.assistant_border}",
-                f"    thinking_text       {c.thinking_text}",
-                f"    thinking_border     {c.thinking_border}",
-                f"    thinking_background {c.thinking_background}",
-                f"    tool_text           {c.tool_text}",
-                f"    tool_border         {c.tool_border}",
-                f"    tool_background     {c.tool_background}",
-                f"    system_text         {c.system_text}",
-                f"    system_border       {c.system_border}",
-                f"    timestamp           {c.timestamp}",
-                f"    status_bar          {c.status_bar}",
+                "All keys:",
+                f"  user_text           {c.user_text:<10} {_swatch(c.user_text)}",
+                f"  user_border         {c.user_border:<10} {_swatch(c.user_border)}",
+                f"  assistant_text      {c.assistant_text:<10} {_swatch(c.assistant_text)}",
+                f"  assistant_border    {c.assistant_border:<10} {_swatch(c.assistant_border)}",
+                f"  thinking_text       {c.thinking_text:<10} {_swatch(c.thinking_text)}",
+                f"  thinking_border     {c.thinking_border:<10} {_swatch(c.thinking_border)}",
+                f"  thinking_background {c.thinking_background:<10} {_swatch(c.thinking_background)}",
+                f"  tool_text           {c.tool_text:<10} {_swatch(c.tool_text)}",
+                f"  tool_border         {c.tool_border:<10} {_swatch(c.tool_border)}",
+                f"  tool_background     {c.tool_background:<10} {_swatch(c.tool_background)}",
+                f"  system_text         {c.system_text:<10} {_swatch(c.system_text)}",
+                f"  system_border       {c.system_border:<10} {_swatch(c.system_border)}",
+                f"  error_text          {c.error_text:<10} {_swatch(c.error_text)}",
+                f"  error_border        {c.error_border:<10} {_swatch(c.error_border)}",
+                f"  timestamp           {c.timestamp:<10} {_swatch(c.timestamp)}",
+                f"  status_bar          {c.status_bar:<10} {_swatch(c.status_bar)}",
                 "",
-                "Change: /colors <role> <#hex>   e.g. /colors user #00ff00",
-                "        /colors <key> <#hex>    e.g. /colors user_border #ff8800",
+                "Change: /colors <role> <color>  e.g. /colors user white",
+                "        /colors <key> <color>   e.g. /colors user_border #ff8800",
                 "Reset:  /colors reset",
-                "Roles:  user, assistant, system, tool, thinking, timestamp",
+                "Roles:  user, assistant, system, error, tool, thinking, timestamp",
+                "Colors: white, gray, cyan, red, green, blue, yellow, magenta, orange, dim, #RRGGBB",
             ]
             self._add_system_message("\n".join(lines))
             return
@@ -6257,10 +6270,11 @@ class AmplifierChicApp(App):
         tokens = arg.split(None, 1)
         if len(tokens) != 2:
             self._add_system_message(
-                "Usage: /colors <role> <#hex>  e.g. /colors user #00ff00\n"
-                "       /colors <key> <#hex>   e.g. /colors user_border #ff8800\n"
-                "       /colors reset          Restore defaults\n"
-                "Roles: user, assistant, system, tool, thinking, timestamp"
+                "Usage: /colors <role> <color>  e.g. /colors user white\n"
+                "       /colors <key> <color>   e.g. /colors user_border #ff8800\n"
+                "       /colors reset           Restore defaults\n"
+                "Roles: user, assistant, system, error, tool, thinking, timestamp\n"
+                "Colors: white, gray, cyan, red, green, blue, yellow, magenta, orange, dim, #RRGGBB"
             )
             return
 
@@ -6278,17 +6292,23 @@ class AmplifierChicApp(App):
             )
             return
 
-        # Validate hex color
-        if not re.match(r"^#[0-9a-fA-F]{6}$", value):
+        # Resolve color: accept named colors (white, gray, cyan...) or hex (#RRGGBB)
+        resolved = resolve_color(value)
+        if resolved is None:
+            names = ", ".join(sorted(COLOR_NAMES.keys()))
             self._add_system_message(
-                f"Invalid hex color '{value}'. Use format: #rrggbb"
+                f"Unknown color '{value}'.\n"
+                f"Use a color name ({names})\n"
+                f"or a hex code (#RRGGBB)."
             )
             return
 
-        setattr(self._prefs.colors, key, value)
+        setattr(self._prefs.colors, key, resolved)
         save_colors(self._prefs.colors)
         self._apply_theme_to_all_widgets()
-        self._add_system_message(f"Color '{key}' set to {value}")
+        self._add_system_message(
+            f"Set {key} to [{resolved}]\u2588\u2588\u2588\u2588[/] {resolved}"
+        )
 
     # ------------------------------------------------------------------
     # Export formatters
@@ -6990,6 +7010,12 @@ class AmplifierChicApp(App):
         widget.styles.color = c.system_text
         widget.styles.border_left = ("thick", c.system_border)
 
+    def _style_error(self, widget: Static) -> None:
+        """Apply preference colors to an error message."""
+        c = self._prefs.colors
+        widget.styles.color = c.error_text
+        widget.styles.border_left = ("wide", c.error_border)
+
     def _maybe_add_fold_toggle(self, widget: Static, content: str) -> None:
         """Add a fold toggle after a long message for expand/collapse."""
         line_count = content.count("\n") + 1
@@ -7109,6 +7135,7 @@ class AmplifierChicApp(App):
         chat_view = self._active_chat_view()
         msg = ErrorMessage(f"Error: {error_text}", classes="error-message")
         chat_view.mount(msg)
+        self._style_error(msg)
         self._scroll_if_auto(msg)
         # Beep immediately on errors (no duration gate)
         self._notify_sound(event="error")

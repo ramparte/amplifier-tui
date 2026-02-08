@@ -14,6 +14,45 @@ import yaml
 
 PREFS_PATH = Path.home() / ".amplifier" / "tui-preferences.yaml"
 
+# Named color map: user-friendly names -> hex values.
+# Supports standard terminal colors plus a few useful extras.
+COLOR_NAMES: dict[str, str] = {
+    "white": "#ffffff",
+    "bright_white": "#ffffff",
+    "gray": "#888888",
+    "grey": "#888888",
+    "dim": "#666666",
+    "black": "#000000",
+    "red": "#cc0000",
+    "green": "#00cc00",
+    "bright_green": "#00ff00",
+    "blue": "#0066cc",
+    "cyan": "#00cccc",
+    "magenta": "#cc00cc",
+    "yellow": "#cccc00",
+    "orange": "#cc7700",
+}
+
+
+def resolve_color(value: str) -> str | None:
+    """Resolve a color value to a hex string.
+
+    Accepts:
+      - Named colors (white, gray, cyan, etc.)
+      - Hex codes (#RRGGBB)
+
+    Returns the hex string, or None if the value is not recognised.
+    """
+    import re
+
+    low = value.strip().lower()
+    if low in COLOR_NAMES:
+        return COLOR_NAMES[low]
+    if re.match(r"^#[0-9a-fA-F]{6}$", value.strip()):
+        return value.strip()
+    return None
+
+
 # Built-in theme presets: each maps color preference keys to hex values.
 THEMES: dict[str, dict[str, str]] = {
     "dark": {
@@ -29,6 +68,8 @@ THEMES: dict[str, dict[str, str]] = {
         "tool_background": "#0a0a0a",
         "system_text": "#88bbcc",
         "system_border": "#448899",
+        "error_text": "#cc0000",
+        "error_border": "#cc0000",
         "timestamp": "#444444",
         "status_bar": "#888888",
     },
@@ -45,6 +86,8 @@ THEMES: dict[str, dict[str, str]] = {
         "tool_background": "#f5f5f5",
         "system_text": "#337788",
         "system_border": "#66aabb",
+        "error_text": "#cc0000",
+        "error_border": "#cc0000",
         "timestamp": "#999999",
         "status_bar": "#555555",
     },
@@ -61,6 +104,8 @@ THEMES: dict[str, dict[str, str]] = {
         "tool_background": "#002b36",
         "system_text": "#2aa198",
         "system_border": "#2aa198",
+        "error_text": "#dc322f",
+        "error_border": "#dc322f",
         "timestamp": "#586e75",
         "status_bar": "#839496",
     },
@@ -77,6 +122,8 @@ THEMES: dict[str, dict[str, str]] = {
         "tool_background": "#1e1f1c",
         "system_text": "#66d9ef",
         "system_border": "#66d9ef",
+        "error_text": "#f92672",
+        "error_border": "#f92672",
         "timestamp": "#75715e",
         "status_bar": "#a6a6a6",
     },
@@ -93,6 +140,8 @@ THEMES: dict[str, dict[str, str]] = {
         "tool_background": "#0a0a0a",
         "system_text": "#00ff00",
         "system_border": "#00ff00",
+        "error_text": "#ff0000",
+        "error_border": "#ff0000",
         "timestamp": "#808080",
         "status_bar": "#ffffff",
     },
@@ -109,6 +158,8 @@ THEMES: dict[str, dict[str, str]] = {
         "tool_background": "#242933",
         "system_text": "#88c0d0",
         "system_border": "#88c0d0",
+        "error_text": "#bf616a",
+        "error_border": "#bf616a",
         "timestamp": "#4c566a",
         "status_bar": "#9aa5b4",
     },
@@ -125,6 +176,8 @@ THEMES: dict[str, dict[str, str]] = {
         "tool_background": "#21222c",
         "system_text": "#8be9fd",
         "system_border": "#8be9fd",
+        "error_text": "#ff5555",
+        "error_border": "#ff5555",
         "timestamp": "#6272a4",
         "status_bar": "#9999bb",
     },
@@ -160,6 +213,8 @@ colors:
   tool_background: "#0a0a0a"     # near-black tint
   system_text: "#88bbcc"         # teal - slash command output
   system_border: "#448899"       # teal left bar
+  error_text: "#cc0000"          # red - error messages
+  error_border: "#cc0000"        # red left bar
   timestamp: "#444444"           # dim timestamp labels
   status_bar: "#888888"          # bottom status text
 
@@ -217,6 +272,8 @@ class ColorPreferences:
     tool_background: str = "#0a0a0a"
     system_text: str = "#88bbcc"
     system_border: str = "#448899"
+    error_text: str = "#cc0000"
+    error_border: str = "#cc0000"
     timestamp: str = "#444444"
     status_bar: str = "#888888"
 
@@ -354,6 +411,8 @@ def save_colors(colors: ColorPreferences, path: Path | None = None) -> None:
             "tool_background",
             "system_text",
             "system_border",
+            "error_text",
+            "error_border",
             "timestamp",
             "status_bar",
         ]
