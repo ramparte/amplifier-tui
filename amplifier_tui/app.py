@@ -64,7 +64,7 @@ from .preferences import (
     save_vim_mode,
     save_word_wrap,
 )
-from .theme import TEXTUAL_THEMES
+from .theme import TEXTUAL_THEMES, make_custom_textual_theme
 
 # Tool name -> human-friendly status label (without trailing "...")
 TOOL_LABELS: dict[str, str] = {
@@ -1394,7 +1394,7 @@ SHORTCUTS_TEXT = """\
 
  MODEL & DISPLAY ───────────────────────
   /model [name]    View/switch AI model
-  /theme [name]    Switch color theme (/theme preview)
+  /theme [name]    Switch color theme (/theme preview, /theme preview <name>, /theme revert)
   /colors          View/set text colors (/colors presets, /colors use <preset>)
   /wrap            Toggle word wrap
   /timestamps      Toggle timestamps (/ts)
@@ -1652,6 +1652,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/unfold all", "Unfold all folded messages", "/unfold all"),
     ("/theme", "Switch color theme", "/theme"),
     ("/theme preview", "Preview all themes with swatches", "/theme preview"),
+    ("/theme revert", "Restore saved theme after preview", "/theme revert"),
     ("/colors", "View or set text colors", "/colors"),
     (
         "/colors presets",
@@ -2070,6 +2071,9 @@ class AmplifierChicApp(App):
         # Session notes (user annotations, not sent to AI)
         self._session_notes: list[dict] = []
 
+        # Theme preview state (temporarily applied theme, not yet saved)
+        self._previewing_theme: str | None = None
+
         # Message folding state (from preferences, 0 = disabled)
         self._fold_threshold: int = self._prefs.display.fold_threshold or 20
 
@@ -2171,6 +2175,14 @@ class AmplifierChicApp(App):
         # Register all built-in color themes
         for _tname, tobj in TEXTUAL_THEMES.items():
             self.register_theme(tobj)
+
+        # Register Textual base themes for any user-defined custom themes
+        for cname in THEMES:
+            if cname not in TEXTUAL_THEMES:
+                base = "dark"  # custom themes inherit the dark Textual base
+                custom_tobj = make_custom_textual_theme(cname, base)
+                TEXTUAL_THEMES[cname] = custom_tobj
+                self.register_theme(custom_tobj)
 
         # Apply the saved theme (or default to dark)
         saved = self._prefs.theme_name
@@ -5057,7 +5069,7 @@ class AmplifierChicApp(App):
             "  /wrap         Toggle word wrap on/off (/wrap on, /wrap off)\n"
             "  /fold         Fold last long message (/fold all, /fold none, /fold <N>, /fold threshold)\n"
             "  /unfold       Unfold last folded message (/unfold all to unfold all)\n"
-            "  /theme        Switch color theme (/theme preview for swatches)\n"
+            "  /theme        Switch color theme (/theme preview, /theme preview <name>, /theme revert)\n"
             "  /colors       View/set text colors (/colors <role> <#hex>, /colors reset, presets, use)\n"
             "  /focus        Toggle focus mode (/focus on, /focus off)\n"
             "  /find         Interactive find-in-chat bar (Ctrl+F) with match navigation\n"
@@ -10080,45 +10092,124 @@ class AmplifierChicApp(App):
             )
 
     def _cmd_theme(self, text: str) -> None:
-        """Switch color theme or show current/available themes."""
+        """Switch color theme or show current/available themes.
+
+        Sub-commands:
+          /theme              — list available themes
+          /theme <name>       — apply and persist a theme
+          /theme preview      — show color swatches for all themes
+          /theme preview <n>  — temporarily preview a theme (live)
+          /theme revert       — restore the saved theme after a preview
+        """
         parts = text.strip().split(None, 1)
 
         if len(parts) < 2:
             # No argument: list themes with descriptions and active marker
             current = self._prefs.theme_name
+            previewing = self._previewing_theme
             lines = ["Available themes:"]
             for name, desc in THEME_DESCRIPTIONS.items():
-                marker = " *" if name == current else "  "
+                if previewing and name == previewing:
+                    marker = " >"
+                elif name == current:
+                    marker = " *"
+                else:
+                    marker = "  "
                 lines.append(f"{marker} {name}: {desc}")
             lines.append("")
-            lines.append("Use: /theme <name>")
+            lines.append(
+                "Use: /theme <name>  |  /theme preview <name>  |  /theme revert"
+            )
+            if previewing:
+                lines.append(f"  (previewing {previewing}, saved: {current})")
             self._add_system_message("\n".join(lines))
             return
 
-        name = parts[1].strip().lower()
+        arg = parts[1].strip().lower()
 
-        if name == "preview":
+        # /theme preview  OR  /theme preview <name>
+        if arg == "preview":
             self._cmd_theme_preview()
             return
+        if arg.startswith("preview "):
+            preview_name = arg[8:].strip()
+            self._preview_theme(preview_name)
+            return
 
-        if not self._prefs.apply_theme(name):
+        # /theme revert — restore the saved theme after a preview
+        if arg == "revert":
+            self._revert_theme_preview()
+            return
+
+        # /theme <name> — apply and persist
+        if not self._prefs.apply_theme(arg):
+            available = ", ".join(THEMES)
+            self._add_system_message(f"Unknown theme: {arg}\nAvailable: {available}")
+            return
+
+        self._prefs.theme_name = arg
+        self._previewing_theme = None  # clear any active preview
+        save_colors(self._prefs.colors)
+        save_theme_name(arg)
+
+        # Switch the Textual base theme (background, surface, panel, etc.)
+        textual_theme = TEXTUAL_THEMES.get(arg)
+        if textual_theme:
+            self.theme = textual_theme.name
+
+        self._apply_theme_to_all_widgets()
+        desc = THEME_DESCRIPTIONS.get(arg, "")
+        self._add_system_message(f"Theme: {arg} — {desc}" if desc else f"Theme: {arg}")
+
+    def _preview_theme(self, name: str) -> None:
+        """Temporarily apply a theme without persisting it."""
+        if name not in THEMES:
             available = ", ".join(THEMES)
             self._add_system_message(f"Unknown theme: {name}\nAvailable: {available}")
             return
 
-        self._prefs.theme_name = name
-        save_colors(self._prefs.colors)
-        save_theme_name(name)
+        # Apply colors temporarily (don't save to disk)
+        for key, value in THEMES[name].items():
+            if hasattr(self._prefs.colors, key):
+                setattr(self._prefs.colors, key, value)
 
-        # Switch the Textual base theme (background, surface, panel, etc.)
+        self._previewing_theme = name
+
+        # Switch Textual base theme
         textual_theme = TEXTUAL_THEMES.get(name)
         if textual_theme:
             self.theme = textual_theme.name
 
         self._apply_theme_to_all_widgets()
         desc = THEME_DESCRIPTIONS.get(name, "")
+        saved = self._prefs.theme_name
         self._add_system_message(
-            f"Theme: {name} — {desc}" if desc else f"Theme: {name}"
+            f"Previewing: {name} — {desc}\n"
+            f"Use /theme {name} to keep, or /theme revert to restore {saved}"
+        )
+
+    def _revert_theme_preview(self) -> None:
+        """Restore the saved theme after a preview."""
+        saved = self._prefs.theme_name
+        if not self._previewing_theme:
+            self._add_system_message(f"No preview active. Current theme: {saved}")
+            return
+
+        old_preview = self._previewing_theme
+        self._previewing_theme = None
+
+        # Restore the persisted theme colors
+        self._prefs.apply_theme(saved)
+
+        textual_theme = TEXTUAL_THEMES.get(saved, TEXTUAL_THEMES["dark"])
+        self.theme = textual_theme.name
+
+        self._apply_theme_to_all_widgets()
+        desc = THEME_DESCRIPTIONS.get(saved, "")
+        self._add_system_message(
+            f"Reverted from {old_preview} to: {saved} — {desc}"
+            if desc
+            else f"Reverted from {old_preview} to: {saved}"
         )
 
     def _cmd_theme_preview(self) -> None:
@@ -10135,13 +10226,13 @@ class AmplifierChicApp(App):
             border_sw = f"[{colors['user_border']}]\u2588\u2588[/]"
             think_sw = f"[{colors['thinking_border']}]\u2588\u2588[/]"
             lines.append(
-                f"  {name:<14}{active:>9}  "
+                f"  {name:<16}{active:>9}  "
                 f"{user_sw} {asst_sw} {sys_sw} {border_sw} {think_sw}"
                 f"  {desc}"
             )
         lines.append("")
         lines.append("  Swatches: user  assistant  system  border  thinking")
-        lines.append("  Apply: /theme <name>")
+        lines.append("  Apply: /theme <name>  |  Try: /theme preview <name>")
         self._add_system_message("\n".join(lines))
 
     def _apply_theme_to_all_widgets(self) -> None:

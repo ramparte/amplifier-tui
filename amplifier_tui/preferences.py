@@ -235,6 +235,46 @@ THEMES: dict[str, dict[str, str]] = {
         "timestamp": "#585b70",
         "status_bar": "#9399b2",
     },
+    "midnight": {
+        "user_text": "#e8e8f0",
+        "user_border": "#536dfe",
+        "assistant_text": "#8899cc",
+        "assistant_border": "#1a1f4e",
+        "thinking_text": "#4455aa",
+        "thinking_border": "#7c4dff",
+        "thinking_background": "#080c1e",
+        "tool_text": "#3d4680",
+        "tool_border": "#1a1f4e",
+        "tool_background": "#080c1e",
+        "system_text": "#64b5f6",
+        "system_border": "#42a5f5",
+        "error_text": "#ff5252",
+        "error_border": "#ff5252",
+        "note_text": "#ffd740",
+        "note_border": "#ffab40",
+        "timestamp": "#3d4680",
+        "status_bar": "#7788bb",
+    },
+    "solarized-light": {
+        "user_text": "#073642",
+        "user_border": "#b58900",
+        "assistant_text": "#2aa198",
+        "assistant_border": "#eee8d5",
+        "thinking_text": "#93a1a1",
+        "thinking_border": "#6c71c4",
+        "thinking_background": "#eee8d5",
+        "tool_text": "#93a1a1",
+        "tool_border": "#eee8d5",
+        "tool_background": "#fdf6e3",
+        "system_text": "#268bd2",
+        "system_border": "#268bd2",
+        "error_text": "#dc322f",
+        "error_border": "#dc322f",
+        "note_text": "#b58900",
+        "note_border": "#cb4b16",
+        "timestamp": "#93a1a1",
+        "status_bar": "#657b83",
+    },
 }
 
 # Human-readable descriptions for each theme (displayed by /theme).
@@ -242,12 +282,14 @@ THEME_DESCRIPTIONS: dict[str, str] = {
     "dark": "Default dark theme",
     "light": "Light theme for bright environments",
     "solarized": "Solarized dark",
+    "solarized-light": "Solarized light for bright environments",
     "monokai": "Monokai Pro inspired",
     "high-contrast": "Maximum readability",
     "nord": "Arctic, north-bluish",
     "dracula": "Dark theme with vibrant colors",
     "gruvbox": "Retro groove, warm earthy tones",
     "catppuccin": "Soothing pastel (Mocha)",
+    "midnight": "Deep blue/navy dark theme",
 }
 
 _DEFAULT_YAML = """\
@@ -299,7 +341,8 @@ model:
   preferred: ""                   # preferred model for new sessions (empty = use default)
 
 theme:
-  name: "dark"                    # color theme: dark, light, solarized, monokai, high-contrast, nord, dracula
+  name: "dark"                    # color theme: dark, light, solarized, solarized-light, monokai,
+                                  #   high-contrast, nord, dracula, gruvbox, catppuccin, midnight
 
 sidebar:
   session_sort: "date"            # session sort order: date, name, project
@@ -307,6 +350,21 @@ sidebar:
 autosave:
   enabled: true                   # auto-save sessions periodically and after responses
   interval: 120                   # seconds between periodic auto-saves (default 2 min)
+
+# Custom themes: define your own color themes here.
+# Each key becomes a theme name usable with /theme <name>.
+# Only include the color keys you want to override; missing keys are
+# filled from the 'base' built-in theme (default: dark).
+#
+# custom_themes:
+#   my-ocean:
+#     description: "Deep ocean vibes"
+#     base: dark                  # inherit missing colors from this built-in
+#     user_text: "#e0f0ff"
+#     user_border: "#0088cc"
+#     assistant_text: "#66ddaa"
+#     system_text: "#44aaff"
+#     system_border: "#44aaff"
 """
 
 
@@ -397,6 +455,54 @@ class Preferences:
         return True
 
 
+def _load_custom_themes(custom_data: dict) -> None:
+    """Merge user-defined custom themes into the module-level THEMES dict.
+
+    Each entry in *custom_data* is a theme name mapping to a dict of color
+    overrides.  Two optional meta-keys are recognised:
+
+    * ``description`` – human-readable label shown by ``/theme``.
+    * ``base`` – name of a built-in theme whose colors fill any keys not
+      explicitly provided (default: ``"dark"``).
+
+    All other keys should be valid ``ColorPreferences`` field names with
+    hex color values.
+    """
+    from dataclasses import fields as dc_fields
+
+    valid_keys = {f.name for f in dc_fields(ColorPreferences)}
+
+    for raw_name, tdata in custom_data.items():
+        if not isinstance(tdata, dict):
+            continue
+        name = str(raw_name).lower().strip()
+        if not name:
+            continue
+
+        desc = str(tdata.get("description", f"Custom: {name}"))
+        base = str(tdata.get("base", "dark"))
+
+        # Build color dict from provided keys
+        color_dict: dict[str, str] = {}
+        for key in valid_keys:
+            if key in tdata:
+                resolved = resolve_color(str(tdata[key]))
+                if resolved:
+                    color_dict[key] = resolved
+
+        if not color_dict:
+            continue  # Nothing useful – skip
+
+        # Fill missing keys from the base theme
+        base_colors = THEMES.get(base, THEMES.get("dark", {}))
+        for key in valid_keys:
+            if key not in color_dict and key in base_colors:
+                color_dict[key] = base_colors[key]
+
+        THEMES[name] = color_dict
+        THEME_DESCRIPTIONS[name] = desc
+
+
 def load_preferences(path: Path | None = None) -> Preferences:
     """Load preferences from YAML file.
 
@@ -469,6 +575,9 @@ def load_preferences(path: Path | None = None) -> Preferences:
                     prefs.autosave.enabled = bool(adata["enabled"])
                 if "interval" in adata:
                     prefs.autosave.interval = max(30, int(adata["interval"]))
+            # Load user-defined custom themes into the module-level dicts
+            if isinstance(data.get("custom_themes"), dict):
+                _load_custom_themes(data["custom_themes"])
         except Exception:
             pass  # Fall back to defaults on any parse error
     else:

@@ -128,7 +128,55 @@ TEXTUAL_THEMES: dict[str, Theme] = {
         error="#f38ba8",
         dark=True,
     ),
+    "midnight": Theme(
+        name="chic-midnight",
+        primary="#536dfe",
+        secondary="#64b5f6",
+        accent="#7c4dff",
+        background="#0a0e27",
+        surface="#121640",
+        panel="#1a237e",
+        success="#69f0ae",
+        warning="#ffd740",
+        error="#ff5252",
+        dark=True,
+    ),
+    "solarized-light": Theme(
+        name="chic-solarized-light",
+        primary="#b58900",
+        secondary="#268bd2",
+        accent="#6c71c4",
+        background="#fdf6e3",
+        surface="#eee8d5",
+        panel="#93a1a1",
+        success="#859900",
+        warning="#cb4b16",
+        error="#dc322f",
+        dark=False,
+    ),
 }
 
 # Backward-compat alias: the default theme object used before multi-theme support.
 CHIC_THEME = TEXTUAL_THEMES["dark"]
+
+
+def make_custom_textual_theme(name: str, base: str = "dark") -> Theme:
+    """Create a Textual Theme for a custom color theme, inheriting from a built-in.
+
+    The custom theme gets a unique ``chic-<name>`` identifier and copies all
+    design tokens (primary, secondary, accent, background, etc.) from *base*.
+    """
+    source = TEXTUAL_THEMES.get(base, TEXTUAL_THEMES["dark"])
+    return Theme(
+        name=f"chic-{name}",
+        primary=source.primary,
+        secondary=source.secondary,
+        accent=source.accent,
+        background=source.background,
+        surface=source.surface,
+        panel=source.panel,
+        success=source.success,
+        warning=source.warning,
+        error=source.error,
+        dark=source.dark,
+    )
