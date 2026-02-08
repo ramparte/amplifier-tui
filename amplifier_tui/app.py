@@ -180,13 +180,20 @@ class TabState:
 # Known context window sizes (tokens) for popular models.
 # Used as fallback when the provider doesn't report context_window.
 MODEL_CONTEXT_WINDOWS: dict[str, int] = {
+    "claude-3-5-sonnet": 200_000,
+    "claude-3-sonnet": 200_000,
+    "claude-3-haiku": 200_000,
+    "claude-3-opus": 200_000,
     "claude-sonnet": 200_000,
     "claude-haiku": 200_000,
     "claude-opus": 200_000,
     "gpt-4o-mini": 128_000,
     "gpt-4o": 128_000,
-    "gpt-4": 128_000,
-    "gpt-3.5": 16_000,
+    "gpt-4-turbo": 128_000,
+    "gpt-4": 8_192,
+    "gpt-3.5-turbo": 16_385,
+    "gpt-3.5": 16_385,
+    "o1-mini": 128_000,
     "o1": 200_000,
     "o3": 200_000,
     "o4-mini": 200_000,
@@ -6005,37 +6012,55 @@ class AmplifierChicApp(App):
 
         # Prefer real API tokens when available; fall back to estimate
         display_total = api_total if api_total > 0 else est_total
-        pct = (display_total / window * 100) if window > 0 else 0
+        pct = min(100.0, (display_total / window * 100)) if window > 0 else 0.0
+
+        # Visual progress bar (20 chars wide)
+        bar_width = 20
+        filled = int(pct / 100 * bar_width)
+        bar = "\u2588" * filled + "\u2591" * (bar_width - filled)
+
+        # Message counts
+        msg_count = len(self._search_messages)
+        user_msg_count = sum(1 for r, _, _ in self._search_messages if r == "user")
+        asst_msg_count = sum(1 for r, _, _ in self._search_messages if r == "assistant")
+        sys_msg_count = sum(1 for r, _, _ in self._search_messages if r == "system")
 
         fmt = self._format_token_count
+        source = "API" if api_total > 0 else "estimated"
 
         lines = [
-            "Context Usage",
-            "\u2500" * 18,
+            f"Context Usage  [{bar}] {pct:.0f}%",
+            "\u2500" * 40,
+            f"  Model:       {model}",
+            f"  Window:      {fmt(window)} tokens",
+            f"  Used:        ~{fmt(display_total)} tokens ({source})",
+            f"  Remaining:   ~{fmt(max(0, window - display_total))} tokens",
         ]
 
         if api_total > 0:
             lines += [
-                f"  Input tokens:     ~{fmt(input_tok)}",
-                f"  Output tokens:    ~{fmt(output_tok)}",
-                f"  Total (API):      ~{fmt(api_total)}",
+                "",
+                "API tokens:",
+                f"  Input:       ~{fmt(input_tok)}",
+                f"  Output:      ~{fmt(output_tok)}",
+                f"  Total:       ~{fmt(api_total)}",
             ]
-        else:
-            lines.append("  (no API token data yet)")
 
         lines += [
             "",
-            "Chat estimate (~4 chars/token):",
-            f"  User messages:    ~{fmt(est_user)}",
-            f"  Assistant msgs:   ~{fmt(est_asst)}",
-            f"  System msgs:      ~{fmt(est_sys)}",
-            f"  Visible total:    ~{fmt(est_total)}",
+            "Breakdown (~4 chars/token):",
+            f"  User:        ~{fmt(est_user)} tokens",
+            f"  Assistant:   ~{fmt(est_asst)} tokens",
+            f"  System:      ~{fmt(est_sys)} tokens",
             "",
-            f"  Context window:   {fmt(window)}  ({model})",
-            f"  Usage:            ~{pct:.1f}%",
+            f"Messages: {msg_count} total"
+            f" ({user_msg_count} user,"
+            f" {asst_msg_count} assistant,"
+            f" {sys_msg_count} system)",
             "",
-            "Note: Actual context also includes system prompts, tool",
-            "schemas, and other overhead not visible in chat",
+            "Note: Token counts are estimates (~4 chars/token).",
+            "Actual usage may vary by model tokenizer. Context also",
+            "includes system prompts, tool schemas, and overhead",
             "(typically ~10-20K tokens). Use /compact to free space.",
         ]
         self._add_system_message("\n".join(lines))
@@ -7042,6 +7067,7 @@ class AmplifierChicApp(App):
         self._user_message_count += 1
         self._user_words += words
         self._update_word_count_display()
+        self._update_token_display()
 
     def _add_assistant_message(self, text: str, ts: datetime | None = None) -> None:
         chat_view = self._active_chat_view()
@@ -7063,6 +7089,7 @@ class AmplifierChicApp(App):
         self._assistant_message_count += 1
         self._assistant_words += words
         self._update_word_count_display()
+        self._update_token_display()
 
     def _add_system_message(self, text: str, ts: datetime | None = None) -> None:
         """Display a system message (slash command output)."""
@@ -7450,17 +7477,25 @@ class AmplifierChicApp(App):
                 parts.append(f"[{pname}]")
 
             # Token usage with context-window percentage
+            window = self._get_context_window()
             pct = 0.0
+
+            # Prefer real API tokens; fall back to char-based estimate
+            total = 0
             if sm:
                 total = sm.total_input_tokens + sm.total_output_tokens
-                window = self._get_context_window()
-                if total > 0 and window > 0:
-                    used = self._format_token_count(total)
-                    cap = self._format_token_count(window)
-                    pct = total / window * 100
-                    parts.append(f"~{used}/{cap} ({pct:.0f}%)")
-                elif total > 0:
-                    parts.append(f"~{self._format_token_count(total)} tokens")
+            if total == 0 and self._search_messages:
+                total = sum(
+                    len(content) // 4 for _role, content, _w in self._search_messages
+                )
+
+            if total > 0 and window > 0:
+                used = self._format_token_count(total)
+                cap = self._format_token_count(window)
+                pct = min(100.0, total / window * 100)
+                parts.append(f"~{used}/{cap} ({pct:.0f}%)")
+            elif total > 0:
+                parts.append(f"~{self._format_token_count(total)} tokens")
 
             widget = self.query_one("#status-model", Static)
             widget.update(" | ".join(parts) if parts else "")
@@ -7473,25 +7508,15 @@ class AmplifierChicApp(App):
             else:
                 widget.styles.color = "#44aa44"  # green
 
-            # Update the context fuel gauge indicator
-            ctx_pct = pct  # use API-derived percentage first
-            if ctx_pct == 0.0 and self._search_messages:
-                # Fallback: estimate tokens from message content
-                est_tokens = sum(
-                    len(content) // 4 for _role, content, _w in self._search_messages
-                )
-                if est_tokens > 0:
-                    ctx_window = self._get_context_window()
-                    ctx_pct = min(100.0, est_tokens / ctx_window * 100)
-
+            # Update the context fuel gauge bar (8 chars wide, █/░)
             ctx_widget = self.query_one("#status-context", Static)
-            if ctx_pct > 0:
-                filled = int(ctx_pct / 20)  # 5 positions, each = 20%
-                bar = "\u2593" * filled + "\u2591" * (5 - filled)
-                ctx_widget.update(f"ctx:{bar} {ctx_pct:.0f}%")
-                if ctx_pct > 75:
+            if pct > 0:
+                filled = int(pct * 8 / 100)
+                bar = "\u2588" * filled + "\u2591" * (8 - filled)
+                ctx_widget.update(f"{bar} {pct:.0f}%")
+                if pct > 80:
                     ctx_widget.styles.color = "#ff4444"  # red
-                elif ctx_pct > 50:
+                elif pct > 50:
                     ctx_widget.styles.color = "#ffaa00"  # yellow
                 else:
                     ctx_widget.styles.color = "#44aa44"  # green
