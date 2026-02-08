@@ -118,6 +118,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/grep",
     "/redo",
     "/snippet",
+    "/snippets",
     "/title",
     "/diff",
 )
@@ -630,7 +631,7 @@ SHORTCUTS_TEXT = """\
   /fold       Fold/unfold long messages
   /history    Browse/clear input history
   /redo [N]   Re-send last (or Nth-to-last) message
-  /snippet    Save/use reusable prompt templates
+  /snippet    Prompt templates (save/use/remove/clear)
   /quit       Quit
 
        Press Escape to close\
@@ -2263,6 +2264,7 @@ class AmplifierChicApp(App):
             "/grep": lambda: self._cmd_grep(text),
             "/redo": lambda: self._cmd_redo(args),
             "/snippet": lambda: self._cmd_snippet(args),
+            "/snippets": lambda: self._cmd_snippet(""),
             "/title": lambda: self._cmd_title(args),
             "/diff": lambda: self._cmd_diff(args),
         }
@@ -2315,7 +2317,7 @@ class AmplifierChicApp(App):
             "  /sort         Sort sessions: date, name, project (/sort <mode>)\n"
             "  /edit         Open $EDITOR for longer prompts (same as Ctrl+G)\n"
             "  /draft        Show/save/clear/load input draft (/draft save, /draft clear, /draft load)\n"
-            "  /snippet      Save/use reusable prompt templates\n"
+            "  /snippet      Prompt templates (/snippet save|use|remove|clear|<name>)\n"
             "  /alias        List/create/remove custom shortcuts\n"
             "  /compact      Toggle compact view mode (/compact on, /compact off)\n"
             "  /history      Browse input history (/history clear, /history <N>)\n"
@@ -2428,7 +2430,7 @@ class AmplifierChicApp(App):
         self._add_system_message(f"Alias created: /{name} \u2192 {expansion}")
 
     def _cmd_snippet(self, text: str) -> None:
-        """List, save, use, send, remove, or edit reusable prompt snippets."""
+        """List, save, use, send, remove, clear, or edit reusable prompt snippets."""
         text = text.strip()
 
         if not text:
@@ -2436,12 +2438,8 @@ class AmplifierChicApp(App):
             if not self._snippets:
                 self._add_system_message(
                     "No snippets saved.\n"
-                    "Usage:\n"
-                    "  /snippet save <name> <text>  Save a snippet\n"
-                    "  /snippet use <name>          Insert into input\n"
-                    "  /snippet send <name>         Insert and send\n"
-                    "  /snippet remove <name>       Delete a snippet\n"
-                    "  /snippet edit <name>         Edit in $EDITOR"
+                    "Save: /snippet save <name> <text>\n"
+                    "Use:  /snippet <name>"
                 )
                 return
 
@@ -2452,7 +2450,7 @@ class AmplifierChicApp(App):
                     preview += "..."
                 lines.append(f"  {name}: {preview}")
             lines.append("")
-            lines.append("Use: /snippet use <name> or /snippet send <name>")
+            lines.append("Insert: /snippet <name>  |  Send: /snippet use <name>")
             self._add_system_message("\n".join(lines))
             return
 
@@ -2460,7 +2458,12 @@ class AmplifierChicApp(App):
         parts = text.split(maxsplit=2)
         subcmd = parts[0].lower()
 
-        if subcmd == "save":
+        if subcmd == "clear":
+            self._snippets.clear()
+            self._save_snippets()
+            self._add_system_message("All snippets cleared")
+
+        elif subcmd == "save":
             if len(parts) < 3:
                 self._add_system_message("Usage: /snippet save <name> <text>")
                 return
@@ -2479,26 +2482,10 @@ class AmplifierChicApp(App):
             self._save_snippets()
             self._add_system_message(f"Snippet '{sname}' saved ({len(content)} chars)")
 
-        elif subcmd == "use":
+        elif subcmd in ("use", "send"):
+            # Send the snippet as a message immediately
             if len(parts) < 2:
                 self._add_system_message("Usage: /snippet use <name>")
-                return
-            sname = parts[1]
-            if sname not in self._snippets:
-                self._add_system_message(f"No snippet named '{sname}'")
-                return
-            try:
-                inp = self.query_one("#chat-input", ChatInput)
-                inp.clear()
-                inp.insert(self._snippets[sname])
-                inp.focus()
-                self._add_system_message(f"Snippet '{sname}' loaded into input")
-            except Exception:
-                pass
-
-        elif subcmd == "send":
-            if len(parts) < 2:
-                self._add_system_message("Usage: /snippet send <name>")
                 return
             sname = parts[1]
             if sname not in self._snippets:
@@ -2549,20 +2536,20 @@ class AmplifierChicApp(App):
             self._edit_snippet_in_editor(sname, content)
 
         else:
-            # Maybe they're trying to use a snippet by name directly
+            # Default: insert snippet into input (doesn't send)
             if subcmd in self._snippets:
                 try:
                     inp = self.query_one("#chat-input", ChatInput)
                     inp.clear()
                     inp.insert(self._snippets[subcmd])
                     inp.focus()
-                    self._add_system_message(f"Snippet '{subcmd}' loaded")
+                    self._add_system_message(f"Snippet '{subcmd}' inserted")
                 except Exception:
                     pass
             else:
                 self._add_system_message(
-                    f"Unknown subcommand '{subcmd}'.\n"
-                    "Use: save, use, send, remove, edit"
+                    f"No snippet '{subcmd}'.\n"
+                    "Use /snippet to list, /snippet save <name> <text> to create."
                 )
 
     def _edit_snippet_in_editor(self, name: str, content: str) -> None:
