@@ -348,11 +348,41 @@ MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "gpt-3.5": 16_385,
     "o1-mini": 128_000,
     "o1": 200_000,
+    "o3-mini": 200_000,
     "o3": 200_000,
     "o4-mini": 200_000,
     "gemini": 1_000_000,
 }
 DEFAULT_CONTEXT_WINDOW = 200_000
+
+
+def _context_color(pct: float) -> str:
+    """Return a color string for the given context-usage percentage.
+
+    Four tiers:
+      green   0-50%  – plenty of room
+      yellow  50-75% – getting full
+      orange  75-90% – almost full
+      red     90%+   – near limit
+    """
+    if pct >= 90:
+        return "#ff4444"
+    if pct >= 75:
+        return "#ff8800"
+    if pct >= 50:
+        return "#ffaa00"
+    return "#44aa44"
+
+
+def _context_color_name(pct: float) -> str:
+    """Return a human-readable color *name* for context-usage percentage."""
+    if pct >= 90:
+        return "red"
+    if pct >= 75:
+        return "orange"
+    if pct >= 50:
+        return "yellow"
+    return "green"
 
 
 def _get_tool_label(name: str, tool_input: dict | str | None) -> str:
@@ -8654,12 +8684,7 @@ class AmplifierChicApp(App):
         filled = int(pct / 100 * bar_width)
         empty = bar_width - filled
 
-        if pct < 50:
-            color_label = "green"
-        elif pct < 75:
-            color_label = "yellow"
-        else:
-            color_label = "red"
+        color_label = _context_color_name(pct)
 
         bar = f"[{'█' * filled}{'░' * empty}]"
 
@@ -10566,13 +10591,8 @@ class AmplifierChicApp(App):
             widget = self.query_one("#status-model", Static)
             widget.update(" | ".join(parts) if parts else "")
 
-            # Color-code by context usage percentage
-            if pct > 80:
-                widget.styles.color = "#ff4444"  # red
-            elif pct > 50:
-                widget.styles.color = "#ffaa00"  # yellow
-            else:
-                widget.styles.color = "#44aa44"  # green
+            # Color-code by context usage percentage (4-tier)
+            widget.styles.color = _context_color(pct)
 
             # Update the context fuel gauge bar (8 chars wide, █/░)
             ctx_widget = self.query_one("#status-context", Static)
@@ -10580,12 +10600,7 @@ class AmplifierChicApp(App):
                 filled = int(pct * 8 / 100)
                 bar = "\u2588" * filled + "\u2591" * (8 - filled)
                 ctx_widget.update(f"{bar} {pct:.0f}%")
-                if pct > 80:
-                    ctx_widget.styles.color = "#ff4444"  # red
-                elif pct > 50:
-                    ctx_widget.styles.color = "#ffaa00"  # yellow
-                else:
-                    ctx_widget.styles.color = "#44aa44"  # green
+                ctx_widget.styles.color = _context_color(pct)
             else:
                 ctx_widget.update("")
         except Exception:
