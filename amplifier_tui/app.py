@@ -164,6 +164,36 @@ SLASH_COMMANDS: tuple[str, ...] = (
 )
 
 
+# -- Model aliases and catalog ------------------------------------------------
+
+MODEL_ALIASES: dict[str, str] = {
+    # Claude models
+    "sonnet": "claude-sonnet-4-20250514",
+    "haiku": "claude-haiku-35-20241022",
+    "opus": "claude-3-opus-20240229",
+    # GPT models
+    "gpt4": "gpt-4o",
+    "gpt4o": "gpt-4o",
+    "gpt4-mini": "gpt-4o-mini",
+    "o1": "o1",
+    "o3": "o3-mini",
+    # Shorthand
+    "fast": "claude-haiku-35-20241022",
+    "smart": "claude-sonnet-4-20250514",
+    "best": "claude-3-opus-20240229",
+}
+
+AVAILABLE_MODELS: tuple[tuple[str, str, str], ...] = (
+    # (model_id, provider, description)
+    ("claude-sonnet-4-20250514", "Anthropic", "Claude Sonnet 4 (balanced)"),
+    ("claude-haiku-35-20241022", "Anthropic", "Claude Haiku 3.5 (fast)"),
+    ("claude-3-opus-20240229", "Anthropic", "Claude Opus (powerful)"),
+    ("gpt-4o", "OpenAI", "GPT-4o (balanced)"),
+    ("gpt-4o-mini", "OpenAI", "GPT-4o Mini (fast)"),
+    ("o1", "OpenAI", "O1 (reasoning)"),
+    ("o3-mini", "OpenAI", "O3 Mini (reasoning)"),
+)
+
 # -- /include constants -------------------------------------------------------
 
 MAX_INCLUDE_LINES = 500
@@ -4729,27 +4759,28 @@ class AmplifierChicApp(App):
             if sid:
                 lines.append(f"  Session:    {sid[:12]}...")
 
-        # Append available models for quick reference
+        # Append available models with descriptions
+        lines.append("")
+        lines.append("Available models:")
+        catalog = {m[0]: m[2] for m in AVAILABLE_MODELS}
         available = self._get_available_models()
-        if available:
-            lines.append("")
-            lines.append("Available models:")
-            for model, provider in available:
-                marker = " *" if model == current else "  "
-                lines.append(f"  {marker} {provider:10s}  {model}")
-            lines.append("")
-            lines.append("Switch: /model <name>")
+        for model, provider in available:
+            marker = " \u2190" if model == current else "  "
+            desc = catalog.get(model, "")
+            desc_str = f"  {desc}" if desc else ""
+            lines.append(f"  {provider:10s}  {model}{marker}{desc_str}")
+
+        # Show aliases
+        lines.append("")
+        alias_names = sorted(MODEL_ALIASES)
+        lines.append(f"Aliases: {', '.join(alias_names)}")
+        lines.append("\nUsage: /model <name or alias>")
 
         self._add_system_message("\n".join(lines))
 
-    # Well-known models used as a fallback when no session is active.
+    # Well-known models derived from the module-level AVAILABLE_MODELS catalog.
     _KNOWN_MODELS: list[tuple[str, str]] = [
-        ("claude-sonnet-4-20250514", "Anthropic"),
-        ("claude-haiku-35-20241022", "Anthropic"),
-        ("gpt-4o", "OpenAI"),
-        ("gpt-4o-mini", "OpenAI"),
-        ("o3", "OpenAI"),
-        ("o3-mini", "OpenAI"),
+        (model_id, provider) for model_id, provider, _desc in AVAILABLE_MODELS
     ]
 
     def _get_available_models(self) -> list[tuple[str, str]]:
@@ -4769,16 +4800,21 @@ class AmplifierChicApp(App):
         """Show available models the user can select."""
         models = self._get_available_models()
         current = self.session_manager.model_name if self.session_manager else ""
+        catalog = {m[0]: m[2] for m in AVAILABLE_MODELS}
 
         lines = ["Available Models\n"]
         for name, provider in models:
-            marker = ""
-            if name == current:
-                marker = "  (active)"
+            marker = "  (active)" if name == current else ""
+            desc = catalog.get(name, "")
             lines.append(f"  {provider:10s}  {name}{marker}")
+            if desc:
+                lines.append(f"              {desc}")
 
         lines.append("")
-        lines.append("Switch: /model <name>")
+        alias_names = sorted(MODEL_ALIASES)
+        lines.append(f"Aliases: {', '.join(alias_names)}")
+        lines.append("")
+        lines.append("Switch: /model <name or alias>")
         has_session = bool(self.session_manager and self.session_manager.session)
         if has_session:
             lines.append("Takes effect immediately on the current session.")
@@ -4786,26 +4822,42 @@ class AmplifierChicApp(App):
             lines.append("Takes effect when the next session starts.")
         self._add_system_message("\n".join(lines))
 
+    @staticmethod
+    def _resolve_model_alias(name: str) -> str:
+        """Resolve a model alias (case-insensitive) to its full model name."""
+        return MODEL_ALIASES.get(name.lower(), name)
+
     def _cmd_model_set(self, name: str) -> None:
         """Switch the active model and save as preferred default."""
+        # Resolve alias (case-insensitive)
+        resolved = self._resolve_model_alias(name)
+        was_alias = resolved != name
+
+        sm = self.session_manager
+        old_model = (
+            (sm.model_name if sm else "") or self._prefs.preferred_model or "default"
+        )
+
         # Persist preference for future sessions
-        self._prefs.preferred_model = name
-        save_preferred_model(name)
+        self._prefs.preferred_model = resolved
+        save_preferred_model(resolved)
 
         # Try to switch the live session's provider immediately
-        sm = self.session_manager
-        switched = sm.switch_model(name) if sm and sm.session else False
+        switched = sm.switch_model(resolved) if sm and sm.session else False
 
         self._update_token_display()
         self._update_breadcrumb()
 
+        alias_note = f"  (alias: {name} \u2192 {resolved})" if was_alias else ""
+
         if switched:
             self._add_system_message(
-                f"Model switched to: {name}\nNext AI response will use this model."
+                f"Model: {old_model} \u2192 {resolved}{alias_note}\n"
+                "Next AI response will use this model."
             )
         else:
             self._add_system_message(
-                f"Preferred model set to: {name}\n"
+                f"Model: {old_model} \u2192 {resolved}{alias_note}\n"
                 "Will take effect on the next session start."
             )
 
