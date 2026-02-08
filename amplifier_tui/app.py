@@ -169,8 +169,44 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/run",
     "/include",
     "/autosave",
+    "/system",
 )
 
+# -- System prompt presets -----------------------------------------------------
+SYSTEM_PRESETS: dict[str, str] = {
+    "coder": (
+        "You are an expert programmer. Write clean, efficient, well-documented"
+        " code. Prefer simplicity over cleverness."
+    ),
+    "reviewer": (
+        "You are a thorough code reviewer. Focus on bugs, security issues,"
+        " performance problems, and best practices. Be specific and actionable."
+    ),
+    "teacher": (
+        "You are a patient, knowledgeable teacher. Explain concepts clearly"
+        " with examples. Build understanding step by step."
+    ),
+    "concise": (
+        "Be extremely concise. Use bullet points and short sentences. No filler"
+        " words or unnecessary elaboration."
+    ),
+    "creative": (
+        "Think creatively and explore unconventional approaches. Challenge"
+        " assumptions. Suggest novel solutions."
+    ),
+    "debug": (
+        "You are a debugging expert. Think systematically about potential"
+        " causes. Ask clarifying questions. Trace logic step by step."
+    ),
+    "architect": (
+        "You are a software architect. Focus on system design, scalability,"
+        " maintainability, and trade-offs between approaches."
+    ),
+    "writer": (
+        "You are a skilled technical writer. Focus on clarity, structure, and"
+        " accuracy. Write for the intended audience."
+    ),
+}
 
 # -- Model aliases and catalog ------------------------------------------------
 
@@ -281,6 +317,9 @@ class TabState:
     session_refs: list = field(default_factory=list)
     message_pins: list = field(default_factory=list)
     created_at: str = ""
+    # Custom system prompt for this tab
+    system_prompt: str = ""
+    system_preset_name: str = ""  # name of active preset (if any)
 
 
 # Known context window sizes (tokens) for popular models.
@@ -590,6 +629,61 @@ class ChatInput(TextArea):
                 self.clear()
                 self.insert(self._tab_matches[0])
                 return
+
+        # Preset completion for /system use <preset>
+        if text.startswith("/system use "):
+            partial = text[len("/system use ") :]
+            preset_matches = sorted(
+                "/system use " + n for n in SYSTEM_PRESETS if n.startswith(partial)
+            )
+            if not preset_matches:
+                return
+            if len(preset_matches) == 1:
+                self.clear()
+                self.insert(preset_matches[0])
+                self._tab_matches = []
+                self._tab_prefix = ""
+                return
+            prefix = os.path.commonprefix(preset_matches)
+            if len(prefix) > len(text):
+                self.clear()
+                self.insert(prefix)
+                self._tab_matches = []
+                self._tab_prefix = ""
+                return
+            self._tab_matches = preset_matches
+            self._tab_prefix = text
+            self._tab_index = 0
+            self.clear()
+            self.insert(self._tab_matches[0])
+            return
+
+        # Subcommand completion for /system <subcommand>
+        if text.startswith("/system "):
+            partial = text[len("/system ") :]
+            subs = ["clear", "presets", "use", "append"]
+            sub_matches = sorted("/system " + s for s in subs if s.startswith(partial))
+            if not sub_matches:
+                return
+            if len(sub_matches) == 1:
+                self.clear()
+                self.insert(sub_matches[0] + " ")
+                self._tab_matches = []
+                self._tab_prefix = ""
+                return
+            prefix = os.path.commonprefix(sub_matches)
+            if len(prefix) > len(text):
+                self.clear()
+                self.insert(prefix)
+                self._tab_matches = []
+                self._tab_prefix = ""
+                return
+            self._tab_matches = sub_matches
+            self._tab_prefix = text
+            self._tab_index = 0
+            self.clear()
+            self.insert(self._tab_matches[0])
+            return
 
         # Path completion for /include <path>
         if text.startswith("/include "):
@@ -1083,6 +1177,7 @@ SHORTCUTS_TEXT = """\
   /draft           Save/load input drafts
   /snippet         Prompt snippets
   /template        Prompt templates with {{variables}}
+  /system          Set/view system prompt (presets, use, clear)
   /alias           Custom command shortcuts
   /vim             Toggle vim keybindings
   /prefs           Preferences
@@ -1282,6 +1377,37 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/autosave off", "Disable periodic auto-save", "/autosave off"),
     ("/autosave now", "Force an immediate auto-save", "/autosave now"),
     ("/autosave restore", "List and restore from auto-saves", "/autosave restore"),
+    ("/system", "Set or view custom system prompt", "/system"),
+    ("/system presets", "Show available system prompt presets", "/system presets"),
+    ("/system use coder", "Apply 'coder' system prompt preset", "/system use coder"),
+    (
+        "/system use reviewer",
+        "Apply 'reviewer' system prompt preset",
+        "/system use reviewer",
+    ),
+    (
+        "/system use teacher",
+        "Apply 'teacher' system prompt preset",
+        "/system use teacher",
+    ),
+    (
+        "/system use concise",
+        "Apply 'concise' system prompt preset",
+        "/system use concise",
+    ),
+    (
+        "/system use creative",
+        "Apply 'creative' system prompt preset",
+        "/system use creative",
+    ),
+    ("/system use debug", "Apply 'debug' system prompt preset", "/system use debug"),
+    (
+        "/system use architect",
+        "Apply 'architect' system prompt preset",
+        "/system use architect",
+    ),
+    ("/system use writer", "Apply 'writer' system prompt preset", "/system use writer"),
+    ("/system clear", "Remove custom system prompt", "/system clear"),
     # ── Keyboard-shortcut actions ───────────────────────────────────────────
     ("New Session  Ctrl+N", "Start a new conversation", "action:new_session"),
     ("New Tab  Ctrl+T", "Open a new conversation tab", "action:new_tab"),
@@ -1534,6 +1660,10 @@ class AmplifierChicApp(App):
         self._response_times: list[float] = []
         self._tool_usage: dict[str, int] = {}
 
+        # Custom system prompt (per-tab, injected before each message)
+        self._system_prompt: str = ""
+        self._system_preset_name: str = ""  # name of active preset (if any)
+
         # Custom command aliases
         self._aliases: dict[str, str] = {}
 
@@ -1641,6 +1771,7 @@ class AmplifierChicApp(App):
                     yield Static("Ready", id="status-state")
                     yield Static("", id="status-stash")
                     yield Static("", id="status-vim")
+                    yield Static("", id="status-system")
                     yield Static("\u2195 ON", id="status-scroll")
                     yield Static("0 words", id="status-wordcount")
                     yield Static("", id="status-context")
@@ -1793,6 +1924,8 @@ class AmplifierChicApp(App):
         tab.session_bookmarks = self._session_bookmarks
         tab.session_refs = self._session_refs
         tab.message_pins = self._message_pins
+        tab.system_prompt = self._system_prompt
+        tab.system_preset_name = self._system_preset_name
 
     def _load_tab_state(self, tab: TabState) -> None:
         """Load a TabState's data into current app state."""
@@ -1815,6 +1948,8 @@ class AmplifierChicApp(App):
         self._session_bookmarks = tab.session_bookmarks
         self._session_refs = tab.session_refs
         self._message_pins = tab.message_pins
+        self._system_prompt = tab.system_prompt
+        self._system_preset_name = tab.system_preset_name
 
     def _switch_to_tab(self, index: int) -> None:
         """Switch to the tab at the given index."""
@@ -2493,6 +2628,120 @@ class AmplifierChicApp(App):
                 )
         except Exception:
             pass
+
+    # ── System Prompt (/system) ──────────────────────────────────────────
+
+    def _cmd_system(self, text: str) -> None:
+        """Set, view, or clear the custom system prompt."""
+        text = text.strip()
+
+        # No args → show current prompt or usage
+        if not text:
+            if self._system_prompt:
+                label = (
+                    f" (preset: {self._system_preset_name})"
+                    if self._system_preset_name
+                    else ""
+                )
+                self._add_system_message(
+                    f"Current system prompt{label}:\n\n{self._system_prompt}"
+                )
+            else:
+                self._add_system_message(
+                    "No system prompt set.\n\n"
+                    "Usage:\n"
+                    "  /system <text>           Set system prompt\n"
+                    "  /system clear            Remove system prompt\n"
+                    "  /system append <text>    Add to existing prompt\n"
+                    "  /system presets          Show available presets\n"
+                    "  /system use <preset>     Apply a preset"
+                )
+            return
+
+        # /system clear
+        if text.lower() == "clear":
+            self._system_prompt = ""
+            self._system_preset_name = ""
+            self._update_system_indicator()
+            self._add_system_message("System prompt cleared.")
+            return
+
+        # /system presets
+        if text.lower() == "presets":
+            lines = ["Available system prompt presets:\n"]
+            for name, prompt in SYSTEM_PRESETS.items():
+                lines.append(f"  {name:10s}  {prompt[:60]}...")
+            lines.append("\nUsage: /system use <preset>")
+            self._add_system_message("\n".join(lines))
+            return
+
+        parts = text.split(None, 1)
+
+        # /system use <preset>
+        if parts[0].lower() == "use" and len(parts) > 1:
+            preset_name = parts[1].lower().strip()
+            if preset_name in SYSTEM_PRESETS:
+                self._system_prompt = SYSTEM_PRESETS[preset_name]
+                self._system_preset_name = preset_name
+                self._update_system_indicator()
+                self._add_system_message(
+                    f"System prompt set to '{preset_name}':\n\n{self._system_prompt}"
+                )
+            else:
+                self._add_system_message(
+                    f"Unknown preset: {preset_name}\n"
+                    f"Available: {', '.join(SYSTEM_PRESETS.keys())}"
+                )
+            return
+
+        if parts[0].lower() == "use" and len(parts) == 1:
+            self._add_system_message(
+                "Usage: /system use <preset>\n"
+                f"Available: {', '.join(SYSTEM_PRESETS.keys())}"
+            )
+            return
+
+        # /system append <text>
+        if parts[0].lower() == "append" and len(parts) > 1:
+            addition = parts[1]
+            if self._system_prompt:
+                self._system_prompt += f"\n{addition}"
+            else:
+                self._system_prompt = addition
+            self._system_preset_name = ""  # custom after append
+            self._update_system_indicator()
+            self._add_system_message(f"System prompt updated:\n\n{self._system_prompt}")
+            return
+
+        if parts[0].lower() == "append" and len(parts) == 1:
+            self._add_system_message("Usage: /system append <text>")
+            return
+
+        # Anything else → set as the full system prompt
+        self._system_prompt = text
+        self._system_preset_name = ""
+        self._update_system_indicator()
+        self._add_system_message(f"System prompt set:\n\n{text}")
+
+    def _update_system_indicator(self) -> None:
+        """Update the status bar system prompt indicator."""
+        try:
+            indicator = self.query_one("#status-system", Static)
+        except Exception:
+            return
+
+        if self._system_prompt:
+            if self._system_preset_name:
+                indicator.update(f"\U0001f3ad {self._system_preset_name}")
+            else:
+                # Show truncated custom prompt
+                short = self._system_prompt[:20].replace("\n", " ")
+                if len(self._system_prompt) > 20:
+                    short += "\u2026"
+                indicator.update(f"\U0001f3ad {short}")
+        else:
+            indicator.update("")
+        self._update_breadcrumb()
 
     def _cmd_autosave(self, text: str) -> None:
         """Manage session auto-save (/autosave [on|off|now|restore])."""
@@ -3869,6 +4118,7 @@ class AmplifierChicApp(App):
             "/run": lambda: self._cmd_run(args),
             "/include": lambda: self._cmd_include(args),
             "/autosave": lambda: self._cmd_autosave(args),
+            "/system": lambda: self._cmd_system(args),
         }
 
         handler = handlers.get(cmd)
@@ -3942,6 +4192,7 @@ class AmplifierChicApp(App):
             "  /include      Include file contents (/include src/main.py, /include *.py --send)\n"
             "                Also: @./path/to/file in your prompt auto-includes\n"
             "  /autosave     Auto-save status, toggle, force save, restore (/autosave on|off|now|restore)\n"
+            "  /system       Set/view system prompt (/system <text>, clear, presets, use <preset>, append)\n"
             "  /keys         Keyboard shortcut overlay\n"
             "  /palette      Command palette (Ctrl+P) – fuzzy search all commands\n"
             "  /quit         Quit\n"
@@ -8988,6 +9239,13 @@ class AmplifierChicApp(App):
             )
             parts.append(model)
 
+        # System prompt indicator in breadcrumb
+        if self._system_prompt:
+            if self._system_preset_name:
+                parts.append(f"\U0001f3ad {self._system_preset_name}")
+            else:
+                parts.append("\U0001f3ad custom")
+
         breadcrumb.update(" › ".join(parts))
 
     # ── Word Count ──────────────────────────────────────────────
@@ -9239,6 +9497,10 @@ class AmplifierChicApp(App):
             if self._prefs.display.streaming_enabled:
                 self._setup_streaming_callbacks()
             self.call_from_thread(self._update_status, "Thinking...")
+
+            # Inject system prompt (if set) before the user message
+            if self._system_prompt:
+                message = f"[System instructions: {self._system_prompt}]\n\n{message}"
 
             response = await self.session_manager.send_message(message)
 
