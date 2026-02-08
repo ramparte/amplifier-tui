@@ -107,6 +107,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/fold",
     "/history",
     "/grep",
+    "/redo",
 )
 
 # Known context window sizes (tokens) for popular models.
@@ -573,6 +574,7 @@ SHORTCUTS_TEXT = """\
   /compact    Clear chat, keep session
   /fold       Fold/unfold long messages
   /history    Browse/clear input history
+  /redo [N]   Re-send last (or Nth-to-last) message
   /quit       Quit
 
        Press Escape to close\
@@ -1914,6 +1916,7 @@ class AmplifierChicApp(App):
             "/alias": lambda: self._cmd_alias(args),
             "/history": lambda: self._cmd_history(args),
             "/grep": lambda: self._cmd_grep(text),
+            "/redo": lambda: self._cmd_redo(args),
         }
 
         handler = handlers.get(cmd)
@@ -1961,6 +1964,7 @@ class AmplifierChicApp(App):
             "  /alias        List/create/remove custom shortcuts\n"
             "  /compact      Clear chat, keep session\n"
             "  /history      Browse input history (/history clear, /history <N>)\n"
+            "  /redo         Re-send last user message (/redo <N> for Nth-to-last)\n"
             "  /keys         Keyboard shortcut overlay\n"
             "  /quit         Quit\n"
             "\n"
@@ -2555,6 +2559,75 @@ class AmplifierChicApp(App):
             "Up/Down arrows to recall, Ctrl+R to search, /history clear to reset"
         )
         self._add_system_message("\n".join(lines))
+
+    def _cmd_redo(self, text: str) -> None:
+        """Re-send a previous user message to Amplifier."""
+        text = text.strip()
+
+        # Parse the optional index argument
+        n = 1
+        if text:
+            if text.isdigit():
+                n = int(text)
+            else:
+                self._add_system_message(
+                    "Usage: /redo [N]  (re-send Nth-to-last message, default: 1)"
+                )
+                return
+
+        if n < 1:
+            self._add_system_message(
+                "Usage: /redo [N]  (re-send Nth-to-last message, default: 1)"
+            )
+            return
+
+        # Gather user messages from the current session
+        user_messages = [
+            content
+            for role, content, _widget in self._search_messages
+            if role == "user"
+        ]
+
+        if not user_messages:
+            self._add_system_message("No previous messages to redo")
+            return
+
+        if n > len(user_messages):
+            self._add_system_message(
+                f"Only {len(user_messages)} user message{'s' if len(user_messages) != 1 else ''} "
+                f"in this session"
+            )
+            return
+
+        # Guard: don't send while already processing
+        if self.is_processing:
+            self._add_system_message("Please wait for the current response to finish.")
+            return
+
+        if not self._amplifier_available:
+            self._add_system_message("Amplifier is not available.")
+            return
+
+        if not self._amplifier_ready:
+            self._add_system_message("Still loading Amplifier...")
+            return
+
+        message = user_messages[-n]
+
+        # Show a short preview of what we're re-sending
+        preview = message[:100].replace("\n", " ")
+        if len(message) > 100:
+            preview += "\u2026"
+        self._add_system_message(f"Re-sending: {preview}")
+
+        # Send as a new user message (shows in chat, starts processing)
+        self._clear_welcome()
+        self._add_user_message(message)
+        has_session = self.session_manager and getattr(
+            self.session_manager, "session", None
+        )
+        self._start_processing("Starting session" if not has_session else "Thinking")
+        self._send_message_worker(message)
 
     def _cmd_keys(self) -> None:
         """Show the keyboard shortcut overlay."""
