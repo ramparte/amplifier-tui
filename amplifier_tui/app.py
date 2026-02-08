@@ -351,6 +351,7 @@ class AmplifierChicApp(App):
                 )
                 yield Tree("Sessions", id="session-tree")
             with Vertical(id="chat-area"):
+                yield Static("", id="breadcrumb-bar")
                 yield ScrollableContainer(id="chat-view")
                 yield ChatInput(
                     "",
@@ -415,6 +416,7 @@ class AmplifierChicApp(App):
         else:
             self.call_from_thread(self._update_status, "Ready")
 
+        self.call_from_thread(self._update_breadcrumb)
         self.call_from_thread(self._load_session_list)
 
     # ── Welcome Screen ──────────────────────────────────────────
@@ -779,9 +781,13 @@ class AmplifierChicApp(App):
         """Toggle focus mode: hide all chrome, show only chat + input."""
         self._focus_mode = not self._focus_mode
 
-        # Hide/show the status bar
+        # Hide/show the status bar and breadcrumb
         try:
             self.query_one("#status-bar").display = not self._focus_mode
+        except Exception:
+            pass
+        try:
+            self.query_one("#breadcrumb-bar").display = not self._focus_mode
         except Exception:
             pass
 
@@ -1463,6 +1469,7 @@ class AmplifierChicApp(App):
             self._populate_session_list(self._session_list_data)
 
         self._add_system_message(f'Session renamed to "{new_name}"')
+        self._update_breadcrumb()
 
     def _cmd_delete(self, text: str) -> None:
         """Delete a session with two-step confirmation."""
@@ -1962,6 +1969,49 @@ class AmplifierChicApp(App):
             self.query_one("#status-session", Static).update(f"Session: {sid}")
         else:
             self.query_one("#status-session", Static).update("No session")
+        self._update_breadcrumb()
+
+    # ── Breadcrumb Bar ──────────────────────────────────────
+
+    def _update_breadcrumb(self) -> None:
+        """Update the breadcrumb bar with project / session / model context."""
+        try:
+            breadcrumb = self.query_one("#breadcrumb-bar", Static)
+        except Exception:
+            return
+
+        parts: list[str] = []
+
+        # Project directory
+        project_dir = os.getcwd()
+        home = str(Path.home())
+        if project_dir.startswith(home):
+            project_dir = "~" + project_dir[len(home) :]
+        # Show last 2 components for brevity if path is long
+        segments = project_dir.split("/")
+        if len(segments) > 3:
+            project_dir = "…/" + "/".join(segments[-2:])
+        parts.append(project_dir)
+
+        # Session name or truncated ID
+        sm = self.session_manager if hasattr(self, "session_manager") else None
+        sid = getattr(sm, "session_id", None) if sm else None
+        if sid:
+            names = self._load_session_names()
+            parts.append(names.get(sid, sid[:12]))
+
+        # Model (shortened)
+        model = getattr(sm, "model_name", "") if sm else ""
+        if model:
+            model = (
+                model.replace("claude-", "")
+                .replace("-20250514", "")
+                .replace("-20241022", "")
+                .replace("-latest", "")
+            )
+            parts.append(model)
+
+        breadcrumb.update(" › ".join(parts))
 
     # ── Word Count ──────────────────────────────────────────────
 

@@ -82,6 +82,16 @@ Screen {
     height: 1fr;
 }
 
+/* -- Breadcrumb bar ----------------------------------- */
+
+#breadcrumb-bar {
+    height: 1;
+    color: #555555;
+    background: $background;
+    padding: 0 2;
+    text-style: dim;
+}
+
 /* -- Chat View ---------------------------------------- */
 
 #chat-view {
