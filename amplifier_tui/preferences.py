@@ -293,6 +293,7 @@ display:
   multiline_default: false       # start in multiline mode (Enter = newline, Ctrl+Enter = send)
   show_token_usage: true         # show token/context gauge in status bar
   context_window_size: 0         # override context window size (0 = auto-detect from model)
+  fold_threshold: 20             # auto-fold messages longer than this many lines (0 = disabled)
 
 model:
   preferred: ""                   # preferred model for new sessions (empty = use default)
@@ -360,6 +361,7 @@ class DisplayPreferences:
     multiline_default: bool = False  # Start in multiline mode
     show_token_usage: bool = True  # Show token/context gauge in status bar
     context_window_size: int = 0  # Override context window (0 = auto-detect from model)
+    fold_threshold: int = 20  # Auto-fold messages longer than this (0 = disabled)
 
 
 @dataclass
@@ -1263,6 +1265,48 @@ def save_context_window_size(size: int, path: Path | None = None) -> None:
             )
         else:
             text = text.rstrip() + f"\n\ndisplay:\n  context_window_size: {value}\n"
+
+        path.write_text(text)
+    except Exception:
+        pass  # Best-effort persistence
+
+
+def save_fold_threshold(threshold: int, path: Path | None = None) -> None:
+    """Persist the fold_threshold display preference to the preferences file.
+
+    Surgically updates only the fold_threshold value, preserving the rest of
+    the file (including user comments) as-is.  A value of 0 means auto-fold
+    is disabled.
+    """
+    import re
+
+    path = path or PREFS_PATH
+    try:
+        if path.exists():
+            text = path.read_text()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = _DEFAULT_YAML
+
+        value = str(max(0, threshold))
+        if re.search(r"^\s+fold_threshold:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(\s+fold_threshold:).*$",
+                f"\\1 {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        elif re.search(r"^display:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(display:.*)$",
+                f"\\1\n  fold_threshold: {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            text = text.rstrip() + f"\n\ndisplay:\n  fold_threshold: {value}\n"
 
         path.write_text(text)
     except Exception:

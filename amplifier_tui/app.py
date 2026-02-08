@@ -57,6 +57,7 @@ from .preferences import (
     save_session_sort,
     save_show_timestamps,
     save_show_token_usage,
+    save_fold_threshold,
     save_streaming_enabled,
     save_theme_name,
     save_multiline_default,
@@ -1367,7 +1368,7 @@ SHORTCUTS_TEXT = """\
   /undo [N]        Undo last N exchange(s)
   /retry [text]    Undo last exchange & resend (or send new text)
   /redo [text]     Alias for /retry
-  /fold            Fold last long message (all, none, <n>)
+  /fold            Fold last long message (all, none, <N>, threshold)
   /unfold          Unfold last folded message (all)
   /compact         Toggle compact mode
   /history         Browse/search/clear input history
@@ -1641,6 +1642,8 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/fold", "Fold or unfold long messages", "/fold"),
     ("/fold all", "Fold all long messages", "/fold all"),
     ("/fold none", "Unfold all messages", "/fold none"),
+    ("/fold toggle", "Toggle fold on all long messages", "/fold toggle"),
+    ("/fold threshold", "Show or set auto-fold line threshold", "/fold threshold"),
     ("/unfold", "Unfold the last folded message", "/unfold"),
     ("/unfold all", "Unfold all folded messages", "/unfold all"),
     ("/theme", "Switch color theme", "/theme"),
@@ -2061,8 +2064,8 @@ class AmplifierChicApp(App):
         # Session notes (user annotations, not sent to AI)
         self._session_notes: list[dict] = []
 
-        # Message folding state
-        self._fold_threshold: int = 30
+        # Message folding state (from preferences, 0 = disabled)
+        self._fold_threshold: int = self._prefs.display.fold_threshold or 20
 
         # Crash-recovery draft timer (debounced save)
         self._crash_draft_timer: object | None = None
@@ -5032,7 +5035,7 @@ class AmplifierChicApp(App):
             "  /scroll       Toggle auto-scroll on/off\n"
             "  /timestamps   Toggle message timestamps on/off (alias: /ts)\n"
             "  /wrap         Toggle word wrap on/off (/wrap on, /wrap off)\n"
-            "  /fold         Fold last long message (/fold all, /fold none, /fold <n>)\n"
+            "  /fold         Fold last long message (/fold all, /fold none, /fold <N>, /fold threshold)\n"
             "  /unfold       Unfold last folded message (/unfold all to unfold all)\n"
             "  /theme        Switch color theme (/theme preview for swatches)\n"
             "  /colors       View/set text colors (/colors <role> <#hex>, /colors reset, presets, use)\n"
@@ -8707,8 +8710,8 @@ class AmplifierChicApp(App):
             )
 
     def _cmd_fold(self, text: str) -> None:
-        """Fold/unfold long messages or set fold threshold."""
-        parts = text.strip().split(None, 1)
+        """Fold/unfold long messages, toggle Nth, or set fold threshold."""
+        parts = text.strip().split(None, 2)
         arg = parts[1].strip().lower() if len(parts) > 1 else ""
 
         if arg == "all":
@@ -8720,22 +8723,45 @@ class AmplifierChicApp(App):
         if arg == "toggle":
             self._toggle_fold_all()
             return
+        if arg == "threshold":
+            # /fold threshold [N] — set or show the auto-fold threshold
+            val = parts[2].strip() if len(parts) > 2 else ""
+            if val.isdigit():
+                threshold = max(5, int(val))
+                self._fold_threshold = threshold
+                self._prefs.display.fold_threshold = threshold
+                save_fold_threshold(threshold)
+                self._add_system_message(
+                    f"Fold threshold set to {threshold} lines (saved)"
+                )
+            elif val == "off" or val == "0":
+                self._fold_threshold = 0
+                self._prefs.display.fold_threshold = 0
+                save_fold_threshold(0)
+                self._add_system_message("Auto-fold disabled (saved)")
+            else:
+                self._add_system_message(
+                    f"Fold threshold: {self._fold_threshold} lines\n"
+                    "Usage: /fold threshold <n>  (min 5, 0 = disabled)"
+                )
+            return
         if arg.isdigit():
-            threshold = max(5, int(arg))
-            self._fold_threshold = threshold
-            self._add_system_message(f"Fold threshold set to {threshold} lines")
+            # /fold N — toggle fold on Nth message from bottom
+            self._toggle_fold_nth(int(arg))
             return
         if not arg:
             self._fold_last_message()
             return
 
         self._add_system_message(
-            "Usage: /fold [all|none|toggle|<n>]\n"
-            "  /fold        Fold the last long message\n"
-            "  /fold all    Fold all long messages\n"
-            "  /fold none   Unfold all messages\n"
-            "  /fold toggle Toggle fold on all long messages\n"
-            "  /fold <n>    Set fold threshold (min 5)"
+            "Usage: /fold [all|none|toggle|threshold|<N>]\n"
+            "  /fold            Fold the last long message\n"
+            "  /fold all        Fold all long messages\n"
+            "  /fold none       Unfold all messages\n"
+            "  /fold toggle     Toggle fold on all long messages\n"
+            "  /fold <N>        Toggle fold on Nth message from bottom\n"
+            "  /fold threshold  Show or set auto-fold threshold\n"
+            "  /fold threshold <n>  Set threshold (min 5, 0 = disabled)"
         )
 
     def _cmd_unfold(self, text: str) -> None:
@@ -8822,6 +8848,28 @@ class AmplifierChicApp(App):
         else:
             toggle._target.add_class("folded")
         toggle.update(toggle._make_label(folded=not folded))
+
+    def _toggle_fold_nth(self, n: int) -> None:
+        """Toggle fold on the Nth foldable message from the bottom (1-based)."""
+        toggles = list(self.query(FoldToggle))
+        if not toggles:
+            self._add_system_message("No foldable messages")
+            return
+        if n < 1 or n > len(toggles):
+            self._add_system_message(
+                f"Message #{n} not found ({len(toggles)} foldable message"
+                f"{'s' if len(toggles) != 1 else ''} available)"
+            )
+            return
+        toggle = toggles[-n]
+        folded = toggle._target.has_class("folded")
+        if folded:
+            toggle._target.remove_class("folded")
+        else:
+            toggle._target.add_class("folded")
+        toggle.update(toggle._make_label(folded=not folded))
+        state = "unfolded" if folded else "folded"
+        self._add_system_message(f"Message #{n} from bottom {state}")
 
     def _cmd_history(self, text: str) -> None:
         """Browse or clear prompt history."""
