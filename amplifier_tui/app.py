@@ -194,7 +194,33 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/ml",
     "/suggest",
     "/progress",
+    "/mode",
+    "/modes",
 )
+
+# -- Amplifier mode definitions ------------------------------------------------
+MODES: dict[str, dict[str, str]] = {
+    "planning": {
+        "description": "Planning mode \u2014 analysis and decomposition, no implementation",
+        "indicator": "[planning]",
+        "accent": "#536dfe",
+    },
+    "research": {
+        "description": "Research mode \u2014 deep investigation and exploration",
+        "indicator": "[research]",
+        "accent": "#00bfa5",
+    },
+    "review": {
+        "description": "Code review mode \u2014 systematic code assessment",
+        "indicator": "[review]",
+        "accent": "#ff9100",
+    },
+    "debug": {
+        "description": "Debug mode \u2014 systematic issue investigation",
+        "indicator": "[debug]",
+        "accent": "#ff5252",
+    },
+}
 
 # -- Prompt templates for smart suggestions ------------------------------------
 PROMPT_TEMPLATES: tuple[str, ...] = (
@@ -364,6 +390,8 @@ class TabState:
     # Custom system prompt for this tab
     system_prompt: str = ""
     system_preset_name: str = ""  # name of active preset (if any)
+    # Amplifier mode for this tab (planning, research, review, debug)
+    active_mode: str | None = None
     # Unsent input text (preserved across tab switches)
     input_text: str = ""
     # User-assigned tab name (empty = use auto-generated `name`)
@@ -1575,6 +1603,7 @@ SHORTCUTS_TEXT = """\
   /draft           Save/load input drafts
   /snippet         Prompt snippets
   /template        Prompt templates with {{variables}}
+  /mode            Amplifier modes (planning, research, review, debug)
   /system          Set/view system prompt (presets, use, clear)
   /alias           Custom command shortcuts
   /vim             Toggle vim keybindings
@@ -1849,6 +1878,13 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/ml", "Toggle multiline mode (alias for /multiline)", "/ml"),
     ("/suggest", "Toggle smart prompt suggestions (on/off)", "/suggest"),
     ("/progress", "Toggle detailed progress labels (on/off)", "/progress"),
+    ("/mode", "Amplifier mode (planning, research, review, debug)", "/mode"),
+    ("/mode planning", "Activate planning mode", "/mode planning"),
+    ("/mode research", "Activate research mode", "/mode research"),
+    ("/mode review", "Activate review mode", "/mode review"),
+    ("/mode debug", "Activate debug mode", "/mode debug"),
+    ("/mode off", "Deactivate current mode", "/mode off"),
+    ("/modes", "List available modes", "/modes"),
     ("/vim", "Toggle vim keybindings", "/vim"),
     ("/tab", "Tab management (new, switch, close, rename, list)", "/tab"),
     ("/tab new", "Open a new conversation tab", "/tab new"),
@@ -2180,6 +2216,9 @@ class AmplifierChicApp(App):
         self._system_prompt: str = ""
         self._system_preset_name: str = ""  # name of active preset (if any)
 
+        # Amplifier mode (planning, research, review, debug) — per-tab
+        self._active_mode: str | None = None
+
         # Custom command aliases
         self._aliases: dict[str, str] = {}
 
@@ -2325,6 +2364,7 @@ class AmplifierChicApp(App):
                     yield Static("", id="status-vim")
                     yield Static("", id="status-ml")
                     yield Static("", id="status-system")
+                    yield Static("", id="status-mode")
                     yield Static("\u2195 ON", id="status-scroll")
                     yield Static("0 words", id="status-wordcount")
                     yield Static("", id="status-context")
@@ -2529,6 +2569,7 @@ class AmplifierChicApp(App):
         tab.session_notes = self._session_notes
         tab.system_prompt = self._system_prompt
         tab.system_preset_name = self._system_preset_name
+        tab.active_mode = self._active_mode
         # Preserve unsent input text across tab switches
         try:
             tab.input_text = self.query_one("#chat-input", ChatInput).text
@@ -2559,6 +2600,7 @@ class AmplifierChicApp(App):
         self._session_notes = tab.session_notes
         self._system_prompt = tab.system_prompt
         self._system_preset_name = tab.system_preset_name
+        self._active_mode = tab.active_mode
 
     def _switch_to_tab(self, index: int) -> None:
         """Switch to the tab at the given index."""
@@ -5151,6 +5193,10 @@ class AmplifierChicApp(App):
         # Prepend attached file contents (if any) and clear them
         expanded = self._build_message_with_attachments(expanded)
 
+        # Prepend mode context when an Amplifier mode is active
+        if self._active_mode:
+            expanded = f"/mode {self._active_mode}\n{expanded}"
+
         has_session = self.session_manager and getattr(
             self.session_manager, "session", None
         )
@@ -5285,6 +5331,8 @@ class AmplifierChicApp(App):
             "/ml": lambda: self._cmd_multiline(args),
             "/suggest": lambda: self._cmd_suggest(args),
             "/progress": lambda: self._cmd_progress(args),
+            "/mode": lambda: self._cmd_mode(args),
+            "/modes": lambda: self._cmd_mode(""),
         }
 
         handler = handlers.get(cmd)
@@ -5364,6 +5412,7 @@ class AmplifierChicApp(App):
             "  /multiline    Toggle multiline mode (/multiline on, /multiline off, /ml)\n"
             "  /suggest      Toggle smart prompt suggestions (/suggest on, /suggest off)\n"
             "  /progress     Toggle detailed progress labels (/progress on, /progress off)\n"
+            "  /mode         Amplifier modes (/mode <name>, /mode off, /modes to list)\n"
             "  /vim          Toggle vim keybindings (/vim on, /vim off)\n"
             "  /tab          Tab management (/tab new|switch|close|rename|list)\n"
             "  /tabs         List all open tabs\n"
@@ -7487,6 +7536,95 @@ class AmplifierChicApp(App):
                 "Progress labels: OFF\n"
                 "Shows generic Thinking... indicator during processing."
             )
+
+    # ── /mode – Amplifier mode switching ─────────────────────────────────────
+
+    def _cmd_mode(self, text: str) -> None:
+        """Activate, deactivate, or list Amplifier modes.
+
+        /mode           List available modes and show current
+        /mode <name>    Activate a mode (toggle off if already active)
+        /mode off       Deactivate the current mode
+        """
+        text = text.strip().lower()
+
+        if not text:
+            # List modes
+            lines = ["Available modes:", ""]
+            for name, mode in MODES.items():
+                active = " (active)" if name == self._active_mode else ""
+                marker = "▶" if name == self._active_mode else " "
+                lines.append(f"  {marker} {name}: {mode['description']}{active}")
+
+            if self._active_mode:
+                lines.append(f"\nActive: {self._active_mode}")
+                lines.append("Use /mode off to deactivate")
+            else:
+                lines.append("\nNo mode active. Use /mode <name> to activate.")
+
+            self._add_system_message("\n".join(lines))
+            return
+
+        if text == "off":
+            if self._active_mode:
+                old = self._active_mode
+                self._active_mode = None
+                self._update_mode_display()
+                self._add_system_message(f"Mode deactivated: {old}")
+            else:
+                self._add_system_message("No mode is currently active")
+            return
+
+        if text in MODES:
+            if text == self._active_mode:
+                # Toggle off
+                self._active_mode = None
+                self._update_mode_display()
+                self._add_system_message(f"Mode deactivated: {text}")
+            else:
+                self._active_mode = text
+                self._update_mode_display()
+                mode = MODES[text]
+                self._add_system_message(
+                    f"Mode activated: {text}\n{mode['description']}"
+                )
+        else:
+            self._add_system_message(
+                f"Unknown mode: {text}\nAvailable: {', '.join(MODES.keys())}"
+            )
+
+    def _update_mode_display(self) -> None:
+        """Update status bar indicator and input border for active mode."""
+        # Update status bar mode indicator
+        try:
+            indicator = self.query_one("#status-mode", Static)
+        except Exception:
+            indicator = None
+
+        if indicator is not None:
+            if self._active_mode:
+                mode = MODES[self._active_mode]
+                indicator.update(mode["indicator"])
+                indicator.styles.color = mode["accent"]
+                indicator.styles.text_style = "bold"
+            else:
+                indicator.update("")
+
+        # Update input border color to reflect mode
+        try:
+            chat_input = self.query_one("#chat-input", ChatInput)
+        except Exception:
+            chat_input = None
+
+        if chat_input is not None:
+            if self._active_mode:
+                mode = MODES[self._active_mode]
+                chat_input.styles.border = ("solid", mode["accent"])
+                chat_input.border_subtitle = mode["indicator"]
+            else:
+                # Reset to default (CSS will handle via :focus pseudo)
+                chat_input.styles.border = ("solid", "$panel")
+                chat_input.border_subtitle = ""
 
     # ── /split – side-by-side reference panel ────────────────────────────
 
