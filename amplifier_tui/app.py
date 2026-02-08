@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -96,6 +99,7 @@ class AmplifierChicApp(App):
 
     BINDINGS = [
         Binding("ctrl+b", "toggle_sidebar", "Sessions", show=True),
+        Binding("ctrl+g", "open_editor", "Editor", show=True),
         Binding("ctrl+n", "new_session", "New", show=True),
         Binding("ctrl+l", "clear_chat", "Clear", show=False),
         Binding("ctrl+q", "quit", "Quit", show=True),
@@ -375,6 +379,47 @@ class AmplifierChicApp(App):
         for child in list(chat_view.children):
             child.remove()
 
+    def action_open_editor(self) -> None:
+        """Open $EDITOR for composing a longer prompt (Ctrl+G)."""
+        editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "nano"
+
+        inp = self.query_one("#chat-input", ChatInput)
+        current_text = inp.text
+
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".md",
+            prefix="amplifier-prompt-",
+            delete=False,
+        ) as f:
+            f.write(current_text)
+            tmpfile = f.name
+
+        try:
+            with self.suspend():
+                result = subprocess.run([editor, tmpfile])
+
+            if result.returncode != 0:
+                self._add_system_message(
+                    f"Editor exited with code {result.returncode}."
+                )
+                return
+
+            with open(tmpfile) as f:
+                new_text = f.read().strip()
+
+            if new_text:
+                inp.clear()
+                inp.insert(new_text)
+                inp.focus()
+        except Exception as e:
+            self._add_system_message(f"Could not open editor: {e}")
+        finally:
+            try:
+                os.unlink(tmpfile)
+            except OSError:
+                pass
+
     # ── Input Handling ──────────────────────────────────────────
 
     def on_chat_input_submitted(self, event: ChatInput.Submitted) -> None:
@@ -460,6 +505,7 @@ class AmplifierChicApp(App):
             "\n"
             "  Enter         Send message\n"
             "  Ctrl+J        Insert newline\n"
+            "  Ctrl+G        Open $EDITOR for longer prompts\n"
             "  Ctrl+B        Toggle sidebar\n"
             "  Ctrl+N        New session\n"
             "  Ctrl+L        Clear chat\n"
