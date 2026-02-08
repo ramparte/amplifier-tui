@@ -141,6 +141,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/history",
     "/grep",
     "/redo",
+    "/retry",
     "/undo",
     "/snippet",
     "/snippets",
@@ -1031,7 +1032,8 @@ SHORTCUTS_TEXT = """\
   /clear           Clear chat display
   /copy            Copy response (last/N/all/code)
   /undo [N]        Undo last N exchange(s)
-  /redo [N]        Resend last message
+  /retry [text]    Undo last exchange & resend (or send new text)
+  /redo [text]     Alias for /retry
   /fold            Fold/unfold long messages
   /compact         Toggle compact mode
   /history         Browse/search/clear input history
@@ -1255,7 +1257,8 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/compact", "Toggle compact view mode", "/compact"),
     ("/history", "Browse or search input history", "/history"),
     ("/undo", "Remove last exchange", "/undo"),
-    ("/redo", "Re-send last user message", "/redo"),
+    ("/retry", "Undo last exchange & re-send (or send new text)", "/retry"),
+    ("/redo", "Alias for /retry (undo + re-send)", "/redo"),
     ("/split", "Toggle split view (pins, chat, file)", "/split"),
     ("/stream", "Toggle streaming display", "/stream"),
     ("/vim", "Toggle vim keybindings", "/vim"),
@@ -3613,7 +3616,8 @@ class AmplifierChicApp(App):
             "/alias": lambda: self._cmd_alias(args),
             "/history": lambda: self._cmd_history(args),
             "/grep": lambda: self._cmd_grep(text),
-            "/redo": lambda: self._cmd_redo(args),
+            "/redo": lambda: self._cmd_retry(args),
+            "/retry": lambda: self._cmd_retry(args),
             "/undo": lambda: self._cmd_undo(args),
             "/snippet": lambda: self._cmd_snippet(args),
             "/snippets": lambda: self._cmd_snippet(""),
@@ -3695,7 +3699,8 @@ class AmplifierChicApp(App):
             "  /compact      Toggle compact view mode (/compact on, /compact off)\n"
             "  /history      Browse input history (/history <N>, /history search <query>, /history clear)\n"
             "  /undo         Remove last exchange (/undo <N> for last N exchanges)\n"
-            "  /redo         Re-send last user message (/redo <N> for Nth-to-last)\n"
+            "  /retry        Undo last exchange & re-send (/retry <text> to modify)\n"
+            "  /redo         Alias for /retry\n"
             "  /split        Toggle split view (/split pins|chat|file <path>|on|off)\n"
             "  /stream       Toggle streaming display (/stream on, /stream off)\n"
             "  /vim          Toggle vim keybindings (/vim on, /vim off)\n"
@@ -6290,6 +6295,63 @@ class AmplifierChicApp(App):
         self._start_processing("Starting session" if not has_session else "Thinking")
         self._send_message_worker(message)
 
+    def _cmd_retry(self, text: str) -> None:
+        """Retry the last exchange, optionally with a modified prompt.
+
+        /retry         — undo the last exchange and re-send the same message
+        /retry <text>  — undo the last exchange and send <text> instead
+        /redo          — alias for /retry
+        """
+        text = text.strip()
+
+        # Guard: don't retry while processing
+        if self.is_processing:
+            self._add_system_message("Please wait for the current response to finish.")
+            return
+
+        if not self._amplifier_available:
+            self._add_system_message("Amplifier is not available.")
+            return
+
+        if not self._amplifier_ready:
+            self._add_system_message("Still loading Amplifier...")
+            return
+
+        # Find the last user message content before undo removes it
+        last_user_content: str | None = None
+        for role, content, _widget in reversed(self._search_messages):
+            if role == "user":
+                last_user_content = content
+                break
+
+        if last_user_content is None:
+            self._add_system_message(
+                "Nothing to retry \u2014 no previous message found."
+            )
+            return
+
+        # Determine what to send
+        retry_prompt = text if text else last_user_content
+
+        # Remove the last exchange (reuses full undo logic: DOM cleanup,
+        # stats, _search_messages, etc.) — silently, we show our own message.
+        self._execute_undo(1, silent=True)
+
+        # Brief indicator
+        preview = retry_prompt[:80].replace("\n", " ")
+        if len(retry_prompt) > 80:
+            preview += "\u2026"
+        self._add_system_message(f"Retrying: {preview}")
+
+        # Re-send through the normal flow
+        self._clear_welcome()
+        self._add_user_message(retry_prompt)
+        has_session = self.session_manager and getattr(
+            self.session_manager, "session", None
+        )
+        self._start_processing("Starting session" if not has_session else "Thinking")
+        self._send_message_worker(retry_prompt)
+
     def _cmd_undo(self, text: str) -> None:
         """Remove the last N user+assistant exchange(s) from the chat.
 
@@ -6355,7 +6417,7 @@ class AmplifierChicApp(App):
 
         self._execute_undo(count)
 
-    def _execute_undo(self, count: int) -> None:
+    def _execute_undo(self, count: int, *, silent: bool = False) -> None:
         """Remove the last *count* user+assistant exchanges from chat."""
         # Walk backward through _search_messages collecting entries to remove.
         # An "exchange" is an assistant message together with its preceding
@@ -6472,17 +6534,18 @@ class AmplifierChicApp(App):
 
         self._update_word_count_display()
 
-        # Feedback
-        exchanges = count - remaining
-        preview = to_remove[0][1][:60].replace("\n", " ")
-        if len(to_remove[0][1]) > 60:
-            preview += "\u2026"
-        self._add_system_message(
-            f"Undid {exchanges} exchange(s) "
-            f"({len(to_remove)} message{'s' if len(to_remove) != 1 else ''} removed)\n"
-            f"Last removed: {preview}\n"
-            "Note: messages remain in the LLM context for this session."
-        )
+        if not silent:
+            # Feedback
+            exchanges = count - remaining
+            preview = to_remove[0][1][:60].replace("\n", " ")
+            if len(to_remove[0][1]) > 60:
+                preview += "\u2026"
+            self._add_system_message(
+                f"Undid {exchanges} exchange(s) "
+                f"({len(to_remove)} message{'s' if len(to_remove) != 1 else ''} removed)\n"
+                f"Last removed: {preview}\n"
+                "Note: messages remain in the LLM context for this session."
+            )
 
     def _cmd_keys(self) -> None:
         """Show the keyboard shortcut overlay."""
