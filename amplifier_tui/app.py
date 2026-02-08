@@ -609,7 +609,7 @@ SHORTCUTS_TEXT = """\
   /sort       Sort sessions (date/name/project)
   /edit       Open $EDITOR for longer prompts
   /alias      List/create/remove shortcuts
-  /draft      Show/save/clear input draft
+  /draft      Show/save/clear/load input draft
   /compact    Clear chat, keep session
   /fold       Fold/unfold long messages
   /history    Browse/clear input history
@@ -710,6 +710,7 @@ class AmplifierChicApp(App):
     DRAFTS_FILE = Path.home() / ".amplifier" / "tui-drafts.json"
     ALIASES_FILE = Path.home() / ".amplifier" / "tui-aliases.json"
     SNIPPETS_FILE = Path.home() / ".amplifier" / "tui-snippets.json"
+    CRASH_DRAFT_FILE = Path.home() / ".amplifier" / "tui-draft.txt"
 
     DEFAULT_SNIPPETS: dict[str, str] = {
         "review": "Please review this code for bugs, security issues, and best practices.",
@@ -810,6 +811,9 @@ class AmplifierChicApp(App):
         # Message folding state
         self._fold_threshold: int = 30
 
+        # Crash-recovery draft timer (debounced save)
+        self._crash_draft_timer: object | None = None
+
         # Reverse search state (Ctrl+R inline)
         self._rsearch_active: bool = False
         self._rsearch_query: str = ""
@@ -875,6 +879,23 @@ class AmplifierChicApp(App):
 
         # Periodic draft auto-save in case of crash
         self.set_interval(30, self._auto_save_draft)
+
+        # Restore crash-recovery draft if one exists from a previous crash
+        crash_draft = self._load_crash_draft()
+        if crash_draft:
+            try:
+                input_widget = self.query_one("#chat-input", ChatInput)
+                input_widget.insert(crash_draft)
+                preview = crash_draft[:60].replace("\n", " ")
+                if len(crash_draft) > 60:
+                    preview += "..."
+                self._add_system_message(
+                    f"Recovered unsent draft ({len(crash_draft)} chars): "
+                    f"{preview}\n"
+                    "Press Enter to send, or edit as needed."
+                )
+            except Exception:
+                pass
 
         # Heavy import in background
         self._init_amplifier_worker()
@@ -1109,6 +1130,40 @@ class AmplifierChicApp(App):
         except Exception:
             pass
 
+    # ── Crash-recovery draft (global, plain-text) ─────────────────
+
+    def _save_crash_draft(self) -> None:
+        """Save current input to global crash-recovery draft file."""
+        try:
+            input_widget = self.query_one("#chat-input", ChatInput)
+            text = input_widget.text.strip()
+            if text:
+                self.CRASH_DRAFT_FILE.parent.mkdir(parents=True, exist_ok=True)
+                self.CRASH_DRAFT_FILE.write_text(text)
+            elif self.CRASH_DRAFT_FILE.exists():
+                self.CRASH_DRAFT_FILE.unlink()
+        except Exception:
+            pass
+
+    def _clear_crash_draft(self) -> None:
+        """Clear the global crash-recovery draft file."""
+        try:
+            if self.CRASH_DRAFT_FILE.exists():
+                self.CRASH_DRAFT_FILE.unlink()
+        except Exception:
+            pass
+
+    def _load_crash_draft(self) -> str | None:
+        """Load crash-recovery draft if it exists and is non-empty."""
+        try:
+            if self.CRASH_DRAFT_FILE.exists():
+                text = self.CRASH_DRAFT_FILE.read_text().strip()
+                if text:
+                    return text
+        except Exception:
+            pass
+        return None
+
     # ── Bookmarks ─────────────────────────────────────────────
 
     def _get_session_id(self) -> str | None:
@@ -1287,6 +1342,10 @@ class AmplifierChicApp(App):
             # Update the border subtitle line indicator (handles paste, clear, etc.)
             if isinstance(event.text_area, ChatInput):
                 event.text_area._update_line_indicator()
+            # Debounced crash-recovery draft save (5-second delay)
+            if self._crash_draft_timer is not None:
+                self._crash_draft_timer.stop()
+            self._crash_draft_timer = self.set_timer(5.0, self._save_crash_draft)
 
     def _update_input_counter(self, text: str) -> None:
         """Update the character/line counter below the chat input."""
@@ -1922,6 +1981,7 @@ class AmplifierChicApp(App):
 
         input_widget.clear()
         self._clear_draft()
+        self._clear_crash_draft()
 
         self._clear_welcome()
         self._add_user_message(text)
@@ -2052,7 +2112,7 @@ class AmplifierChicApp(App):
             "  /grep         Search with options (/grep <pattern>, /grep -c <pattern> for case-sensitive)\n"
             "  /sort         Sort sessions: date, name, project (/sort <mode>)\n"
             "  /edit         Open $EDITOR for longer prompts (same as Ctrl+G)\n"
-            "  /draft        Show/save/clear input draft (/draft save, /draft clear)\n"
+            "  /draft        Show/save/clear/load input draft (/draft save, /draft clear, /draft load)\n"
             "  /snippet      Save/use reusable prompt templates\n"
             "  /alias        List/create/remove custom shortcuts\n"
             "  /compact      Clear chat, keep session\n"
@@ -2333,32 +2393,65 @@ class AmplifierChicApp(App):
                 pass
 
     def _cmd_draft(self, text: str) -> None:
-        """Show, save, or clear the input draft for this session."""
+        """Show, save, clear, or load the input draft."""
         parts = text.strip().split(None, 1)
         arg = parts[1].strip().lower() if len(parts) > 1 else ""
 
         if arg == "clear":
             self._clear_draft()
+            self._clear_crash_draft()
             self._add_system_message("Draft cleared")
             return
 
         if arg == "save":
             self._save_draft()
+            self._save_crash_draft()
             self._add_system_message("Draft saved")
             return
 
+        if arg == "load":
+            draft = self._load_crash_draft()
+            if draft:
+                input_widget = self.query_one("#chat-input", ChatInput)
+                input_widget.clear()
+                input_widget.insert(draft)
+                self._add_system_message(f"Draft loaded ({len(draft)} chars)")
+            else:
+                self._add_system_message("No saved draft")
+            return
+
         # Show current draft status
+        lines: list[str] = []
         session_id = self._get_session_id()
         drafts = self._load_drafts()
         if session_id and session_id in drafts:
             draft = drafts[session_id]
             preview = draft[:80].replace("\n", " ")
             suffix = "..." if len(draft) > 80 else ""
-            self._add_system_message(
-                f"Saved draft ({len(draft)} chars): {preview}{suffix}"
+            lines.append(f"Session draft ({len(draft)} chars): {preview}{suffix}")
+
+        crash = self._load_crash_draft()
+        if crash:
+            preview = crash[:80].replace("\n", " ")
+            suffix = "..." if len(crash) > 80 else ""
+            lines.append(
+                f"Crash-recovery draft ({len(crash)} chars): {preview}{suffix}"
             )
-        else:
-            self._add_system_message("No draft saved for this session")
+
+        if not lines:
+            # Check if there's unsaved input
+            try:
+                input_text = self.query_one("#chat-input", ChatInput).text.strip()
+            except Exception:
+                input_text = ""
+            if input_text:
+                lines.append(
+                    f"Unsaved input: {len(input_text)} chars (auto-saves in 5s)"
+                )
+            else:
+                lines.append("No draft or unsaved input")
+
+        self._add_system_message("\n".join(lines))
 
     def _cmd_clear(self) -> None:
         self.action_clear_chat()
