@@ -1355,6 +1355,12 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/clear", "Clear chat display", "/clear"),
     ("/new", "Start a new session", "/new"),
     ("/sessions", "Toggle session sidebar", "/sessions"),
+    ("/sessions list", "List all saved sessions", "/sessions list"),
+    ("/sessions recent", "Show 10 most recent sessions", "/sessions recent"),
+    ("/sessions search", "Search across all sessions", "/sessions search "),
+    ("/sessions open", "Open/resume a session by ID", "/sessions open "),
+    ("/sessions delete", "Delete a session by ID", "/sessions delete "),
+    ("/sessions info", "Show session details", "/sessions info "),
     ("/prefs", "Open preferences", "/preferences"),
     ("/model", "Show or switch AI model", "/model"),
     ("/stats", "Session statistics (tools, tokens, time)", "/stats"),
@@ -4363,7 +4369,7 @@ class AmplifierChicApp(App):
             "/help": self._cmd_help,
             "/clear": self._cmd_clear,
             "/new": self._cmd_new,
-            "/sessions": self._cmd_sessions,
+            "/sessions": lambda: self._cmd_sessions(args),
             "/preferences": self._cmd_prefs,
             "/prefs": self._cmd_prefs,
             "/model": lambda: self._cmd_model(text),
@@ -4449,7 +4455,7 @@ class AmplifierChicApp(App):
             "  /help         Show this help\n"
             "  /clear        Clear chat\n"
             "  /new          New session\n"
-            "  /sessions     Toggle session sidebar\n"
+            "  /sessions     Session manager (list, search, recent, open, delete, info)\n"
             "  /prefs        Show preferences\n"
             "  /model        Show/switch model | /model list | /model <name>\n"
             "  /stats        Show session statistics | /stats tools | /stats tokens | /stats time\n"
@@ -5537,10 +5543,423 @@ class AmplifierChicApp(App):
         self.action_new_session()
         # new session shows its own welcome message
 
-    def _cmd_sessions(self) -> None:
-        self.action_toggle_sidebar()
-        state = "opened" if self._sidebar_visible else "closed"
-        self._add_system_message(f"Session sidebar {state}.")
+    def _cmd_sessions(self, args: str) -> None:
+        """Manage and search saved sessions."""
+        args = args.strip()
+
+        # No args: toggle sidebar (backward compatible)
+        if not args:
+            self.action_toggle_sidebar()
+            state = "opened" if self._sidebar_visible else "closed"
+            self._add_system_message(f"Session sidebar {state}.")
+            return
+
+        if args.lower() == "help":
+            self._add_system_message(
+                "Session Management\n\n"
+                "  /sessions              Toggle session sidebar\n"
+                "  /sessions list         List all saved sessions\n"
+                "  /sessions recent       Show 10 most recent sessions\n"
+                "  /sessions search <q>   Search across all sessions\n"
+                "  /sessions open <id>    Open/resume a session by ID\n"
+                "  /sessions delete <id>  Delete a session (with confirmation)\n"
+                "  /sessions info <id>    Show session details\n"
+                "\n"
+                "Partial session IDs are supported (e.g. /sessions open 7de3)."
+            )
+            return
+
+        parts = args.split(None, 1)
+        cmd = parts[0].lower()
+        arg = parts[1].strip() if len(parts) > 1 else ""
+
+        if cmd == "list":
+            self._sessions_list()
+        elif cmd == "recent":
+            self._sessions_recent()
+        elif cmd == "search":
+            if not arg:
+                self._add_system_message("Usage: /sessions search <query>")
+                return
+            self._sessions_search(arg)
+        elif cmd == "open":
+            if not arg:
+                self._add_system_message("Usage: /sessions open <session-id>")
+                return
+            self._sessions_open(arg)
+        elif cmd == "delete":
+            if not arg:
+                self._add_system_message("Usage: /sessions delete <session-id>")
+                return
+            self._sessions_delete(arg)
+        elif cmd == "info":
+            if not arg:
+                self._add_system_message("Usage: /sessions info <session-id>")
+                return
+            self._sessions_info(arg)
+        else:
+            # Treat entire args as a search query
+            self._sessions_search(args)
+
+    @staticmethod
+    def _extract_transcript_text(content: object) -> str:
+        """Extract plain text from a transcript message content field.
+
+        Assistant messages may store content as a list of typed blocks
+        rather than a simple string.
+        """
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    parts.append(block.get("text", ""))
+            return " ".join(parts)
+        return ""
+
+    def _resolve_session_id(self, partial: str) -> tuple[str | None, str]:
+        """Resolve a partial session ID to a full one.
+
+        Returns (session_id, error_message).  On success error_message is empty.
+        """
+        from .session_manager import SessionManager
+
+        sessions = SessionManager.list_all_sessions(limit=500)
+
+        # Exact match
+        for s in sessions:
+            if s["session_id"] == partial:
+                return partial, ""
+
+        # Prefix match
+        matches = [s for s in sessions if s["session_id"].startswith(partial)]
+        if len(matches) == 1:
+            return matches[0]["session_id"], ""
+        if len(matches) > 1:
+            previews = [
+                f"  {m['session_id'][:12]}...  {m['date_str']}" for m in matches[:5]
+            ]
+            return None, (
+                f"Ambiguous ID '{partial}' matches {len(matches)} sessions:\n"
+                + "\n".join(previews)
+            )
+        return None, f"No session found matching '{partial}'."
+
+    def _session_label(
+        self,
+        info: dict,
+        custom_names: dict[str, str],
+        session_titles: dict[str, str],
+    ) -> str:
+        """Build a short display name for a session."""
+        sid = info["session_id"]
+        name = (
+            custom_names.get(sid)
+            or session_titles.get(sid)
+            or info.get("name")
+            or info.get("description")
+            or sid[:12]
+        )
+        if len(name) > 40:
+            name = name[:37] + "..."
+        return name
+
+    def _sessions_list(self) -> None:
+        """List all saved sessions."""
+        from .session_manager import SessionManager
+
+        sessions = SessionManager.list_all_sessions(limit=200)
+        if not sessions:
+            self._add_system_message("No saved sessions found.")
+            return
+
+        custom_names = self._load_session_names()
+        session_titles = self._load_session_titles()
+
+        lines = [f"Saved Sessions ({len(sessions)}):\n"]
+        for s in sessions[:30]:
+            label = self._session_label(s, custom_names, session_titles)
+            project = s.get("project", "")
+            sid_short = s["session_id"][:8]
+            lines.append(f"  {s['date_str']}  [{sid_short}]  {label}")
+            if project:
+                lines.append(f"           project: {project}")
+
+        if len(sessions) > 30:
+            lines.append(f"\n... and {len(sessions) - 30} more")
+        lines.append("\nUse /sessions open <id> to resume a session.")
+        self._add_system_message("\n".join(lines))
+
+    def _sessions_recent(self) -> None:
+        """Show the 10 most recent sessions."""
+        from .session_manager import SessionManager
+
+        sessions = SessionManager.list_all_sessions(limit=10)
+        if not sessions:
+            self._add_system_message("No saved sessions found.")
+            return
+
+        custom_names = self._load_session_names()
+        session_titles = self._load_session_titles()
+
+        lines = ["Recent Sessions:\n"]
+        for i, s in enumerate(sessions, 1):
+            label = self._session_label(s, custom_names, session_titles)
+            sid_short = s["session_id"][:8]
+            lines.append(f"  {i:2}. {s['date_str']}  [{sid_short}]  {label}")
+
+        lines.append("\nUse /sessions open <id> to resume a session.")
+        self._add_system_message("\n".join(lines))
+
+    def _sessions_search(self, query: str) -> None:
+        """Search across all saved sessions for matching text."""
+        projects_dir = Path.home() / ".amplifier" / "projects"
+        if not projects_dir.exists():
+            self._add_system_message("No saved sessions found.")
+            return
+
+        query_lower = query.lower()
+        results: list[dict] = []
+        custom_names = self._load_session_names()
+        session_titles = self._load_session_titles()
+
+        for project_dir in projects_dir.iterdir():
+            if not project_dir.is_dir():
+                continue
+            sessions_subdir = project_dir / "sessions"
+            if not sessions_subdir.exists():
+                continue
+
+            for session_dir in sessions_subdir.iterdir():
+                if not session_dir.is_dir():
+                    continue
+                # Skip sub-sessions
+                if "_" in session_dir.name:
+                    continue
+
+                sid = session_dir.name
+                transcript = session_dir / "transcript.jsonl"
+                if not transcript.exists():
+                    continue
+
+                try:
+                    mtime = session_dir.stat().st_mtime
+                except OSError:
+                    continue
+
+                # Search metadata first (name, description)
+                meta_match = ""
+                metadata_path = session_dir / "metadata.json"
+                meta_name = ""
+                meta_desc = ""
+                if metadata_path.exists():
+                    try:
+                        meta = json.loads(metadata_path.read_text(encoding="utf-8"))
+                        meta_name = meta.get("name", "")
+                        meta_desc = meta.get("description", "")
+                        for field in (meta_name, meta_desc):
+                            if query_lower in field.lower():
+                                meta_match = field
+                                break
+                    except Exception:
+                        pass
+
+                # Search custom names / titles
+                if not meta_match:
+                    for field in (
+                        custom_names.get(sid, ""),
+                        session_titles.get(sid, ""),
+                    ):
+                        if field and query_lower in field.lower():
+                            meta_match = field
+                            break
+
+                # Search filename
+                if not meta_match and query_lower in sid.lower():
+                    meta_match = f"(session ID: {sid})"
+
+                # If metadata matched, record and skip transcript scan
+                if meta_match:
+                    results.append(
+                        {
+                            "session_id": sid,
+                            "mtime": mtime,
+                            "date_str": datetime.fromtimestamp(mtime).strftime(
+                                "%m/%d %H:%M"
+                            ),
+                            "match_preview": meta_match.replace("\n", " ")[:100],
+                            "match_role": "metadata",
+                            "name": meta_name,
+                            "description": meta_desc,
+                        }
+                    )
+                    continue
+
+                # Scan transcript lines for content match
+                try:
+                    with open(transcript, "r", encoding="utf-8") as fh:
+                        for raw_line in fh:
+                            raw_line = raw_line.strip()
+                            if not raw_line:
+                                continue
+                            try:
+                                msg = json.loads(raw_line)
+                            except json.JSONDecodeError:
+                                continue
+                            role = msg.get("role", "")
+                            if role not in ("user", "assistant"):
+                                continue
+                            text = self._extract_transcript_text(msg.get("content", ""))
+                            if query_lower in text.lower():
+                                preview = text.replace("\n", " ")[:120]
+                                results.append(
+                                    {
+                                        "session_id": sid,
+                                        "mtime": mtime,
+                                        "date_str": datetime.fromtimestamp(
+                                            mtime
+                                        ).strftime("%m/%d %H:%M"),
+                                        "match_preview": preview,
+                                        "match_role": role,
+                                        "name": meta_name,
+                                        "description": meta_desc,
+                                    }
+                                )
+                                break  # One match per session is enough
+                except OSError:
+                    continue
+
+        if not results:
+            self._add_system_message(f"No sessions matching '{query}'.")
+            return
+
+        # Sort by mtime descending (most recent first)
+        results.sort(key=lambda r: r["mtime"], reverse=True)
+
+        lines = [f"Found {len(results)} session(s) matching '{query}':\n"]
+        for i, r in enumerate(results[:20], 1):
+            sid_short = r["session_id"][:8]
+            label = self._session_label(r, custom_names, session_titles)
+            lines.append(f"  {i:2}. {r['date_str']}  [{sid_short}]  {label}")
+            preview = r["match_preview"][:80]
+            lines.append(f"      [{r['match_role']}] {preview}")
+
+        if len(results) > 20:
+            lines.append(f"\n... and {len(results) - 20} more")
+        lines.append("\nUse /sessions open <id> to resume a session.")
+        self._add_system_message("\n".join(lines))
+
+    def _sessions_open(self, arg: str) -> None:
+        """Open/resume a session by full or partial ID."""
+        session_id, error = self._resolve_session_id(arg)
+        if not session_id:
+            self._add_system_message(error)
+            return
+        self._save_draft()
+        self._resume_session_worker(session_id)
+
+    def _sessions_delete(self, arg: str) -> None:
+        """Delete a session by ID (delegates to /delete with confirmation)."""
+        session_id, error = self._resolve_session_id(arg)
+        if not session_id:
+            self._add_system_message(error)
+            return
+        # Reuse the existing two-step delete flow
+        self._cmd_delete(f"/delete {session_id}")
+
+    def _sessions_info(self, arg: str) -> None:
+        """Show detailed information about a session."""
+        session_id, error = self._resolve_session_id(arg)
+        if not session_id:
+            self._add_system_message(error)
+            return
+
+        session_dir = self._find_session_dir(session_id)
+        if not session_dir:
+            self._add_system_message(f"Session directory not found for {arg}.")
+            return
+
+        custom_names = self._load_session_names()
+        session_titles = self._load_session_titles()
+
+        # Read metadata
+        meta: dict = {}
+        metadata_path = session_dir / "metadata.json"
+        if metadata_path.exists():
+            try:
+                meta = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
+        # Count messages from transcript
+        transcript_path = session_dir / "transcript.jsonl"
+        msg_counts: Counter = Counter()
+        first_user_msg = ""
+        if transcript_path.exists():
+            try:
+                with open(transcript_path, "r", encoding="utf-8") as fh:
+                    for raw_line in fh:
+                        raw_line = raw_line.strip()
+                        if not raw_line:
+                            continue
+                        try:
+                            msg = json.loads(raw_line)
+                        except json.JSONDecodeError:
+                            continue
+                        role = msg.get("role", "unknown")
+                        msg_counts[role] += 1
+                        if role == "user" and not first_user_msg:
+                            first_user_msg = self._extract_transcript_text(
+                                msg.get("content", "")
+                            )[:120]
+            except OSError:
+                pass
+
+        # Build display
+        mtime = session_dir.stat().st_mtime
+        date_full = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+
+        display_name = (
+            custom_names.get(session_id)
+            or session_titles.get(session_id)
+            or meta.get("name", "")
+        )
+
+        # Compute directory size
+        total_bytes = sum(
+            f.stat().st_size for f in session_dir.rglob("*") if f.is_file()
+        )
+        size_str = (
+            f"{total_bytes / 1024:.1f} KB"
+            if total_bytes < 1024 * 1024
+            else f"{total_bytes / (1024 * 1024):.1f} MB"
+        )
+
+        lines = ["Session Info\n"]
+        lines.append(f"  ID:          {session_id}")
+        if display_name:
+            lines.append(f"  Name:        {display_name}")
+        if meta.get("description"):
+            desc = meta["description"][:80]
+            lines.append(f"  Description: {desc}")
+        lines.append(f"  Last active: {date_full}")
+        if meta.get("created"):
+            lines.append(f"  Created:     {meta['created'][:19]}")
+        if meta.get("model"):
+            lines.append(f"  Model:       {meta['model']}")
+        if meta.get("bundle"):
+            lines.append(f"  Bundle:      {meta['bundle']}")
+        lines.append(f"  Size:        {size_str}")
+        total = sum(msg_counts.values())
+        parts = ", ".join(f"{c} {r}" for r, c in msg_counts.most_common())
+        lines.append(f"  Messages:    {total} ({parts})")
+        if first_user_msg:
+            preview = first_user_msg.replace("\n", " ")
+            lines.append(f'\n  First message:\n    "{preview}"')
+        lines.append(f"\n  /sessions open {session_id[:8]}   to resume")
+        lines.append(f"  /sessions delete {session_id[:8]} to delete")
+        self._add_system_message("\n".join(lines))
 
     def _cmd_prefs(self) -> None:
         from .preferences import PREFS_PATH
