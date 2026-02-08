@@ -705,3 +705,78 @@ TabBar.single-tab {
 .focus-mode TabBar {
     display: none;
 }
+
+/* -- Find bar (Ctrl+F interactive search) ------------- */
+
+FindBar {
+    display: none;
+    dock: top;
+    height: 1;
+    width: 100%;
+    background: $surface;
+    padding: 0 1;
+}
+
+#find-input {
+    width: 1fr;
+    height: 1;
+    min-height: 1;
+    border: none;
+    background: $panel;
+    color: $text;
+    padding: 0 1;
+    margin: 0 1 0 0;
+}
+
+#find-input:focus {
+    border: none;
+    background: $panel;
+}
+
+#find-count {
+    width: auto;
+    min-width: 5;
+    height: 1;
+    color: $text-muted;
+    padding: 0 1;
+    text-align: center;
+}
+
+.find-btn {
+    width: auto;
+    min-width: 3;
+    height: 1;
+    color: $text-muted;
+    padding: 0 1;
+    margin: 0;
+    text-align: center;
+}
+
+.find-btn:hover {
+    color: $text;
+    background: $panel;
+}
+
+#find-case-btn.find-case-active {
+    color: $secondary;
+    text-style: bold;
+    background: $panel;
+}
+
+/* -- Find match highlights ----------------------------- */
+/* Subtle background tint on all matching messages       */
+
+.find-match {
+    background: #2a2a00;
+}
+
+/* Currently focused match gets a stronger indicator     */
+
+.find-current {
+    background: #3a3500;
+    border-left: tall #d4a017;
+}
+
+.focus-mode FindBar {
+    display: none;
+}

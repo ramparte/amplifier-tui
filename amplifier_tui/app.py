@@ -146,6 +146,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/fold",
     "/history",
     "/grep",
+    "/find",
     "/redo",
     "/retry",
     "/undo",
@@ -1096,7 +1097,7 @@ SHORTCUTS_TEXT = """\
   Ctrl+A           Toggle auto-scroll
 
  SEARCH & EDIT ──────────────────────────
-  Ctrl+F           Search chat messages
+  Ctrl+F           Find in chat (interactive search bar)
   Ctrl+R           Reverse history search (Ctrl+S fwd)
   Ctrl+G           Open external editor
   Ctrl+Y           Copy last AI response (Ctrl+Shift+C also works)
@@ -1140,6 +1141,7 @@ SHORTCUTS_TEXT = """\
   /history         Browse/search/clear input history
 
  SEARCH ─────────────────────────────────
+  /find            Interactive find-in-chat (Ctrl+F)
   /search          Search chat messages
   /grep            Search chat (regex)
 
@@ -1301,6 +1303,31 @@ class TabBar(Horizontal):
             self.remove_class("single-tab")
 
 
+class FindBar(Horizontal):
+    """Inline search bar for finding text in chat (Ctrl+F)."""
+
+    def compose(self) -> ComposeResult:
+        yield Input(placeholder="Find in chat…", id="find-input")
+        yield Static("Aa", id="find-case-btn", classes="find-btn")
+        yield Static("▲", id="find-prev-btn", classes="find-btn")
+        yield Static("▼", id="find-next-btn", classes="find-btn")
+        yield Static("0/0", id="find-count")
+        yield Static("✕", id="find-close-btn", classes="find-btn")
+
+    def on_click(self, event) -> None:
+        """Route clicks on the inline buttons."""
+        target = event.widget
+        if hasattr(target, "id"):
+            if target.id == "find-close-btn":
+                self.app._hide_find_bar()
+            elif target.id == "find-prev-btn":
+                self.app._find_prev()
+            elif target.id == "find-next-btn":
+                self.app._find_next()
+            elif target.id == "find-case-btn":
+                self.app._find_toggle_case()
+
+
 # ── Main Application ────────────────────────────────────────────────
 
 
@@ -1345,6 +1372,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/focus", "Toggle focus mode", "/focus"),
     ("/search", "Search chat messages", "/search"),
     ("/grep", "Search chat with regex", "/grep"),
+    ("/find", "Interactive find-in-chat (Ctrl+F)", "/find"),
     ("/diff", "Show git diff (staged, all, file)", "/diff"),
     ("/git", "Quick git info (status, log, diff, branch, stash, blame)", "/git"),
     ("/watch", "Watch files for changes", "/watch"),
@@ -1444,7 +1472,11 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
         "Reverse search prompt history",
         "action:search_history",
     ),
-    ("Search Chat  Ctrl+F", "Search chat messages", "action:search_chat"),
+    (
+        "Find in Chat  Ctrl+F",
+        "Interactive find-in-chat search bar",
+        "action:search_chat",
+    ),
     (
         "Toggle Auto-scroll  Ctrl+A",
         "Toggle auto-scroll on/off",
@@ -1691,6 +1723,13 @@ class AmplifierChicApp(App):
         # Search index: parallel list of (role, text, widget) for /search
         self._search_messages: list[tuple[str, str, Static | None]] = []
 
+        # Find-in-chat state (Ctrl+F interactive search bar)
+        self._find_visible: bool = False
+        self._find_matches: list[int] = []  # indices into _search_messages
+        self._find_index: int = -1
+        self._find_case_sensitive: bool = False
+        self._find_highlighted: set[int] = set()  # indices with .find-match
+
         # Pinned sessions (appear at top of sidebar)
         self._pinned_sessions: set[str] = set()
 
@@ -1754,6 +1793,7 @@ class AmplifierChicApp(App):
             with Vertical(id="chat-area"):
                 yield Static("", id="breadcrumb-bar")
                 yield TabBar(id="tab-bar")
+                yield FindBar(id="find-bar")
                 with Horizontal(id="chat-split-container"):
                     yield ScrollableContainer(id="chat-view", classes="tab-chat-view")
                     yield ScrollableContainer(id="split-panel")
@@ -3273,6 +3313,13 @@ class AmplifierChicApp(App):
         """Filter the session tree as the user types in the filter input."""
         if event.input.id == "session-filter":
             self._filter_sessions(event.value)
+        elif event.input.id == "find-input":
+            self._find_execute_search(event.value)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle Enter in the find-input to navigate to next match."""
+        if event.input.id == "find-input":
+            self._find_next()
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         """Update the input counter and line indicator when the chat input changes."""
@@ -3320,7 +3367,22 @@ class AmplifierChicApp(App):
         counter.display = True
 
     def on_key(self, event) -> None:
-        """Handle Escape: cancel streaming, exit focus mode, or clear session filter."""
+        """Handle special keys: find bar nav, Escape for cancel/focus/filter."""
+        # -- Find bar navigation (when find-input is focused) --
+        if self._find_visible:
+            focused = self.focused
+            if focused is not None and getattr(focused, "id", None) == "find-input":
+                if event.key == "escape":
+                    self._hide_find_bar()
+                    event.prevent_default()
+                    event.stop()
+                    return
+                if event.key == "shift+enter":
+                    self._find_prev()
+                    event.prevent_default()
+                    event.stop()
+                    return
+
         if event.key == "escape":
             # Cancel in-progress streaming takes highest priority
             if self.is_processing:
@@ -3628,14 +3690,143 @@ class AmplifierChicApp(App):
             pass
 
     def action_search_chat(self) -> None:
-        """Focus the input and pre-fill /grep for quick chat searching (Ctrl+F)."""
+        """Toggle the find-in-chat search bar (Ctrl+F)."""
+        if self._find_visible:
+            self._hide_find_bar()
+        else:
+            self._show_find_bar()
+
+    # -- Find-in-chat helpers ------------------------------------------------
+
+    def _show_find_bar(self, query: str = "") -> None:
+        """Open the find bar and optionally pre-fill a query."""
         try:
-            input_widget = self.query_one("#chat-input", ChatInput)
-            input_widget.clear()
-            input_widget.insert("/grep ")
-            input_widget.focus()
+            find_bar = self.query_one("#find-bar", FindBar)
+            find_bar.display = True
+            self._find_visible = True
+            inp = self.query_one("#find-input", Input)
+            if query:
+                inp.value = query
+            inp.focus()
         except Exception:
             pass
+
+    def _hide_find_bar(self) -> None:
+        """Close the find bar, clear highlights, return focus to chat input."""
+        try:
+            find_bar = self.query_one("#find-bar", FindBar)
+            find_bar.display = False
+            self._find_visible = False
+            self._find_clear_highlights()
+            self._find_matches = []
+            self._find_index = -1
+            self.query_one("#chat-input", ChatInput).focus()
+        except Exception:
+            pass
+
+    def _find_execute_search(self, query: str) -> None:
+        """Search _search_messages for *query*, highlight matching widgets."""
+        self._find_clear_highlights()
+        self._find_matches = []
+        self._find_index = -1
+
+        if not query:
+            self._find_update_counter()
+            return
+
+        search_q = query if self._find_case_sensitive else query.lower()
+
+        for i, (_role, text, widget) in enumerate(self._search_messages):
+            hay = text if self._find_case_sensitive else text.lower()
+            if search_q in hay:
+                self._find_matches.append(i)
+                if widget is not None:
+                    widget.add_class("find-match")
+                    self._find_highlighted.add(i)
+
+        if self._find_matches:
+            self._find_index = 0
+            self._find_scroll_to_current()
+
+        self._find_update_counter()
+
+    def _find_next(self) -> None:
+        """Navigate to the next match."""
+        if not self._find_matches:
+            return
+        self._find_index = (self._find_index + 1) % len(self._find_matches)
+        self._find_scroll_to_current()
+        self._find_update_counter()
+
+    def _find_prev(self) -> None:
+        """Navigate to the previous match."""
+        if not self._find_matches:
+            return
+        self._find_index = (self._find_index - 1) % len(self._find_matches)
+        self._find_scroll_to_current()
+        self._find_update_counter()
+
+    def _find_scroll_to_current(self) -> None:
+        """Scroll the current match into view and mark it as active."""
+        if self._find_index < 0 or self._find_index >= len(self._find_matches):
+            return
+
+        # Remove previous .find-current from all highlighted widgets
+        for idx in self._find_highlighted:
+            if idx < len(self._search_messages):
+                w = self._search_messages[idx][2]
+                if w is not None:
+                    w.remove_class("find-current")
+
+        msg_idx = self._find_matches[self._find_index]
+        widget = self._search_messages[msg_idx][2]
+        if widget is not None:
+            widget.add_class("find-current")
+            try:
+                widget.scroll_visible()
+            except Exception:
+                pass
+
+    def _find_update_counter(self) -> None:
+        """Update the '3/17' counter label in the find bar."""
+        try:
+            label = self.query_one("#find-count", Static)
+            if not self._find_matches:
+                label.update("0/0")
+            else:
+                label.update(f"{self._find_index + 1}/{len(self._find_matches)}")
+        except Exception:
+            pass
+
+    def _find_clear_highlights(self) -> None:
+        """Remove .find-match and .find-current from all highlighted widgets."""
+        for idx in list(self._find_highlighted):
+            if idx < len(self._search_messages):
+                w = self._search_messages[idx][2]
+                if w is not None:
+                    w.remove_class("find-match")
+                    w.remove_class("find-current")
+        self._find_highlighted.clear()
+
+    def _find_toggle_case(self) -> None:
+        """Toggle case sensitivity and re-run the search."""
+        self._find_case_sensitive = not self._find_case_sensitive
+        try:
+            btn = self.query_one("#find-case-btn", Static)
+            if self._find_case_sensitive:
+                btn.add_class("find-case-active")
+            else:
+                btn.remove_class("find-case-active")
+            inp = self.query_one("#find-input", Input)
+            self._find_execute_search(inp.value)
+        except Exception:
+            pass
+
+    def _cmd_find(self, text: str) -> None:
+        """Handle the /find slash command — open find bar with optional query."""
+        parts = text.strip().split(None, 1)
+        query = parts[1] if len(parts) > 1 else ""
+        self._show_find_bar(query)
 
     def action_scroll_chat_top(self) -> None:
         """Scroll chat to the very top (Ctrl+Home)."""
@@ -4095,6 +4286,7 @@ class AmplifierChicApp(App):
             "/alias": lambda: self._cmd_alias(args),
             "/history": lambda: self._cmd_history(args),
             "/grep": lambda: self._cmd_grep(text),
+            "/find": lambda: self._cmd_find(text),
             "/redo": lambda: self._cmd_retry(args),
             "/retry": lambda: self._cmd_retry(args),
             "/undo": lambda: self._cmd_undo(args),
@@ -4165,6 +4357,7 @@ class AmplifierChicApp(App):
             "  /theme        Switch color theme (/theme preview for swatches)\n"
             "  /colors       View/set colors (/colors <role> <#hex>, /colors reset)\n"
             "  /focus        Toggle focus mode (/focus on, /focus off)\n"
+            "  /find         Interactive find-in-chat bar (Ctrl+F) with match navigation\n"
             "  /search       Search chat messages (e.g. /search my query)\n"
             "  /grep         Search with options (/grep <pattern>, /grep -c <pattern> for case-sensitive)\n"
             "  /diff         Show git diff (/diff staged|all|last|<file>|<f1> <f2>|HEAD~N)\n"
@@ -4206,7 +4399,7 @@ class AmplifierChicApp(App):
             "  F1            Keyboard shortcuts overlay\n"
             "  F11           Toggle focus mode (hide chrome)\n"
             "  Ctrl+A        Toggle auto-scroll\n"
-            "  Ctrl+F        Search chat messages\n"
+            "  Ctrl+F        Find in chat (interactive search bar)\n"
             "  Ctrl+R        Reverse search prompt history (Ctrl+S for forward)\n"
             "  Ctrl+G        Open $EDITOR for longer prompts\n"
             "  Ctrl+Y        Copy last response to clipboard (Ctrl+Shift+C also works)\n"
