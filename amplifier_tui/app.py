@@ -103,6 +103,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/pin",
     "/draft",
     "/tokens",
+    "/context",
     "/sort",
     "/edit",
     "/wrap",
@@ -2053,6 +2054,7 @@ class AmplifierChicApp(App):
             "/keys": self._cmd_keys,
             "/stats": self._cmd_stats,
             "/tokens": self._cmd_tokens,
+            "/context": self._cmd_context,
             "/info": self._cmd_info,
             "/theme": lambda: self._cmd_theme(text),
             "/export": lambda: self._cmd_export(text),
@@ -2096,6 +2098,7 @@ class AmplifierChicApp(App):
             "  /model        Show model info | /model list | /model <name>\n"
             "  /stats        Show session statistics\n"
             "  /tokens       Detailed token / context usage breakdown\n"
+            "  /context      Visual context window usage bar\n"
             "  /info         Show session details (ID, model, project, counts)\n"
             "  /copy         Copy last response | /copy N | /copy all | /copy code\n"
             "  /bookmark     Bookmark last response (/bm alias, optional label)\n"
@@ -3369,6 +3372,84 @@ class AmplifierChicApp(App):
             "schemas, and other overhead not visible in chat",
             "(typically ~10-20K tokens). Use /compact to free space.",
         ]
+        self._add_system_message("\n".join(lines))
+
+    def _cmd_context(self) -> None:
+        """Show visual context window usage with a progress bar."""
+        sm = self.session_manager
+        model = (sm.model_name if sm else "") or "unknown"
+        window = self._get_context_window()
+        fmt = self._format_token_count
+
+        # --- Gather token counts (prefer real API data) ---
+        input_tokens = 0
+        output_tokens = 0
+
+        if sm:
+            input_tokens = getattr(sm, "total_input_tokens", 0) or 0
+            output_tokens = getattr(sm, "total_output_tokens", 0) or 0
+
+        # Fallback: estimate from visible message text (~4 chars/token)
+        estimated = False
+        if input_tokens == 0 and output_tokens == 0:
+            estimated = True
+            for role, content, _widget in self._search_messages:
+                tok_est = len(content) // 4
+                if role == "user":
+                    input_tokens += tok_est
+                elif role == "assistant":
+                    output_tokens += tok_est
+                else:
+                    input_tokens += tok_est  # system msgs count toward input
+
+        total = input_tokens + output_tokens
+
+        # Input tokens are the best proxy for how full the context window is
+        # (each request sends the full conversation as input).
+        effective_used = input_tokens
+        pct = min(100.0, (effective_used / window * 100)) if window > 0 else 0.0
+
+        # --- Visual bar (30 chars wide) ---
+        bar_width = 30
+        filled = int(pct / 100 * bar_width)
+        empty = bar_width - filled
+
+        if pct < 50:
+            color_label = "green"
+        elif pct < 75:
+            color_label = "yellow"
+        else:
+            color_label = "red"
+
+        bar = f"[{'█' * filled}{'░' * empty}]"
+
+        # --- Build output ---
+        source = "estimated" if estimated else "API"
+        lines = [
+            "Context Usage",
+            "\u2500" * 40,
+            f"  Model:     {model}",
+            f"  Window:    {fmt(window)} tokens",
+            "",
+            f"  {bar} {pct:.1f}%",
+            "",
+            f"  Input:     ~{fmt(input_tokens)} ({source})",
+            f"  Output:    ~{fmt(output_tokens)} ({source})",
+            f"  Total:     ~{fmt(total)}",
+            f"  Remaining: ~{fmt(max(0, window - effective_used))}",
+        ]
+
+        if pct > 90:
+            lines += [
+                "",
+                "  \u26a0 Context nearly full! Start a new session with /new.",
+            ]
+        elif pct > 75:
+            lines += [
+                "",
+                f"  \u26a0 Context is getting full ({color_label}). Consider /clear or /new.",
+            ]
+
         self._add_system_message("\n".join(lines))
 
     def _cmd_theme(self, text: str) -> None:
