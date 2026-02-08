@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
 
 from textual.app import App, ComposeResult
@@ -731,6 +732,7 @@ class AmplifierChicApp(App):
             "/compact": self._cmd_compact,
             "/copy": self._cmd_copy,
             "/notify": self._cmd_notify,
+            "/export": lambda: self._cmd_export(text),
         }
 
         handler = handlers.get(cmd)
@@ -752,6 +754,7 @@ class AmplifierChicApp(App):
             "  /prefs        Show preferences\n"
             "  /model        Show model info\n"
             "  /copy         Copy last response to clipboard\n"
+            "  /export       Export session to markdown file\n"
             "  /notify       Toggle completion notifications\n"
             "  /compact      Clear chat, keep session\n"
             "  /quit         Quit\n"
@@ -867,6 +870,121 @@ class AmplifierChicApp(App):
         self._add_system_message(
             f"Notifications {state} (notify after {nprefs.min_seconds:.0f}s)"
         )
+
+    def _cmd_export(self, text: str) -> None:
+        """Export the current session transcript to a markdown file."""
+        from .transcript_loader import load_transcript, parse_message_blocks
+
+        sm = self.session_manager if hasattr(self, "session_manager") else None
+        sid = getattr(sm, "session_id", None) if sm else None
+        if not sid:
+            self._add_system_message("No active session to export.")
+            return
+
+        # Parse optional path argument
+        parts = text.strip().split(None, 1)
+        if len(parts) > 1:
+            out_path = Path(parts[1]).expanduser().resolve()
+        else:
+            short_id = sid[:8]
+            out_path = Path.home() / f"amplifier-export-{short_id}.md"
+
+        # Load transcript from disk
+        try:
+            transcript_path = sm.get_session_transcript_path(sid)
+        except ValueError:
+            self._add_system_message(f"Transcript not found for session {sid[:12]}.")
+            return
+
+        # Collect tool results first (they precede tool_use in display order)
+        tool_results: dict[str, str] = {}
+        all_blocks = []
+        for msg in load_transcript(transcript_path):
+            for block in parse_message_blocks(msg):
+                if block.kind == "tool_result":
+                    tool_results[block.tool_id] = block.content
+                all_blocks.append(block)
+
+        # Build markdown
+        lines: list[str] = []
+        today = datetime.now().strftime("%Y-%m-%d")
+        lines.append("# Amplifier Session Export")
+        lines.append(f"**Date**: {today}")
+        lines.append(f"**Session**: {sid[:8]}")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+        for block in all_blocks:
+            if block.kind == "user":
+                lines.append("## User")
+                lines.append("")
+                lines.append(block.content)
+                lines.append("")
+
+            elif block.kind == "text":
+                lines.append("## Assistant")
+                lines.append("")
+                lines.append(block.content)
+                lines.append("")
+
+            elif block.kind == "thinking":
+                lines.append("<details>")
+                lines.append("<summary>Thinking</summary>")
+                lines.append("")
+                lines.append(block.content)
+                lines.append("")
+                lines.append("</details>")
+                lines.append("")
+
+            elif block.kind == "tool_use":
+                # Summarize tool call with optional short input
+                tool_input_str = ""
+                if block.tool_input:
+                    if isinstance(block.tool_input, dict):
+                        # For common tools, show the key argument
+                        for key in ("command", "query", "path", "file_path", "pattern"):
+                            if key in block.tool_input:
+                                tool_input_str = str(block.tool_input[key])
+                                break
+                        if not tool_input_str:
+                            tool_input_str = json.dumps(block.tool_input)
+                    else:
+                        tool_input_str = str(block.tool_input)
+                    # Truncate long input to first line, max 120 chars
+                    tool_input_str = tool_input_str.split("\n")[0]
+                    if len(tool_input_str) > 120:
+                        tool_input_str = tool_input_str[:117] + "..."
+
+                header = f"> **Tool**: {block.tool_name}"
+                if tool_input_str:
+                    header += f" — `{tool_input_str}`"
+                lines.append(header)
+
+                result = tool_results.get(block.tool_id, "")
+                if result:
+                    # Truncate to ~10 lines
+                    result_lines = result.split("\n")
+                    if len(result_lines) > 10:
+                        result = "\n".join(result_lines[:10]) + "\n..."
+                    lines.append("> ```")
+                    for rline in result.split("\n"):
+                        lines.append(f"> {rline}")
+                    lines.append("> ```")
+                lines.append("")
+
+            # Skip tool_result blocks — already inlined with tool_use above
+
+        lines.append("---")
+        lines.append("*Exported from Amplifier TUI*")
+
+        # Write file
+        try:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text("\n".join(lines), encoding="utf-8")
+            self._add_system_message(f"Session exported to {out_path}")
+        except OSError as e:
+            self._add_system_message(f"Export failed: {e}")
 
     # ── Message Display ─────────────────────────────────────────
 
