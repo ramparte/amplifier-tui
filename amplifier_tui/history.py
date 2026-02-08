@@ -13,7 +13,7 @@ class PromptHistory:
     """
 
     HISTORY_FILE = Path.home() / ".amplifier" / "tui-history.txt"
-    MAX_ENTRIES = 500
+    MAX_ENTRIES = 1000
 
     def __init__(self) -> None:
         self._entries: list[str] = []  # oldest first

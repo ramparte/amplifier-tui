@@ -1305,6 +1305,54 @@ class SuggestionBar(Static):
             self.update(f"[dim]Tab \u2192 {current}  ({self._index + 1}/{total})[/dim]")
 
 
+class HistorySearchBar(Static):
+    """Thin bar below input showing the reverse-i-search state.
+
+    Visible only while Ctrl+R reverse search is active.  Displays the
+    current query and matched history entry in a visually distinct style.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("", id="history-search-bar")
+
+    def show_search(
+        self,
+        query: str,
+        match: str | None,
+        index: int,
+        total: int,
+    ) -> None:
+        """Update the bar with the current search state."""
+        q_display = f"'{query}'" if query else ""
+        if match is not None and total > 0:
+            counter = f"[{index + 1}/{total}]"
+            # Truncate long matches to keep the bar single-line
+            max_len = 80
+            display_match = match if len(match) <= max_len else match[:max_len] + "…"
+            self.update(
+                f"[bold #e5c07b](reverse-i-search)[/bold #e5c07b]"
+                f"[#e5c07b]{q_display}[/#e5c07b]"
+                f"[dim]: {display_match}  {counter}[/dim]"
+            )
+        elif query:
+            self.update(
+                f"[bold #e5c07b](reverse-i-search)[/bold #e5c07b]"
+                f"[#e5c07b]{q_display}[/#e5c07b]"
+                f"[dim #e06c75]  [no matches][/dim #e06c75]"
+            )
+        else:
+            self.update(
+                "[bold #e5c07b](reverse-i-search)[/bold #e5c07b]"
+                "[dim]  type to search history · Ctrl+R next · Enter accept · Esc cancel[/dim]"
+            )
+        self.display = True
+
+    def dismiss(self) -> None:
+        """Hide the search bar."""
+        self.display = False
+        self.update("")
+
+
 class ProcessingIndicator(Static):
     """Animated indicator shown during processing."""
 
@@ -2262,6 +2310,7 @@ class AmplifierChicApp(App):
                     compact=True,
                 )
                 yield SuggestionBar()
+                yield HistorySearchBar()
                 yield Static("", id="attachment-indicator")
                 yield Static("", id="input-counter")
                 with Horizontal(id="status-bar"):
@@ -4362,7 +4411,7 @@ class AmplifierChicApp(App):
         """
         key = getattr(event, "key", "")
 
-        if key == "escape":
+        if key in ("escape", "ctrl+g"):
             self._rsearch_cancel()
             return True
 
@@ -4464,26 +4513,33 @@ class AmplifierChicApp(App):
         self._clear_rsearch_display()
 
     def _update_rsearch_display(self) -> None:
-        """Show the search indicator in the input border subtitle."""
+        """Show the search indicator in the dedicated search bar."""
         try:
+            bar = self.query_one("#history-search-bar", HistorySearchBar)
+            match_text: str | None = None
+            if self._rsearch_matches and self._rsearch_match_idx >= 0:
+                match_text = self._history.get_entry(
+                    self._rsearch_matches[self._rsearch_match_idx]
+                )
+            bar.show_search(
+                query=self._rsearch_query,
+                match=match_text,
+                index=self._rsearch_match_idx,
+                total=len(self._rsearch_matches),
+            )
+            # Also set a compact border subtitle so the input border itself
+            # gives a hint that search mode is active.
             iw = self.query_one("#chat-input", ChatInput)
-            if self._rsearch_matches:
-                n = len(self._rsearch_matches)
-                pos = self._rsearch_match_idx + 1
-                iw.border_subtitle = (
-                    f"(reverse-search) '{self._rsearch_query}' [{pos}/{n}]"
-                )
-            elif self._rsearch_query:
-                iw.border_subtitle = (
-                    f"(reverse-search) '{self._rsearch_query}' [no matches]"
-                )
-            else:
-                iw.border_subtitle = "(reverse-search)"
+            iw.border_subtitle = "(reverse-i-search active — Esc to cancel)"
         except Exception:
             pass
 
     def _clear_rsearch_display(self) -> None:
-        """Remove the search indicator; restore the line-count subtitle."""
+        """Hide the search bar and restore the line-count subtitle."""
+        try:
+            self.query_one("#history-search-bar", HistorySearchBar).dismiss()
+        except Exception:
+            pass
         try:
             self.query_one("#chat-input", ChatInput)._update_line_indicator()
         except Exception:

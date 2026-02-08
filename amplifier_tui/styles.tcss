@@ -479,6 +479,17 @@ CollapsibleTitle:hover {
     display: none;
 }
 
+/* -- History search bar (inline Ctrl+R) --------------- */
+
+#history-search-bar {
+    height: 1;
+    width: 100%;
+    margin: 0 2 0 2;
+    padding: 0 1;
+    background: $surface-darken-1;
+    display: none;
+}
+
 /* -- Attachment indicator ------------------------------ */
 
 #attachment-indicator {
