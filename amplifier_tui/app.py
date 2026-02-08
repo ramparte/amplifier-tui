@@ -15,6 +15,7 @@ from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.widgets import Collapsible, Markdown, Static, TextArea, Tree
 from textual import work
 
+from .history import PromptHistory
 from .preferences import load_preferences
 from .theme import CHIC_THEME
 
@@ -65,6 +66,33 @@ class ChatInput(TextArea):
             event.prevent_default()
             event.stop()
             self.insert("\n")
+        elif event.key == "up":
+            # History navigation when cursor is on the first line
+            history = getattr(self.app, "_history", None)
+            if history and history.entry_count > 0 and self.cursor_location[0] == 0:
+                if not history.is_browsing:
+                    history.start_browse(self.text)
+                entry = history.previous()
+                if entry is not None:
+                    self.clear()
+                    self.insert(entry)
+                event.prevent_default()
+                event.stop()
+            else:
+                await super()._on_key(event)
+        elif event.key == "down":
+            # History navigation when cursor is on the last line
+            history = getattr(self.app, "_history", None)
+            last_row = self.text.count("\n")
+            if history and history.is_browsing and self.cursor_location[0] >= last_row:
+                entry = history.next()
+                if entry is not None:
+                    self.clear()
+                    self.insert(entry)
+                event.prevent_default()
+                event.stop()
+            else:
+                await super()._on_key(event)
         else:
             await super()._on_key(event)
 
@@ -124,6 +152,7 @@ class AmplifierChicApp(App):
         self._spinner_timer: object | None = None
         self._processing_label: str | None = None
         self._prefs = load_preferences()
+        self._history = PromptHistory()
 
         # Streaming display state
         self._stream_widget: Static | None = None
@@ -435,6 +464,9 @@ class AmplifierChicApp(App):
         if self.is_processing:
             return
 
+        # Record in history (add() skips slash commands internally)
+        self._history.add(text)
+
         # Slash commands work even before Amplifier is ready
         if text.startswith("/"):
             input_widget.clear()
@@ -505,6 +537,7 @@ class AmplifierChicApp(App):
             "\n"
             "  Enter         Send message\n"
             "  Ctrl+J        Insert newline\n"
+            "  Up/Down       Browse prompt history\n"
             "  Ctrl+G        Open $EDITOR for longer prompts\n"
             "  Ctrl+B        Toggle sidebar\n"
             "  Ctrl+N        New session\n"
