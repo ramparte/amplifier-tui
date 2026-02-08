@@ -31,7 +31,13 @@ from textual.widgets.option_list import Option
 from textual import work
 
 from .history import PromptHistory
-from .preferences import THEMES, load_preferences, save_preferred_model
+from .preferences import (
+    ColorPreferences,
+    THEMES,
+    load_preferences,
+    save_colors,
+    save_preferred_model,
+)
 from .theme import CHIC_THEME
 
 # Tool name -> human-friendly status label (without trailing "...")
@@ -299,6 +305,7 @@ SHORTCUTS_TEXT = """\
   /prefs      Show preferences
   /model      Model info / list / set
   /theme      Switch theme
+  /colors     View/set colors
   /export     Export to markdown
   /rename     Rename session
   /delete     Delete session
@@ -1193,6 +1200,7 @@ class AmplifierChicApp(App):
             "/bm": lambda: self._cmd_bookmark(text),
             "/bookmarks": lambda: self._cmd_bookmarks(text),
             "/search": lambda: self._cmd_search(text),
+            "/colors": lambda: self._cmd_colors(text),
         }
 
         handler = handlers.get(cmd)
@@ -1224,6 +1232,7 @@ class AmplifierChicApp(App):
             "  /scroll       Toggle auto-scroll on/off\n"
             "  /timestamps   Toggle message timestamps on/off\n"
             "  /theme        Switch color theme (dark, light, solarized)\n"
+            "  /colors       View/set colors (/colors reset, /colors <key> <#hex>)\n"
             "  /focus        Toggle focus mode (hide chrome)\n"
             "  /search       Search chat messages (e.g. /search my query)\n"
             "  /compact      Clear chat, keep session\n"
@@ -1625,6 +1634,73 @@ class AmplifierChicApp(App):
                 inner = inner_list.first() if inner_list else None
                 if inner is not None:
                     self._style_tool(widget, inner)
+
+    def _cmd_colors(self, text: str) -> None:
+        """View, change, or reset individual color preferences."""
+        import re
+        from dataclasses import fields
+
+        parts = text.strip().split(None, 1)
+        arg = parts[1].strip() if len(parts) > 1 else ""
+
+        if not arg:
+            # Show current color settings
+            c = self._prefs.colors
+            lines = [
+                "Current colors:",
+                f"  user_text:           {c.user_text}",
+                f"  user_border:         {c.user_border}",
+                f"  assistant_text:      {c.assistant_text}",
+                f"  assistant_border:    {c.assistant_border}",
+                f"  thinking_text:       {c.thinking_text}",
+                f"  thinking_border:     {c.thinking_border}",
+                f"  thinking_background: {c.thinking_background}",
+                f"  tool_text:           {c.tool_text}",
+                f"  tool_border:         {c.tool_border}",
+                f"  tool_background:     {c.tool_background}",
+                f"  system_text:         {c.system_text}",
+                f"  system_border:       {c.system_border}",
+                f"  status_bar:          {c.status_bar}",
+                "",
+                "Usage: /colors <key> <#hex>  e.g. /colors assistant_text #888888",
+                "       /colors reset         Restore defaults",
+            ]
+            self._add_system_message("\n".join(lines))
+            return
+
+        if arg == "reset":
+            self._prefs.colors = ColorPreferences()
+            save_colors(self._prefs.colors)
+            self._apply_theme_to_all_widgets()
+            self._add_system_message("Colors reset to defaults.")
+            return
+
+        # Parse: key value
+        tokens = arg.split(None, 1)
+        if len(tokens) != 2:
+            self._add_system_message(
+                "Usage: /colors <key> <#hex>  e.g. /colors assistant_text #888888\n"
+                "       /colors reset         Restore defaults"
+            )
+            return
+
+        key, value = tokens
+        if not hasattr(self._prefs.colors, key):
+            valid = ", ".join(f.name for f in fields(ColorPreferences))
+            self._add_system_message(f"Unknown color key '{key}'.\nValid keys: {valid}")
+            return
+
+        # Validate hex color
+        if not re.match(r"^#[0-9a-fA-F]{6}$", value):
+            self._add_system_message(
+                f"Invalid hex color '{value}'. Use format: #rrggbb"
+            )
+            return
+
+        setattr(self._prefs.colors, key, value)
+        save_colors(self._prefs.colors)
+        self._apply_theme_to_all_widgets()
+        self._add_system_message(f"Color '{key}' set to {value}")
 
     def _cmd_export(self, text: str) -> None:
         """Export the current session transcript to a markdown file."""

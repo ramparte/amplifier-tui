@@ -17,10 +17,10 @@ PREFS_PATH = Path.home() / ".amplifier" / "tui-preferences.yaml"
 # Built-in theme presets: each maps color preference keys to hex values.
 THEMES: dict[str, dict[str, str]] = {
     "dark": {
-        "user_text": "#ffffff",
+        "user_text": "#e0e0e0",
         "user_border": "#cb7700",
-        "assistant_text": "#44bb77",
-        "assistant_border": "#336699",
+        "assistant_text": "#999999",
+        "assistant_border": "#333344",
         "thinking_text": "#666677",
         "thinking_border": "#665588",
         "thinking_background": "#110e18",
@@ -70,10 +70,10 @@ _DEFAULT_YAML = """\
 # Delete this file to reset to defaults.
 
 colors:
-  user_text: "#ffffff"           # bright white - your messages
+  user_text: "#e0e0e0"           # bright white - your messages
   user_border: "#cb7700"         # orange left bar
-  assistant_text: "#44bb77"      # green - model speaking to you
-  assistant_border: "#336699"    # blue left bar
+  assistant_text: "#999999"      # dim gray - model speaking to you
+  assistant_border: "#333344"    # subtle border for assistant
   thinking_text: "#666677"       # dim gray - background reasoning
   thinking_border: "#665588"     # purple left bar
   thinking_background: "#110e18" # dark purple tint
@@ -108,10 +108,10 @@ class NotificationPreferences:
 class ColorPreferences:
     """Color values for chat message types."""
 
-    user_text: str = "#ffffff"
+    user_text: str = "#e0e0e0"
     user_border: str = "#cb7700"
-    assistant_text: str = "#44bb77"
-    assistant_border: str = "#336699"
+    assistant_text: str = "#999999"
+    assistant_border: str = "#333344"
     thinking_text: str = "#666677"
     thinking_border: str = "#665588"
     thinking_background: str = "#110e18"
@@ -193,6 +193,64 @@ def load_preferences(path: Path | None = None) -> Preferences:
             pass  # Don't fail if we can't write
 
     return prefs
+
+
+def save_colors(colors: ColorPreferences, path: Path | None = None) -> None:
+    """Persist color preferences to the preferences file.
+
+    Surgically updates each color value, preserving user comments and
+    other sections as-is.
+    """
+    import re
+
+    path = path or PREFS_PATH
+    try:
+        if path.exists():
+            text = path.read_text()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = _DEFAULT_YAML
+
+        color_keys = [
+            "user_text",
+            "user_border",
+            "assistant_text",
+            "assistant_border",
+            "thinking_text",
+            "thinking_border",
+            "thinking_background",
+            "tool_text",
+            "tool_border",
+            "tool_background",
+            "system_text",
+            "system_border",
+            "status_bar",
+        ]
+        for key in color_keys:
+            value = getattr(colors, key)
+            # Replace existing key line, preserving trailing comments
+            pattern = rf'^(\s+{key}:)\s*(?:"[^"]*"|\S+)(.*?)$'
+            if re.search(rf"^\s+{key}:", text, re.MULTILINE):
+                text = re.sub(
+                    pattern,
+                    rf'\1 "{value}"\2',
+                    text,
+                    count=1,
+                    flags=re.MULTILINE,
+                )
+            elif re.search(r"^colors:", text, re.MULTILINE):
+                # colors section exists but this key is missing — append it
+                text = re.sub(
+                    r"^(colors:.*?)$",
+                    rf'\1\n  {key}: "{value}"',
+                    text,
+                    count=1,
+                    flags=re.MULTILINE,
+                )
+
+        path.write_text(text)
+    except Exception:
+        pass  # Best-effort persistence
 
 
 def save_preferred_model(model: str, path: Path | None = None) -> None:
