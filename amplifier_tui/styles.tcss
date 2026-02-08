@@ -240,6 +240,7 @@ Screen {
 .chat-message.folded {
     max-height: 5;
     overflow-y: hidden;
+    border-right: wide #665522;
 }
 
 .fold-toggle {

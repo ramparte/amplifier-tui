@@ -144,6 +144,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/alias",
     "/info",
     "/fold",
+    "/unfold",
     "/history",
     "/grep",
     "/find",
@@ -884,6 +885,11 @@ class ChatInput(TextArea):
             self.action_cursor_document_end()
             return True
 
+        # Fold toggle
+        if key == "z":
+            self.app._toggle_fold_nearest()  # type: ignore[attr-defined]
+            return True
+
         # Editing in normal mode
         if key == "x":
             self.action_delete_right()
@@ -1073,7 +1079,7 @@ class FoldToggle(Static):
 
     def _make_label(self, *, folded: bool) -> str:
         if folded:
-            return f"▶ {self._line_count} lines (click to expand)"
+            return f"▶ ··· {self._line_count} lines hidden (click to expand)"
         return f"▼ {self._line_count} lines (click to fold)"
 
     def on_click(self) -> None:
@@ -1148,7 +1154,8 @@ SHORTCUTS_TEXT = """\
   /undo [N]        Undo last N exchange(s)
   /retry [text]    Undo last exchange & resend (or send new text)
   /redo [text]     Alias for /retry
-  /fold            Fold/unfold long messages
+  /fold            Fold last long message (all, none, <n>)
+  /unfold          Unfold last folded message (all)
   /compact         Toggle compact mode
   /history         Browse/search/clear input history
 
@@ -1390,6 +1397,10 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/timestamps", "Toggle message timestamps", "/timestamps"),
     ("/wrap", "Toggle word wrap (on, off)", "/wrap"),
     ("/fold", "Fold or unfold long messages", "/fold"),
+    ("/fold all", "Fold all long messages", "/fold all"),
+    ("/fold none", "Unfold all messages", "/fold none"),
+    ("/unfold", "Unfold the last folded message", "/unfold"),
+    ("/unfold all", "Unfold all folded messages", "/unfold all"),
     ("/theme", "Switch color theme", "/theme"),
     ("/theme preview", "Preview all themes with swatches", "/theme preview"),
     ("/colors", "View or set text colors", "/colors"),
@@ -4413,6 +4424,7 @@ class AmplifierChicApp(App):
             "/editor": self.action_open_editor,
             "/wrap": lambda: self._cmd_wrap(text),
             "/fold": lambda: self._cmd_fold(text),
+            "/unfold": lambda: self._cmd_unfold(text),
             "/alias": lambda: self._cmd_alias(args),
             "/history": lambda: self._cmd_history(args),
             "/grep": lambda: self._cmd_grep(text),
@@ -4489,7 +4501,8 @@ class AmplifierChicApp(App):
             "  /scroll       Toggle auto-scroll on/off\n"
             "  /timestamps   Toggle message timestamps on/off\n"
             "  /wrap         Toggle word wrap on/off (/wrap on, /wrap off)\n"
-            "  /fold         Fold/unfold long messages (/fold all, /fold none, /fold <n>)\n"
+            "  /fold         Fold last long message (/fold all, /fold none, /fold <n>)\n"
+            "  /unfold       Unfold last folded message (/unfold all to unfold all)\n"
             "  /theme        Switch color theme (/theme preview for swatches)\n"
             "  /colors       View/set text colors (/colors <role> <#hex>, /colors reset, presets, use)\n"
             "  /focus        Toggle focus mode (/focus on, /focus off)\n"
@@ -7423,22 +7436,66 @@ class AmplifierChicApp(App):
         if arg in ("none", "off"):
             self._unfold_all_messages()
             return
+        if arg == "toggle":
+            self._toggle_fold_all()
+            return
         if arg.isdigit():
             threshold = max(5, int(arg))
             self._fold_threshold = threshold
             self._add_system_message(f"Fold threshold set to {threshold} lines")
             return
         if not arg:
-            self._toggle_fold_all()
+            self._fold_last_message()
             return
 
         self._add_system_message(
-            "Usage: /fold [all|none|<n>]\n"
-            "  /fold        Toggle fold on long messages\n"
+            "Usage: /fold [all|none|toggle|<n>]\n"
+            "  /fold        Fold the last long message\n"
             "  /fold all    Fold all long messages\n"
             "  /fold none   Unfold all messages\n"
+            "  /fold toggle Toggle fold on all long messages\n"
             "  /fold <n>    Set fold threshold (min 5)"
         )
+
+    def _cmd_unfold(self, text: str) -> None:
+        """Unfold/expand folded messages."""
+        parts = text.strip().split(None, 1)
+        arg = parts[1].strip().lower() if len(parts) > 1 else ""
+
+        if arg == "all":
+            self._unfold_all_messages()
+            return
+        if not arg:
+            self._unfold_last_message()
+            return
+
+        self._add_system_message(
+            "Usage: /unfold [all]\n"
+            "  /unfold      Unfold the last folded message\n"
+            "  /unfold all  Unfold all folded messages"
+        )
+
+    def _fold_last_message(self) -> None:
+        """Fold the last unfolded foldable message (bottom-up)."""
+        toggles = list(self.query(FoldToggle))
+        for toggle in reversed(toggles):
+            if not toggle._target.has_class("folded"):
+                toggle._target.add_class("folded")
+                toggle.update(toggle._make_label(folded=True))
+                self._add_system_message("Folded last long message")
+                return
+        self._add_system_message("No unfoldable messages found")
+
+    def _unfold_last_message(self) -> None:
+        """Unfold the last folded message (bottom-up)."""
+        toggles = list(self.query(FoldToggle))
+        for toggle in reversed(toggles):
+            if toggle._target.has_class("folded"):
+                toggle._target.remove_class("folded")
+                toggle.update(toggle._make_label(folded=False))
+                self._add_system_message("Unfolded last folded message")
+                return
+        self._add_system_message("No folded messages found")
 
     def _fold_all_messages(self) -> None:
         """Fold all messages that have fold toggles."""
@@ -7471,6 +7528,19 @@ class AmplifierChicApp(App):
             self._fold_all_messages()
         else:
             self._unfold_all_messages()
+
+    def _toggle_fold_nearest(self) -> None:
+        """Toggle fold on the last foldable message (vim 'z' key)."""
+        toggles = list(self.query(FoldToggle))
+        if not toggles:
+            return
+        toggle = toggles[-1]
+        folded = toggle._target.has_class("folded")
+        if folded:
+            toggle._target.remove_class("folded")
+        else:
+            toggle._target.add_class("folded")
+        toggle.update(toggle._make_label(folded=not folded))
 
     def _cmd_history(self, text: str) -> None:
         """Browse or clear prompt history."""
