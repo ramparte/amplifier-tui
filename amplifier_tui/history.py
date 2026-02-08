@@ -107,6 +107,35 @@ class PromptHistory:
         q = query.lower()
         return [e for e in reversed(self._entries) if q in e.lower()][:20]
 
+    def reverse_search_indices(self, query: str) -> list[int]:
+        """Return indices of entries matching *query*, most recent first."""
+        if not query:
+            return []
+        q = query.lower()
+        return [
+            i
+            for i in range(len(self._entries) - 1, -1, -1)
+            if q in self._entries[i].lower()
+        ]
+
+    def get_entry(self, index: int) -> str | None:
+        """Return the entry at *index*, or ``None`` if out of range."""
+        if 0 <= index < len(self._entries):
+            return self._entries[index]
+        return None
+
+    @property
+    def entries(self) -> list[str]:
+        """All history entries (oldest first, read-only copy)."""
+        return list(self._entries)
+
+    def clear(self) -> None:
+        """Remove all history entries and persist the empty state."""
+        self._entries.clear()
+        self._cursor = -1
+        self._draft = ""
+        self._save()
+
     def reset_browse(self) -> None:
         """Reset browsing state."""
         self._cursor = -1

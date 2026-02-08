@@ -105,6 +105,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/alias",
     "/info",
     "/fold",
+    "/history",
 )
 
 # Known context window sizes (tokens) for popular models.
@@ -378,6 +379,14 @@ class ChatInput(TextArea):
             self.border_subtitle = ""
 
     async def _on_key(self, event) -> None:  # noqa: C901
+        # ── Reverse search mode intercepts all keys ──────────────
+        if getattr(self.app, "_rsearch_active", False):
+            if self.app._handle_rsearch_key(self, event):
+                event.prevent_default()
+                event.stop()
+                return
+            # Returned False → search accepted, fall through to normal handling
+
         if event.key == "shift+enter":
             # Insert newline (Shift+Enter = multi-line composition)
             event.prevent_default()
@@ -561,6 +570,7 @@ SHORTCUTS_TEXT = """\
   /draft      Show/save/clear input draft
   /compact    Clear chat, keep session
   /fold       Fold/unfold long messages
+  /history    Browse/clear input history
   /quit       Quit
 
        Press Escape to close\
@@ -741,6 +751,13 @@ class AmplifierChicApp(App):
 
         # Message folding state
         self._fold_threshold: int = 30
+
+        # Reverse search state (Ctrl+R inline)
+        self._rsearch_active: bool = False
+        self._rsearch_query: str = ""
+        self._rsearch_matches: list[int] = []
+        self._rsearch_match_idx: int = -1
+        self._rsearch_original: str = ""
 
     # ── Layout ──────────────────────────────────────────────────
 
@@ -1339,19 +1356,146 @@ class AmplifierChicApp(App):
             self.push_screen(ShortcutOverlay())
 
     def action_search_history(self) -> None:
-        """Open the prompt history search modal (Ctrl+R)."""
+        """Enter reverse-incremental search mode (Ctrl+R).
+
+        If already in search mode (Ctrl+R pressed again), cycle to the
+        next match.  Otherwise start a fresh search session.
+        """
         if self._history.entry_count == 0:
             self._add_system_message("No prompt history yet.")
             return
 
-        def _on_result(result: str) -> None:
-            if result:
-                input_widget = self.query_one("#chat-input", ChatInput)
-                input_widget.clear()
-                input_widget.insert(result)
-                input_widget.focus()
+        if self._rsearch_active:
+            # Already searching – cycle to next older match
+            self._rsearch_cycle_next()
+            return
 
-        self.push_screen(HistorySearchScreen(self._history), _on_result)
+        input_widget = self.query_one("#chat-input", ChatInput)
+        self._rsearch_active = True
+        self._rsearch_query = ""
+        self._rsearch_matches = []
+        self._rsearch_match_idx = -1
+        self._rsearch_original = input_widget.text
+        self._update_rsearch_display()
+        input_widget.focus()
+
+    # ── Reverse search helpers ────────────────────────────────────
+
+    def _handle_rsearch_key(self, widget: ChatInput, event: object) -> bool:
+        """Handle a key press while reverse search is active.
+
+        Returns ``True`` if the key was consumed (caller should
+        ``prevent_default`` + ``stop``).  Returns ``False`` when
+        search was accepted and the key should be handled normally.
+        """
+        key = getattr(event, "key", "")
+
+        if key == "escape":
+            self._rsearch_cancel()
+            return True
+
+        if key in ("enter", "shift+enter"):
+            self._rsearch_accept()
+            return True
+
+        if key == "backspace":
+            if self._rsearch_query:
+                self._rsearch_query = self._rsearch_query[:-1]
+                self._do_rsearch()
+            return True
+
+        if key == "ctrl+r":
+            self._rsearch_cycle_next()
+            return True
+
+        character = getattr(event, "character", None)
+        is_printable = getattr(event, "is_printable", False)
+        if character and is_printable:
+            self._rsearch_query += character
+            self._do_rsearch()
+            return True
+
+        # Any other key (arrows, ctrl combos, …) – accept result, fall through
+        self._rsearch_accept()
+        return False
+
+    def _rsearch_cycle_next(self) -> None:
+        """Cycle to the next (older) match in the current result set."""
+        if (
+            not self._rsearch_matches
+            or self._rsearch_match_idx >= len(self._rsearch_matches) - 1
+        ):
+            self._update_rsearch_display()
+            return
+        self._rsearch_match_idx += 1
+        entry = self._history.get_entry(self._rsearch_matches[self._rsearch_match_idx])
+        if entry is not None:
+            input_widget = self.query_one("#chat-input", ChatInput)
+            input_widget.clear()
+            input_widget.insert(entry)
+        self._update_rsearch_display()
+
+    def _do_rsearch(self) -> None:
+        """Execute a reverse search and display the best match."""
+        input_widget = self.query_one("#chat-input", ChatInput)
+        query = self._rsearch_query
+        if not query:
+            self._rsearch_matches = []
+            self._rsearch_match_idx = -1
+            input_widget.clear()
+            input_widget.insert(self._rsearch_original)
+            self._update_rsearch_display()
+            return
+
+        self._rsearch_matches = self._history.reverse_search_indices(query)
+        if self._rsearch_matches:
+            self._rsearch_match_idx = 0
+            entry = self._history.get_entry(self._rsearch_matches[0])
+            if entry is not None:
+                input_widget.clear()
+                input_widget.insert(entry)
+        else:
+            self._rsearch_match_idx = -1
+        self._update_rsearch_display()
+
+    def _rsearch_cancel(self) -> None:
+        """Cancel reverse search and restore the original input."""
+        self._rsearch_active = False
+        input_widget = self.query_one("#chat-input", ChatInput)
+        input_widget.clear()
+        input_widget.insert(self._rsearch_original)
+        self._clear_rsearch_display()
+
+    def _rsearch_accept(self) -> None:
+        """Accept the current search result and exit search mode."""
+        self._rsearch_active = False
+        self._clear_rsearch_display()
+
+    def _update_rsearch_display(self) -> None:
+        """Show the search indicator in the input border subtitle."""
+        try:
+            iw = self.query_one("#chat-input", ChatInput)
+            if self._rsearch_matches:
+                n = len(self._rsearch_matches)
+                pos = self._rsearch_match_idx + 1
+                iw.border_subtitle = (
+                    f"(reverse-search) '{self._rsearch_query}' [{pos}/{n}]"
+                )
+            elif self._rsearch_query:
+                iw.border_subtitle = (
+                    f"(reverse-search) '{self._rsearch_query}' [no matches]"
+                )
+            else:
+                iw.border_subtitle = "(reverse-search)"
+        except Exception:
+            pass
+
+    def _clear_rsearch_display(self) -> None:
+        """Remove the search indicator; restore the line-count subtitle."""
+        try:
+            self.query_one("#chat-input", ChatInput)._update_line_indicator()
+        except Exception:
+            pass
 
     def action_search_chat(self) -> None:
         """Focus the input and pre-fill /search for quick chat searching (Ctrl+F)."""
@@ -1766,6 +1910,7 @@ class AmplifierChicApp(App):
             "/wrap": lambda: self._cmd_wrap(text),
             "/fold": lambda: self._cmd_fold(text),
             "/alias": lambda: self._cmd_alias(args),
+            "/history": lambda: self._cmd_history(args),
         }
 
         handler = handlers.get(cmd)
@@ -1811,6 +1956,7 @@ class AmplifierChicApp(App):
             "  /draft        Show/save/clear input draft (/draft save, /draft clear)\n"
             "  /alias        List/create/remove custom shortcuts\n"
             "  /compact      Clear chat, keep session\n"
+            "  /history      Browse input history (/history clear, /history <N>)\n"
             "  /keys         Keyboard shortcut overlay\n"
             "  /quit         Quit\n"
             "\n"
@@ -1824,6 +1970,7 @@ class AmplifierChicApp(App):
             "  F11           Toggle focus mode (hide chrome)\n"
             "  Ctrl+A        Toggle auto-scroll\n"
             "  Ctrl+F        Search chat messages\n"
+            "  Ctrl+R        Reverse search prompt history\n"
             "  Ctrl+G        Open $EDITOR for longer prompts\n"
             "  Ctrl+Y        Copy last response to clipboard\n"
             "  Ctrl+M        Bookmark last response\n"
@@ -2298,6 +2445,37 @@ class AmplifierChicApp(App):
             self._fold_all_messages()
         else:
             self._unfold_all_messages()
+
+    def _cmd_history(self, text: str) -> None:
+        """Browse or clear prompt history."""
+        text = text.strip()
+
+        if text == "clear":
+            self._history.clear()
+            self._add_system_message("Input history cleared.")
+            return
+
+        n = 20
+        if text.isdigit():
+            n = int(text)
+
+        entries = self._history.entries
+        if not entries:
+            self._add_system_message("No input history yet.")
+            return
+
+        show = entries[-n:]
+        lines = [f"Last {len(show)} of {len(entries)} inputs:"]
+        for i, entry in enumerate(show, 1):
+            preview = entry[:80].replace("\n", " ")
+            if len(entry) > 80:
+                preview += "\u2026"
+            lines.append(f"  {i}. {preview}")
+        lines.append("")
+        lines.append(
+            "Up/Down arrows to recall, Ctrl+R to search, /history clear to reset"
+        )
+        self._add_system_message("\n".join(lines))
 
     def _cmd_keys(self) -> None:
         """Show the keyboard shortcut overlay."""
