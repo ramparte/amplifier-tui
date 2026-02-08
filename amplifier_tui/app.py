@@ -1128,6 +1128,9 @@ SHORTCUTS_TEXT = """\
   Ctrl+T           New tab
   Ctrl+W           Close tab
   Ctrl+PgUp/Dn    Switch tabs
+  Alt+Left/Right   Prev/next tab
+  Alt+1-9          Jump to tab 1-9
+  Alt+0            Jump to last tab
   Ctrl+P           Command palette (fuzzy search)
   F1 / Ctrl+/      This help
   Ctrl+Q           Quit
@@ -1684,6 +1687,18 @@ class AmplifierChicApp(App):
         Binding("ctrl+w", "close_tab", "Close Tab", show=False),
         Binding("ctrl+pageup", "prev_tab", "Prev Tab", show=False),
         Binding("ctrl+pagedown", "next_tab", "Next Tab", show=False),
+        Binding("alt+left", "prev_tab", "Prev Tab", show=False),
+        Binding("alt+right", "next_tab", "Next Tab", show=False),
+        Binding("alt+1", "switch_tab(1)", "Tab 1", show=False),
+        Binding("alt+2", "switch_tab(2)", "Tab 2", show=False),
+        Binding("alt+3", "switch_tab(3)", "Tab 3", show=False),
+        Binding("alt+4", "switch_tab(4)", "Tab 4", show=False),
+        Binding("alt+5", "switch_tab(5)", "Tab 5", show=False),
+        Binding("alt+6", "switch_tab(6)", "Tab 6", show=False),
+        Binding("alt+7", "switch_tab(7)", "Tab 7", show=False),
+        Binding("alt+8", "switch_tab(8)", "Tab 8", show=False),
+        Binding("alt+9", "switch_tab(9)", "Tab 9", show=False),
+        Binding("alt+0", "switch_tab(0)", "Last Tab", show=False),
         Binding("ctrl+q", "quit", "Quit", show=True),
     ]
 
@@ -1859,6 +1874,7 @@ class AmplifierChicApp(App):
                 yield Static("", id="input-counter")
                 with Horizontal(id="status-bar"):
                     yield Static("No session", id="status-session")
+                    yield Static("", id="status-tabs")
                     yield Static("Ready", id="status-state")
                     yield Static("", id="status-stash")
                     yield Static("", id="status-vim")
@@ -1990,6 +2006,19 @@ class AmplifierChicApp(App):
         try:
             tab_bar = self.query_one("#tab-bar", TabBar)
             tab_bar.update_tabs(self._tabs, self._active_tab_index)
+        except Exception:
+            pass
+        self._update_tab_indicator()
+
+    def _update_tab_indicator(self) -> None:
+        """Update the 'Tab N/M' indicator in the status bar."""
+        try:
+            widget = self.query_one("#status-tabs", Static)
+            count = len(self._tabs)
+            if count > 1:
+                widget.update(f"Tab {self._active_tab_index + 1}/{count}")
+            else:
+                widget.update("")
         except Exception:
             pass
 
@@ -2286,6 +2315,15 @@ class AmplifierChicApp(App):
             return
         new_index = (self._active_tab_index + 1) % len(self._tabs)
         self._switch_to_tab(new_index)
+
+    def action_switch_tab(self, number: int) -> None:
+        """Switch to tab by number (Alt+1-9) or last tab (Alt+0)."""
+        if number == 0:
+            # Alt+0 → last tab (browser convention)
+            self._switch_to_tab(len(self._tabs) - 1)
+        else:
+            # Alt+N → tab N (1-based → 0-based index)
+            self._switch_to_tab(number - 1)
 
     # ── Welcome Screen ──────────────────────────────────────────
 
@@ -4568,6 +4606,9 @@ class AmplifierChicApp(App):
             "  Ctrl+T        New conversation tab\n"
             "  Ctrl+W        Close current tab\n"
             "  Ctrl+PgUp/Dn  Switch between tabs\n"
+            "  Alt+Left/Right Prev/next tab\n"
+            "  Alt+1-9       Jump to tab 1-9\n"
+            "  Alt+0         Jump to last tab\n"
             "  Ctrl+Home     Jump to top of chat\n"
             "  Ctrl+End      Jump to bottom of chat\n"
             "  Ctrl+Up/Down  Scroll chat up/down\n"

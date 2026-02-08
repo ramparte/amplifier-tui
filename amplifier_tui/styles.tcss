@@ -423,6 +423,12 @@ CollapsibleTitle:hover {
     color: $primary;
 }
 
+#status-tabs {
+    width: auto;
+    color: $accent;
+    margin: 0 1;
+}
+
 #status-state {
     width: 1fr;
     margin: 0 2;
