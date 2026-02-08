@@ -757,6 +757,7 @@ class AmplifierChicApp(App):
             "/copy": self._cmd_copy,
             "/notify": self._cmd_notify,
             "/scroll": self._cmd_scroll,
+            "/timestamps": self._cmd_timestamps,
             "/theme": lambda: self._cmd_theme(text),
             "/export": lambda: self._cmd_export(text),
         }
@@ -783,6 +784,7 @@ class AmplifierChicApp(App):
             "  /export       Export session to markdown file\n"
             "  /notify       Toggle completion notifications\n"
             "  /scroll       Toggle auto-scroll on/off\n"
+            "  /timestamps   Toggle message timestamps on/off\n"
             "  /theme        Switch color theme (dark, light, solarized)\n"
             "  /compact      Clear chat, keep session\n"
             "  /quit         Quit\n"
@@ -903,6 +905,15 @@ class AmplifierChicApp(App):
         self._add_system_message(
             f"Notifications {state} (notify after {nprefs.min_seconds:.0f}s)"
         )
+
+    def _cmd_timestamps(self) -> None:
+        """Toggle message timestamps on/off."""
+        self._prefs.display.show_timestamps = not self._prefs.display.show_timestamps
+        state = "on" if self._prefs.display.show_timestamps else "off"
+        # Show/hide existing timestamp widgets
+        for ts_widget in self.query(".msg-timestamp"):
+            ts_widget.display = self._prefs.display.show_timestamps
+        self._add_system_message(f"Timestamps {state}")
 
     def _cmd_theme(self, text: str) -> None:
         """Switch color theme or show current/available themes."""
@@ -1074,6 +1085,26 @@ class AmplifierChicApp(App):
 
     # ── Message Display ─────────────────────────────────────────
 
+    def _make_timestamp(self, ts: str | None = None) -> Static | None:
+        """Create a dim right-aligned timestamp label, or None if disabled."""
+        if not self._prefs.display.show_timestamps:
+            return None
+        time_str = ts or datetime.now().strftime("%H:%M")
+        return Static(time_str, classes="msg-timestamp")
+
+    @staticmethod
+    def _extract_transcript_timestamp(msg: dict) -> str | None:
+        """Extract a display timestamp (HH:MM) from a transcript message."""
+        for key in ("timestamp", "created_at", "ts"):
+            val = msg.get(key)
+            if val:
+                try:
+                    dt = datetime.fromisoformat(str(val).replace("Z", "+00:00"))
+                    return dt.strftime("%H:%M")
+                except (ValueError, TypeError):
+                    pass
+        return None
+
     def _style_user(self, widget: Static) -> None:
         """Apply preference colors to a user message."""
         c = self._prefs.colors
@@ -1106,24 +1137,33 @@ class AmplifierChicApp(App):
         widget.styles.color = c.system_text
         widget.styles.border_left = ("thick", c.system_border)
 
-    def _add_user_message(self, text: str) -> None:
+    def _add_user_message(self, text: str, ts: str | None = None) -> None:
         chat_view = self.query_one("#chat-view", ScrollableContainer)
+        ts_widget = self._make_timestamp(ts)
+        if ts_widget:
+            chat_view.mount(ts_widget)
         msg = UserMessage(text)
         chat_view.mount(msg)
         self._style_user(msg)
         self._scroll_if_auto(msg)
 
-    def _add_assistant_message(self, text: str) -> None:
+    def _add_assistant_message(self, text: str, ts: str | None = None) -> None:
         chat_view = self.query_one("#chat-view", ScrollableContainer)
+        ts_widget = self._make_timestamp(ts)
+        if ts_widget:
+            chat_view.mount(ts_widget)
         msg = AssistantMessage(text)
         chat_view.mount(msg)
         self._style_assistant(msg)
         self._scroll_if_auto(msg)
         self._last_assistant_text = text
 
-    def _add_system_message(self, text: str) -> None:
+    def _add_system_message(self, text: str, ts: str | None = None) -> None:
         """Display a system message (slash command output)."""
         chat_view = self.query_one("#chat-view", ScrollableContainer)
+        ts_widget = self._make_timestamp(ts)
+        if ts_widget:
+            chat_view.mount(ts_widget)
         msg = SystemMessage(text)
         chat_view.mount(msg)
         self._style_system(msg)
@@ -1510,6 +1550,9 @@ class AmplifierChicApp(App):
             old = self._stream_widget
             if old:
                 msg = AssistantMessage(text)
+                ts_widget = self._make_timestamp()
+                if ts_widget:
+                    chat_view.mount(ts_widget, before=old)
                 chat_view.mount(msg, before=old)
                 self._style_assistant(msg)
                 old.remove()
@@ -1603,14 +1646,26 @@ class AmplifierChicApp(App):
         tool_results: dict[str, str] = {}
 
         for msg in load_transcript(transcript_path):
+            msg_ts = self._extract_transcript_timestamp(msg)
+            ts_shown = False
             blocks = parse_message_blocks(msg)
             for block in blocks:
                 if block.kind == "user":
+                    if not ts_shown:
+                        ts_widget = self._make_timestamp(msg_ts)
+                        if ts_widget:
+                            chat_view.mount(ts_widget)
+                        ts_shown = True
                     widget = UserMessage(block.content)
                     chat_view.mount(widget)
                     self._style_user(widget)
 
                 elif block.kind == "text":
+                    if not ts_shown:
+                        ts_widget = self._make_timestamp(msg_ts)
+                        if ts_widget:
+                            chat_view.mount(ts_widget)
+                        ts_shown = True
                     self._last_assistant_text = block.content
                     widget = AssistantMessage(block.content)
                     chat_view.mount(widget)

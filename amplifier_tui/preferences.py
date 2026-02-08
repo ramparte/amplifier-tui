@@ -87,6 +87,9 @@ colors:
 notifications:
   enabled: true                  # notify when a response completes
   min_seconds: 3.0               # only notify if processing took longer than this
+
+display:
+  show_timestamps: true          # show HH:MM timestamps on messages
 """
 
 
@@ -118,6 +121,13 @@ class ColorPreferences:
 
 
 @dataclass
+class DisplayPreferences:
+    """Display settings for the chat view."""
+
+    show_timestamps: bool = True
+
+
+@dataclass
 class Preferences:
     """Top-level TUI preferences."""
 
@@ -125,6 +135,7 @@ class Preferences:
     notifications: NotificationPreferences = field(
         default_factory=NotificationPreferences
     )
+    display: DisplayPreferences = field(default_factory=DisplayPreferences)
 
     def apply_theme(self, name: str) -> bool:
         """Apply a built-in theme by name. Returns False if unknown."""
@@ -159,6 +170,10 @@ def load_preferences(path: Path | None = None) -> Preferences:
                     prefs.notifications.enabled = bool(ndata["enabled"])
                 if "min_seconds" in ndata:
                     prefs.notifications.min_seconds = float(ndata["min_seconds"])
+            if isinstance(data.get("display"), dict):
+                ddata = data["display"]
+                if "show_timestamps" in ddata:
+                    prefs.display.show_timestamps = bool(ddata["show_timestamps"])
         except Exception:
             pass  # Fall back to defaults on any parse error
     else:
