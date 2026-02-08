@@ -19,6 +19,58 @@ from .history import PromptHistory
 from .preferences import load_preferences
 from .theme import CHIC_THEME
 
+# Tool name -> human-friendly status label (without trailing "...")
+TOOL_LABELS: dict[str, str] = {
+    "read_file": "Reading file",
+    "write_file": "Writing file",
+    "edit_file": "Editing file",
+    "grep": "Searching",
+    "glob": "Finding files",
+    "bash": "Running command",
+    "web_search": "Searching web",
+    "web_fetch": "Fetching page",
+    "delegate": "Delegating to agent",
+    "task": "Delegating to agent",
+    "LSP": "Analyzing code",
+    "python_check": "Checking code",
+    "todo": "Updating tasks",
+    "recipes": "Running recipe",
+    "load_skill": "Loading skill",
+}
+
+_MAX_LABEL_LEN = 38  # Keep status labels under ~40 chars total
+
+
+def _get_tool_label(name: str, tool_input: dict | str | None) -> str:
+    """Map a tool name (+ optional input) to a short, human-friendly label."""
+    base = TOOL_LABELS.get(name, f"Running {name}")
+    inp = tool_input if isinstance(tool_input, dict) else {}
+
+    # Add file/path context for file-related tools
+    if name in ("read_file", "write_file", "edit_file"):
+        path = inp.get("file_path", "")
+        if path:
+            short = Path(path).name
+            base = f"{base.rsplit('.', 1)[0].rstrip('.')} {short}"
+
+    elif name == "grep":
+        pattern = inp.get("pattern", "")
+        if pattern:
+            if len(pattern) > 20:
+                pattern = pattern[:17] + "..."
+            base = f"Searching: {pattern}"
+
+    elif name == "delegate":
+        agent = inp.get("agent", "")
+        if agent:
+            short = agent.split(":")[-1] if ":" in agent else agent
+            base = f"Delegating to {short}"
+
+    # Truncate to keep status bar tidy, then add ellipsis
+    if len(base) > _MAX_LABEL_LEN:
+        base = base[: _MAX_LABEL_LEN - 1] + "\u2026"
+    return f"{base}..."
+
 
 # ── Widget Classes ──────────────────────────────────────────────────
 
@@ -905,10 +957,13 @@ class AmplifierChicApp(App):
                     self.call_from_thread(self._add_assistant_message, text)
 
         def on_tool_start(name: str, tool_input: dict) -> None:
+            label = _get_tool_label(name, tool_input)
+            self._processing_label = label.rstrip(".")
             self.call_from_thread(self._remove_processing_indicator)
-            self.call_from_thread(self._update_status, f"Running: {name}")
+            self.call_from_thread(self._update_status, label)
 
         def on_tool_end(name: str, tool_input: dict, result: str) -> None:
+            self._processing_label = "Thinking"
             self.call_from_thread(self._add_tool_use, name, tool_input, result)
             self.call_from_thread(self._update_status, "Thinking...")
 
