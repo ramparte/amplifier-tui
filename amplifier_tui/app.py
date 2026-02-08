@@ -1804,117 +1804,77 @@ class AmplifierChicApp(App):
         self._add_system_message(f"Color '{key}' set to {value}")
 
     def _cmd_export(self, text: str) -> None:
-        """Export the current session transcript to a markdown file."""
-        from .transcript_loader import load_transcript, parse_message_blocks
-
+        """Export the current chat to a clean markdown file."""
         sm = self.session_manager if hasattr(self, "session_manager") else None
         sid = getattr(sm, "session_id", None) if sm else None
-        if not sid:
-            self._add_system_message("No active session to export.")
-            return
 
-        # Parse optional path argument
+        # Parse optional filename argument
         parts = text.strip().split(None, 1)
         if len(parts) > 1:
-            out_path = Path(parts[1]).expanduser().resolve()
+            filename = parts[1].strip()
         else:
-            short_id = sid[:8]
-            out_path = Path.home() / f"amplifier-export-{short_id}.md"
+            filename = ""
 
-        # Load transcript from disk
-        try:
-            transcript_path = sm.get_session_transcript_path(sid)
-        except ValueError:
-            self._add_system_message(f"Transcript not found for session {sid[:12]}.")
+        if not filename:
+            timestamp = datetime.now().strftime("%Y-%m-%d-%H%M")
+            filename = f"chat-export-{timestamp}.md"
+
+        # Ensure .md extension
+        if not filename.endswith(".md"):
+            filename += ".md"
+
+        # Check for messages to export
+        exportable = [
+            (role, msg_text)
+            for role, msg_text, _widget in self._search_messages
+            if role != "system"
+        ]
+        if not exportable:
+            self._add_system_message("Nothing to export — chat is empty.")
             return
 
-        # Collect tool results first (they precede tool_use in display order)
-        tool_results: dict[str, str] = {}
-        all_blocks = []
-        for msg in load_transcript(transcript_path):
-            for block in parse_message_blocks(msg):
-                if block.kind == "tool_result":
-                    tool_results[block.tool_id] = block.content
-                all_blocks.append(block)
+        # Resolve session name for the header
+        session_label = "unknown"
+        session_id_short = ""
+        if sid:
+            session_id_short = sid[:12]
+            names = self._load_session_names()
+            session_label = names.get(sid, session_id_short)
 
-        # Build markdown
+        # Build markdown content
         lines: list[str] = []
-        today = datetime.now().strftime("%Y-%m-%d")
-        lines.append("# Amplifier Session Export")
-        lines.append(f"**Date**: {today}")
-        lines.append(f"**Session**: {sid[:8]}")
+
+        # Header
+        lines.append(f"# Chat Export: {session_label}")
+        lines.append(f"*Exported: {datetime.now().strftime('%Y-%m-%d %H:%M')}*")
+        if session_id_short:
+            lines.append(f"*Session: {session_id_short}*")
         lines.append("")
         lines.append("---")
         lines.append("")
 
-        for block in all_blocks:
-            if block.kind == "user":
-                lines.append("## User")
-                lines.append("")
-                lines.append(block.content)
-                lines.append("")
+        # Messages
+        for role, msg_text in exportable:
+            role_display = role.capitalize()
+            lines.append(f"### {role_display}")
+            lines.append("")
+            lines.append(msg_text)
+            lines.append("")
+            lines.append("---")
+            lines.append("")
 
-            elif block.kind == "text":
-                lines.append("## Assistant")
-                lines.append("")
-                lines.append(block.content)
-                lines.append("")
-
-            elif block.kind == "thinking":
-                lines.append("<details>")
-                lines.append("<summary>Thinking</summary>")
-                lines.append("")
-                lines.append(block.content)
-                lines.append("")
-                lines.append("</details>")
-                lines.append("")
-
-            elif block.kind == "tool_use":
-                # Summarize tool call with optional short input
-                tool_input_str = ""
-                if block.tool_input:
-                    if isinstance(block.tool_input, dict):
-                        # For common tools, show the key argument
-                        for key in ("command", "query", "path", "file_path", "pattern"):
-                            if key in block.tool_input:
-                                tool_input_str = str(block.tool_input[key])
-                                break
-                        if not tool_input_str:
-                            tool_input_str = json.dumps(block.tool_input)
-                    else:
-                        tool_input_str = str(block.tool_input)
-                    # Truncate long input to first line, max 120 chars
-                    tool_input_str = tool_input_str.split("\n")[0]
-                    if len(tool_input_str) > 120:
-                        tool_input_str = tool_input_str[:117] + "..."
-
-                header = f"> **Tool**: {block.tool_name}"
-                if tool_input_str:
-                    header += f" — `{tool_input_str}`"
-                lines.append(header)
-
-                result = tool_results.get(block.tool_id, "")
-                if result:
-                    # Truncate to ~10 lines
-                    result_lines = result.split("\n")
-                    if len(result_lines) > 10:
-                        result = "\n".join(result_lines[:10]) + "\n..."
-                    lines.append("> ```")
-                    for rline in result.split("\n"):
-                        lines.append(f"> {rline}")
-                    lines.append("> ```")
-                lines.append("")
-
-            # Skip tool_result blocks — already inlined with tool_use above
-
-        lines.append("---")
         lines.append("*Exported from Amplifier TUI*")
 
         # Write file
+        out_path = Path(filename).expanduser()
+        if not out_path.is_absolute():
+            out_path = Path.cwd() / out_path
+        out_path = out_path.resolve()
+
         try:
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text("\n".join(lines), encoding="utf-8")
-            self._add_system_message(f"Session exported to {out_path}")
+            self._add_system_message(f"Chat exported to: {out_path}")
         except OSError as e:
             self._add_system_message(f"Export failed: {e}")
 
