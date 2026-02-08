@@ -235,6 +235,7 @@ SHORTCUTS_TEXT = """\
   /export     Export to markdown
   /rename     Rename session
   /delete     Delete session
+  /stats      Session statistics
   /copy       Copy last response
   /scroll     Toggle auto-scroll
   /focus      Focus mode
@@ -324,6 +325,14 @@ class AmplifierChicApp(App):
 
         # Word count tracking
         self._total_words: int = 0
+
+        # Session statistics counters
+        self._user_message_count: int = 0
+        self._assistant_message_count: int = 0
+        self._tool_call_count: int = 0
+        self._user_words: int = 0
+        self._assistant_words: int = 0
+        self._session_start_time: float = time.monotonic()
 
         # Streaming display state
         self._stream_widget: Static | None = None
@@ -731,6 +740,12 @@ class AmplifierChicApp(App):
         self._update_token_display()
         self._update_status("Ready")
         self._total_words = 0
+        self._user_message_count = 0
+        self._assistant_message_count = 0
+        self._tool_call_count = 0
+        self._user_words = 0
+        self._assistant_words = 0
+        self._session_start_time = time.monotonic()
         self._update_word_count_display()
         self.query_one("#chat-input", ChatInput).focus()
 
@@ -739,6 +754,11 @@ class AmplifierChicApp(App):
         for child in list(chat_view.children):
             child.remove()
         self._total_words = 0
+        self._user_message_count = 0
+        self._assistant_message_count = 0
+        self._tool_call_count = 0
+        self._user_words = 0
+        self._assistant_words = 0
         self._update_word_count_display()
 
     def action_toggle_auto_scroll(self) -> None:
@@ -938,6 +958,7 @@ class AmplifierChicApp(App):
             "/scroll": self._cmd_scroll,
             "/timestamps": self._cmd_timestamps,
             "/keys": self._cmd_keys,
+            "/stats": self._cmd_stats,
             "/theme": lambda: self._cmd_theme(text),
             "/export": lambda: self._cmd_export(text),
             "/rename": lambda: self._cmd_rename(text),
@@ -962,6 +983,7 @@ class AmplifierChicApp(App):
             "  /sessions     Toggle session sidebar\n"
             "  /prefs        Show preferences\n"
             "  /model        Show model info\n"
+            "  /stats        Show session statistics\n"
             "  /copy         Copy last response to clipboard\n"
             "  /rename       Rename current session (e.g. /rename My Project)\n"
             "  /delete       Delete session (with confirmation)\n"
@@ -1110,6 +1132,62 @@ class AmplifierChicApp(App):
     def _cmd_keys(self) -> None:
         """Show the keyboard shortcut overlay."""
         self.action_show_shortcuts()
+
+    def _cmd_stats(self) -> None:
+        """Show session statistics."""
+        # Duration
+        elapsed = time.monotonic() - self._session_start_time
+        if elapsed < 60:
+            duration = f"{int(elapsed)} seconds"
+        elif elapsed < 3600:
+            duration = f"{int(elapsed / 60)} minutes"
+        else:
+            hours = int(elapsed / 3600)
+            mins = int((elapsed % 3600) / 60)
+            duration = f"{hours}h {mins}m"
+
+        # Session ID
+        session_id = "none"
+        model = "unknown"
+        if self.session_manager:
+            sid = getattr(self.session_manager, "session_id", None) or ""
+            session_id = sid[:12] if sid else "none"
+            model = getattr(self.session_manager, "model_name", None) or "unknown"
+
+        # Word counts formatted
+        total_words = self._user_words + self._assistant_words
+        if total_words >= 1000:
+            total_str = f"{total_words / 1000:.1f}k"
+        else:
+            total_str = str(total_words)
+        if self._user_words >= 1000:
+            user_str = f"{self._user_words / 1000:.1f}k"
+        else:
+            user_str = str(self._user_words)
+        if self._assistant_words >= 1000:
+            asst_str = f"{self._assistant_words / 1000:.1f}k"
+        else:
+            asst_str = str(self._assistant_words)
+
+        est_tokens = int(total_words * 1.3)
+        if est_tokens >= 1000:
+            token_str = f"{est_tokens / 1000:.1f}k"
+        else:
+            token_str = str(est_tokens)
+
+        stats = (
+            "Session Statistics\n"
+            "──────────────────\n"
+            f"Session:    {session_id}\n"
+            f"Duration:   {duration}\n"
+            f"Messages:   {self._user_message_count} user · "
+            f"{self._assistant_message_count} assistant\n"
+            f"Tool calls: {self._tool_call_count}\n"
+            f"Words:      {total_str} (user: {user_str} · assistant: {asst_str})\n"
+            f"Est tokens: ~{token_str}\n"
+            f"Model:      {model}"
+        )
+        self._add_system_message(stats)
 
     def _cmd_theme(self, text: str) -> None:
         """Switch color theme or show current/available themes."""
@@ -1534,7 +1612,10 @@ class AmplifierChicApp(App):
         chat_view.mount(msg)
         self._style_user(msg)
         self._scroll_if_auto(msg)
-        self._total_words += self._count_words(text)
+        words = self._count_words(text)
+        self._total_words += words
+        self._user_message_count += 1
+        self._user_words += words
         self._update_word_count_display()
 
     def _add_assistant_message(self, text: str, ts: str | None = None) -> None:
@@ -1547,7 +1628,10 @@ class AmplifierChicApp(App):
         self._style_assistant(msg)
         self._scroll_if_auto(msg)
         self._last_assistant_text = text
-        self._total_words += self._count_words(text)
+        words = self._count_words(text)
+        self._total_words += words
+        self._assistant_message_count += 1
+        self._assistant_words += words
         self._update_word_count_display()
 
     def _add_system_message(self, text: str, ts: str | None = None) -> None:
@@ -1584,6 +1668,7 @@ class AmplifierChicApp(App):
         tool_input: dict | str | None = None,
         result: str = "",
     ) -> None:
+        self._tool_call_count += 1
         chat_view = self.query_one("#chat-view", ScrollableContainer)
 
         detail_parts: list[str] = []
@@ -1976,7 +2061,10 @@ class AmplifierChicApp(App):
                 self._style_assistant(msg)
                 old.remove()
                 self._scroll_if_auto(msg)
-                self._total_words += self._count_words(text)
+                words = self._count_words(text)
+                self._total_words += words
+                self._assistant_message_count += 1
+                self._assistant_words += words
                 self._update_word_count_display()
             else:
                 self._add_assistant_message(text)
@@ -2065,6 +2153,12 @@ class AmplifierChicApp(App):
             child.remove()
 
         self._total_words = 0
+        self._user_message_count = 0
+        self._assistant_message_count = 0
+        self._tool_call_count = 0
+        self._user_words = 0
+        self._assistant_words = 0
+        self._session_start_time = time.monotonic()
         tool_results: dict[str, str] = {}
 
         for msg in load_transcript(transcript_path):
@@ -2081,7 +2175,10 @@ class AmplifierChicApp(App):
                     widget = UserMessage(block.content)
                     chat_view.mount(widget)
                     self._style_user(widget)
-                    self._total_words += self._count_words(block.content)
+                    words = self._count_words(block.content)
+                    self._total_words += words
+                    self._user_message_count += 1
+                    self._user_words += words
 
                 elif block.kind == "text":
                     if not ts_shown:
@@ -2093,7 +2190,10 @@ class AmplifierChicApp(App):
                     widget = AssistantMessage(block.content)
                     chat_view.mount(widget)
                     self._style_assistant(widget)
-                    self._total_words += self._count_words(block.content)
+                    words = self._count_words(block.content)
+                    self._total_words += words
+                    self._assistant_message_count += 1
+                    self._assistant_words += words
 
                 elif block.kind == "thinking":
                     preview = block.content.split("\n")[0][:55]
