@@ -173,6 +173,8 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/system",
     "/note",
     "/notes",
+    "/fork",
+    "/branch",
 )
 
 # -- System prompt presets -----------------------------------------------------
@@ -1452,6 +1454,9 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ),
     ("/system use writer", "Apply 'writer' system prompt preset", "/system use writer"),
     ("/system clear", "Remove custom system prompt", "/system clear"),
+    ("/fork", "Fork conversation into a new tab", "/fork"),
+    ("/fork N", "Fork from message N (from bottom) into a new tab", "/fork"),
+    ("/branch", "Fork conversation into a new tab (alias for /fork)", "/branch"),
     # ── Keyboard-shortcut actions ───────────────────────────────────────────
     ("New Session  Ctrl+N", "Start a new conversation", "action:new_session"),
     ("New Tab  Ctrl+T", "Open a new conversation tab", "action:new_tab"),
@@ -2060,7 +2065,9 @@ class AmplifierChicApp(App):
         self.sub_title = self._session_title or ""
         self.query_one("#chat-input", ChatInput).focus()
 
-    def _create_new_tab(self, name: str | None = None) -> None:
+    def _create_new_tab(
+        self, name: str | None = None, *, show_welcome: bool = True
+    ) -> None:
         """Create a new conversation tab."""
         if len(self._tabs) >= MAX_TABS:
             self._add_system_message(
@@ -2140,7 +2147,8 @@ class AmplifierChicApp(App):
         self._update_word_count_display()
         self._update_breadcrumb()
         self.sub_title = ""
-        self._show_welcome(f"New tab: {name}")
+        if show_welcome:
+            self._show_welcome(f"New tab: {name}")
         self.query_one("#chat-input", ChatInput).focus()
 
     def _close_tab(self, index: int | None = None) -> None:
@@ -4422,6 +4430,8 @@ class AmplifierChicApp(App):
             "/system": lambda: self._cmd_system(args),
             "/note": lambda: self._cmd_note(args),
             "/notes": lambda: self._show_notes(),
+            "/fork": lambda: self._cmd_fork(args),
+            "/branch": lambda: self._cmd_fork(args),
         }
 
         handler = handlers.get(cmd)
@@ -4493,6 +4503,8 @@ class AmplifierChicApp(App):
             "  /vim          Toggle vim keybindings (/vim on, /vim off)\n"
             "  /tab          Tab management (/tab new|switch|close|rename|list)\n"
             "  /tabs         List all open tabs\n"
+            "  /fork         Fork conversation into a new tab (/fork N from bottom)\n"
+            "  /branch       Alias for /fork\n"
             "  /run          Run shell command inline (/run ls -la, /run git status)\n"
             "  /!            Shorthand for /run (/! git diff)\n"
             "  /include      Include file contents (/include src/main.py, /include *.py --send)\n"
@@ -5451,6 +5463,71 @@ class AmplifierChicApp(App):
                     "Unknown /tab subcommand. "
                     "Usage: /tab new [name] | switch <n> | close [n] | rename <name>"
                 )
+
+    def _cmd_fork(self, args: str) -> None:
+        """Fork conversation at a specific point into a new tab."""
+        args = args.strip()
+
+        # Get current messages
+        messages = self._search_messages
+        if not messages:
+            self._add_system_message("No messages to fork from.")
+            return
+
+        # Determine fork point (N is 1-based from bottom)
+        if args and args.isdigit():
+            n = int(args)
+            if n < 1 or n > len(messages):
+                self._add_system_message(
+                    f"Invalid message number: {n}. Must be 1\u2013{len(messages)}."
+                )
+                return
+            fork_idx = len(messages) - n
+        else:
+            # Fork from last message (include all)
+            fork_idx = len(messages) - 1
+
+        # Collect message data before switching tabs (role + text only)
+        fork_data = [(role, txt) for role, txt, _ in messages[: fork_idx + 1]]
+        total_messages = len(messages)
+
+        # Save source tab info
+        source_tab = self._tabs[self._active_tab_index]
+        source_tab_name = source_tab.name
+        source_system_prompt = self._system_prompt
+        source_system_preset = self._system_preset_name
+
+        # Create new tab without welcome message
+        new_tab_name = f"Fork of {source_tab_name}"
+        self._create_new_tab(name=new_tab_name, show_welcome=False)
+
+        # Copy system prompt from source tab
+        self._system_prompt = source_system_prompt
+        self._system_preset_name = source_system_preset
+
+        # Replay messages into the new tab
+        for role, txt in fork_data:
+            if role == "user":
+                self._add_user_message(txt)
+            elif role == "assistant":
+                self._add_assistant_message(txt)
+            # Skip system/thinking/note messages in fork
+
+        # Add fork indicator
+        fork_msg_count = len(fork_data)
+        self._add_system_message(
+            f"(forked from {source_tab_name} at msg {fork_msg_count}/{total_messages})\n"
+            f"Continue the conversation from here.\n"
+            f"Note: AI context starts fresh \u2014 the AI won't recall earlier messages\n"
+            f"until you send a new message in this tab."
+        )
+
+        # Scroll to bottom
+        try:
+            chat = self._active_chat_view()
+            chat.scroll_end(animate=False)
+        except Exception:
+            pass
 
     def _cmd_clear(self) -> None:
         self.action_clear_chat()
