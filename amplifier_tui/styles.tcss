@@ -309,6 +309,8 @@ AssistantMessage {
     margin: 0;
 }
 
+/* -- Headings ----------------------------------------- */
+
 AssistantMessage MarkdownH1 {
     color: $secondary;
     text-style: bold;
@@ -327,11 +329,35 @@ AssistantMessage MarkdownH3 {
     margin: 1 0 0 0;
 }
 
+AssistantMessage MarkdownH4 {
+    color: $text;
+    text-style: bold italic;
+    margin: 1 0 0 0;
+}
+
+/* -- Inline code: subtle distinct background ---------- */
+
+AssistantMessage MarkdownBlock > .code_inline {
+    background: #1c1c2e;
+    color: #c0b0e0;
+}
+
+/* -- Fenced code blocks: syntax-highlighted ----------- */
+/* Textual's MarkdownFence renders via Pygments.         */
+/* padding: 0 here because the inner Label has padding.  */
+
 AssistantMessage MarkdownFence {
-    background: $surface;
+    background: #0c0c18;
+    border: solid #2a2a3e;
     margin: 1 0;
+    padding: 0;
+}
+
+AssistantMessage MarkdownFence #code-content {
     padding: 1 2;
 }
+
+/* -- Block quotes ------------------------------------- */
 
 AssistantMessage MarkdownBlockQuote {
     border-left: thick $panel;
@@ -340,15 +366,21 @@ AssistantMessage MarkdownBlockQuote {
     padding: 0 1;
 }
 
+/* -- Lists -------------------------------------------- */
+
 AssistantMessage MarkdownBulletList,
 AssistantMessage MarkdownOrderedList {
     margin: 0;
     padding: 0;
 }
 
+/* -- Tables ------------------------------------------- */
+
 AssistantMessage MarkdownTable {
     margin: 1 0;
 }
+
+/* -- Horizontal rules --------------------------------- */
 
 AssistantMessage MarkdownHorizontalRule {
     color: $panel;
