@@ -41,6 +41,7 @@ from .preferences import (
     save_session_sort,
     save_show_timestamps,
     save_theme_name,
+    save_word_wrap,
 )
 from .theme import CHIC_THEME
 
@@ -100,6 +101,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/tokens",
     "/sort",
     "/edit",
+    "/wrap",
 )
 
 # Known context window sizes (tokens) for popular models.
@@ -467,6 +469,7 @@ SHORTCUTS_TEXT = """\
   /notify     Toggle notifications
   /sound      Toggle notification sound
   /timestamps Toggle timestamps
+  /wrap       Toggle word wrap
   /keys       This overlay
   /search     Search chat messages
   /sort       Sort sessions (date/name/project)
@@ -681,6 +684,10 @@ class AmplifierChicApp(App):
     async def on_mount(self) -> None:
         self.register_theme(CHIC_THEME)
         self.theme = "chic"
+
+        # Apply word-wrap preference (default: on; off adds no-wrap CSS class)
+        if not self._prefs.display.word_wrap:
+            self.query_one("#chat-view", ScrollableContainer).add_class("no-wrap")
 
         # Show UI immediately, defer Amplifier import to background
         self._show_welcome()
@@ -1607,6 +1614,7 @@ class AmplifierChicApp(App):
             "/draft": lambda: self._cmd_draft(text),
             "/sort": lambda: self._cmd_sort(text),
             "/edit": self.action_open_editor,
+            "/wrap": lambda: self._cmd_wrap(text),
         }
 
         handler = handlers.get(cmd)
@@ -1640,6 +1648,7 @@ class AmplifierChicApp(App):
             "  /sound        Toggle notification sound (/sound on, /sound off)\n"
             "  /scroll       Toggle auto-scroll on/off\n"
             "  /timestamps   Toggle message timestamps on/off\n"
+            "  /wrap         Toggle word wrap on/off (/wrap on, /wrap off)\n"
             "  /theme        Switch color theme (dark, light, solarized, monokai, nord, dracula)\n"
             "  /colors       View/set colors (/colors reset, /colors <key> <#hex>)\n"
             "  /focus        Toggle focus mode (hide chrome)\n"
@@ -1987,6 +1996,34 @@ class AmplifierChicApp(App):
         for ts_widget in self.query(".msg-timestamp"):
             ts_widget.display = self._prefs.display.show_timestamps
         self._add_system_message(f"Timestamps {state}")
+
+    def _cmd_wrap(self, text: str) -> None:
+        """Toggle word wrap on/off for chat messages."""
+        parts = text.strip().split(None, 1)
+        arg = parts[1].strip().lower() if len(parts) > 1 else ""
+
+        if arg == "on":
+            wrap = True
+        elif arg == "off":
+            wrap = False
+        elif not arg:
+            wrap = not self._prefs.display.word_wrap
+        else:
+            self._add_system_message("Usage: /wrap [on|off]")
+            return
+
+        self._prefs.display.word_wrap = wrap
+        save_word_wrap(wrap)
+
+        # Toggle CSS class on chat view
+        chat = self.query_one("#chat-view", ScrollableContainer)
+        if wrap:
+            chat.remove_class("no-wrap")
+        else:
+            chat.add_class("no-wrap")
+
+        state = "on" if wrap else "off"
+        self._add_system_message(f"Word wrap: {state}")
 
     def _cmd_keys(self) -> None:
         """Show the keyboard shortcut overlay."""

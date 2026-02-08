@@ -101,6 +101,21 @@ Screen {
     padding: 1 1;
 }
 
+/* -- No-wrap mode (toggled by /wrap command) ---------- */
+/* When word wrap is off, messages scroll horizontally   */
+/* instead of wrapping long lines.                       */
+
+#chat-view.no-wrap .chat-message {
+    overflow-x: auto;
+}
+
+#chat-view.no-wrap .thinking-text,
+#chat-view.no-wrap .thinking-static,
+#chat-view.no-wrap .tool-detail,
+#chat-view.no-wrap .error-message {
+    overflow-x: auto;
+}
+
 /* -- Message timestamps ------------------------------- */
 
 .msg-timestamp {

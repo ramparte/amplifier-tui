@@ -136,6 +136,7 @@ notifications:
 
 display:
   show_timestamps: true          # show HH:MM timestamps on messages
+  word_wrap: true                # wrap long lines (off = horizontal scroll)
 
 model:
   preferred: ""                   # preferred model for new sessions (empty = use default)
@@ -178,6 +179,7 @@ class DisplayPreferences:
     """Display settings for the chat view."""
 
     show_timestamps: bool = True
+    word_wrap: bool = True
 
 
 @dataclass
@@ -232,6 +234,8 @@ def load_preferences(path: Path | None = None) -> Preferences:
                 ddata = data["display"]
                 if "show_timestamps" in ddata:
                     prefs.display.show_timestamps = bool(ddata["show_timestamps"])
+                if "word_wrap" in ddata:
+                    prefs.display.word_wrap = bool(ddata["word_wrap"])
             if isinstance(data.get("model"), dict):
                 mdata = data["model"]
                 if "preferred" in mdata:
@@ -442,6 +446,49 @@ def save_show_timestamps(enabled: bool, path: Path | None = None) -> None:
         else:
             # No display section at all — append it
             text = text.rstrip() + f"\n\ndisplay:\n  show_timestamps: {value}\n"
+
+        path.write_text(text)
+    except Exception:
+        pass  # Best-effort persistence
+
+
+def save_word_wrap(enabled: bool, path: Path | None = None) -> None:
+    """Persist the word_wrap display preference to the preferences file.
+
+    Surgically updates only the word_wrap value, preserving the rest of the
+    file (including user comments) as-is.
+    """
+    import re
+
+    path = path or PREFS_PATH
+    try:
+        if path.exists():
+            text = path.read_text()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = _DEFAULT_YAML
+
+        value = "true" if enabled else "false"
+        if re.search(r"^\s+word_wrap:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(\s+word_wrap:).*$",
+                f"\\1 {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        elif re.search(r"^display:", text, re.MULTILINE):
+            # display section exists but no word_wrap key
+            text = re.sub(
+                r"^(display:.*)$",
+                f"\\1\n  word_wrap: {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            # No display section at all — append it
+            text = text.rstrip() + f"\n\ndisplay:\n  word_wrap: {value}\n"
 
         path.write_text(text)
     except Exception:
