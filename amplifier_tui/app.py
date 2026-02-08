@@ -1066,6 +1066,24 @@ class AmplifierChicApp(App):
         # Take first line
         first_line = text.split("\n")[0].strip()
 
+        # Strip conversational filler prefixes for a cleaner title
+        for prefix in (
+            "please ",
+            "can you ",
+            "could you ",
+            "would you ",
+            "i want to ",
+            "i need to ",
+            "i'd like to ",
+            "help me ",
+            "hey ",
+            "hi ",
+            "hello ",
+        ):
+            if first_line.lower().startswith(prefix):
+                first_line = first_line[len(prefix) :]
+                break
+
         # Take first sentence (up to period, question mark, or exclamation)
         for i, ch in enumerate(first_line):
             if ch in ".?!" and i > 10:
@@ -1078,9 +1096,11 @@ class AmplifierChicApp(App):
             last_space = truncated.rfind(" ")
             if last_space > max_len // 2:
                 truncated = truncated[:last_space]
-            first_line = truncated + "..."
+            first_line = truncated.rstrip(".!?, ") + "..."
 
-        return first_line or "Untitled"
+        # Capitalize first letter for a polished look
+        title = first_line.strip()
+        return (title[0].upper() + title[1:]) if title else "Untitled"
 
     def _load_session_titles(self) -> dict[str, str]:
         """Load session titles from the JSON file."""
