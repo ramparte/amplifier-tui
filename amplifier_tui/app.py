@@ -34,6 +34,7 @@ from textual import work
 from .history import PromptHistory
 from .preferences import (
     ColorPreferences,
+    THEME_DESCRIPTIONS,
     THEMES,
     load_preferences,
     save_colors,
@@ -47,7 +48,7 @@ from .preferences import (
     save_theme_name,
     save_word_wrap,
 )
-from .theme import CHIC_THEME
+from .theme import TEXTUAL_THEMES
 
 # Tool name -> human-friendly status label (without trailing "...")
 TOOL_LABELS: dict[str, str] = {
@@ -861,8 +862,14 @@ class AmplifierChicApp(App):
                     yield Static("", id="status-model")
 
     async def on_mount(self) -> None:
-        self.register_theme(CHIC_THEME)
-        self.theme = "chic"
+        # Register all built-in color themes
+        for _tname, tobj in TEXTUAL_THEMES.items():
+            self.register_theme(tobj)
+
+        # Apply the saved theme (or default to dark)
+        saved = self._prefs.theme_name
+        textual_theme = TEXTUAL_THEMES.get(saved, TEXTUAL_THEMES["dark"])
+        self.theme = textual_theme.name
 
         # Apply word-wrap preference (default: on; off adds no-wrap CSS class)
         if not self._prefs.display.word_wrap:
@@ -3545,30 +3552,39 @@ class AmplifierChicApp(App):
     def _cmd_theme(self, text: str) -> None:
         """Switch color theme or show current/available themes."""
         parts = text.strip().split(None, 1)
-        available = ", ".join(THEMES)
 
         if len(parts) < 2:
-            # No argument: show current theme and list available
+            # No argument: list themes with descriptions and active marker
             current = self._prefs.theme_name
-            lines = [
-                f"Current theme: {current}",
-                f"Available: {available}",
-                "",
-                "Usage: /theme <name>",
-            ]
+            lines = ["Available themes:"]
+            for name, desc in THEME_DESCRIPTIONS.items():
+                marker = " *" if name == current else "  "
+                lines.append(f"{marker} {name}: {desc}")
+            lines.append("")
+            lines.append("Use: /theme <name>")
             self._add_system_message("\n".join(lines))
             return
 
         name = parts[1].strip().lower()
         if not self._prefs.apply_theme(name):
+            available = ", ".join(THEMES)
             self._add_system_message(f"Unknown theme: {name}\nAvailable: {available}")
             return
 
         self._prefs.theme_name = name
         save_colors(self._prefs.colors)
         save_theme_name(name)
+
+        # Switch the Textual base theme (background, surface, panel, etc.)
+        textual_theme = TEXTUAL_THEMES.get(name)
+        if textual_theme:
+            self.theme = textual_theme.name
+
         self._apply_theme_to_all_widgets()
-        self._add_system_message(f"Theme switched to '{name}'.")
+        desc = THEME_DESCRIPTIONS.get(name, "")
+        self._add_system_message(
+            f"Theme: {name} — {desc}" if desc else f"Theme: {name}"
+        )
 
     def _apply_theme_to_all_widgets(self) -> None:
         """Re-style every visible chat widget with the current theme colors."""

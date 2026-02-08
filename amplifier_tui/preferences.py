@@ -76,6 +76,21 @@ THEMES: dict[str, dict[str, str]] = {
         "system_border": "#66d9ef",
         "status_bar": "#a6a6a6",
     },
+    "high-contrast": {
+        "user_text": "#ffffff",
+        "user_border": "#ffff00",
+        "assistant_text": "#ffffff",
+        "assistant_border": "#00ff00",
+        "thinking_text": "#808080",
+        "thinking_border": "#00ffff",
+        "thinking_background": "#0a0a0a",
+        "tool_text": "#808080",
+        "tool_border": "#333333",
+        "tool_background": "#0a0a0a",
+        "system_text": "#00ff00",
+        "system_border": "#00ff00",
+        "status_bar": "#ffffff",
+    },
     "nord": {
         "user_text": "#eceff4",
         "user_border": "#ebcb8b",
@@ -106,6 +121,17 @@ THEMES: dict[str, dict[str, str]] = {
         "system_border": "#8be9fd",
         "status_bar": "#9999bb",
     },
+}
+
+# Human-readable descriptions for each theme (displayed by /theme).
+THEME_DESCRIPTIONS: dict[str, str] = {
+    "dark": "Default dark theme",
+    "light": "Light theme for bright environments",
+    "solarized": "Solarized dark",
+    "monokai": "Monokai Pro inspired",
+    "high-contrast": "Maximum readability",
+    "nord": "Arctic, north-bluish",
+    "dracula": "Dark theme with vibrant colors",
 }
 
 _DEFAULT_YAML = """\
@@ -141,6 +167,9 @@ display:
 
 model:
   preferred: ""                   # preferred model for new sessions (empty = use default)
+
+theme:
+  name: "dark"                    # color theme: dark, light, solarized, monokai, high-contrast, nord, dracula
 
 sidebar:
   session_sort: "date"            # session sort order: date, name, project
