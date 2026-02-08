@@ -34,7 +34,19 @@ colors:
   system_text: "#88bbcc"         # teal - slash command output
   system_border: "#448899"       # teal left bar
   status_bar: "#888888"          # bottom status text
+
+notifications:
+  enabled: true                  # notify when a response completes
+  min_seconds: 3.0               # only notify if processing took longer than this
 """
+
+
+@dataclass
+class NotificationPreferences:
+    """Settings for terminal completion notifications."""
+
+    enabled: bool = True
+    min_seconds: float = 3.0  # Only notify if processing took longer than this
 
 
 @dataclass
@@ -61,6 +73,9 @@ class Preferences:
     """Top-level TUI preferences."""
 
     colors: ColorPreferences = field(default_factory=ColorPreferences)
+    notifications: NotificationPreferences = field(
+        default_factory=NotificationPreferences
+    )
 
 
 def load_preferences(path: Path | None = None) -> Preferences:
@@ -79,6 +94,12 @@ def load_preferences(path: Path | None = None) -> Preferences:
                 for key, value in data["colors"].items():
                     if hasattr(prefs.colors, key):
                         setattr(prefs.colors, key, str(value))
+            if isinstance(data.get("notifications"), dict):
+                ndata = data["notifications"]
+                if "enabled" in ndata:
+                    prefs.notifications.enabled = bool(ndata["enabled"])
+                if "min_seconds" in ndata:
+                    prefs.notifications.min_seconds = float(ndata["min_seconds"])
         except Exception:
             pass  # Fall back to defaults on any parse error
     else:

@@ -243,6 +243,7 @@ class AmplifierChicApp(App):
         self._history = PromptHistory()
         self._stash_stack: list[str] = []
         self._last_assistant_text: str = ""
+        self._processing_start_time: float | None = None
 
         # Streaming display state
         self._stream_widget: Static | None = None
@@ -729,6 +730,7 @@ class AmplifierChicApp(App):
             "/exit": self._cmd_quit,
             "/compact": self._cmd_compact,
             "/copy": self._cmd_copy,
+            "/notify": self._cmd_notify,
         }
 
         handler = handlers.get(cmd)
@@ -750,6 +752,7 @@ class AmplifierChicApp(App):
             "  /prefs        Show preferences\n"
             "  /model        Show model info\n"
             "  /copy         Copy last response to clipboard\n"
+            "  /notify       Toggle completion notifications\n"
             "  /compact      Clear chat, keep session\n"
             "  /quit         Quit\n"
             "\n"
@@ -855,6 +858,15 @@ class AmplifierChicApp(App):
 
     def _cmd_copy(self) -> None:
         self.action_copy_response()
+
+    def _cmd_notify(self) -> None:
+        """Toggle completion notifications on/off."""
+        nprefs = self._prefs.notifications
+        nprefs.enabled = not nprefs.enabled
+        state = "on" if nprefs.enabled else "off"
+        self._add_system_message(
+            f"Notifications {state} (notify after {nprefs.min_seconds:.0f}s)"
+        )
 
     # ── Message Display ─────────────────────────────────────────
 
@@ -992,6 +1004,7 @@ class AmplifierChicApp(App):
         self.is_processing = True
         self._got_stream_content = False
         self._processing_label = label
+        self._processing_start_time = time.monotonic()
         inp = self.query_one("#chat-input", ChatInput)
         inp.disabled = True
         inp.add_class("disabled")
@@ -1021,6 +1034,44 @@ class AmplifierChicApp(App):
         self._remove_processing_indicator()
         self._update_token_display()
         self._update_status("Ready")
+        self._maybe_send_notification()
+
+    def _maybe_send_notification(self) -> None:
+        """Send a terminal notification if processing took long enough."""
+        if self._processing_start_time is None:
+            return
+        elapsed = time.monotonic() - self._processing_start_time
+        self._processing_start_time = None
+        nprefs = self._prefs.notifications
+        if not nprefs.enabled:
+            return
+        if elapsed < nprefs.min_seconds:
+            return
+        self._send_terminal_notification(
+            "Amplifier", f"Response ready ({elapsed:.0f}s)"
+        )
+
+    @staticmethod
+    def _send_terminal_notification(title: str, body: str = "") -> None:
+        """Send a terminal notification via OSC escape sequences.
+
+        Uses multiple methods for broad terminal compatibility:
+        - OSC 9: iTerm2, WezTerm, kitty
+        - OSC 777: rxvt-unicode
+        - BEL: universal fallback (triggers terminal bell / visual bell)
+
+        Writes to sys.__stdout__ to bypass Textual's stdout capture.
+        """
+        out = sys.__stdout__
+        if out is None:
+            return
+        try:
+            out.write(f"\033]9;{title}: {body}\a")
+            out.write(f"\033]777;notify;{title};{body}\a")
+            out.write("\a")
+            out.flush()
+        except Exception:
+            pass  # Don't crash if the terminal doesn't support these
 
     def _remove_processing_indicator(self) -> None:
         try:
