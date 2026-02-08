@@ -160,8 +160,55 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/palette",
     "/commands",
     "/run",
+    "/include",
 )
 
+
+# -- /include constants -------------------------------------------------------
+
+MAX_INCLUDE_LINES = 500
+MAX_INCLUDE_SIZE = 100_000  # 100 KB
+
+EXTENSION_TO_LANGUAGE: dict[str, str] = {
+    ".py": "python",
+    ".js": "javascript",
+    ".ts": "typescript",
+    ".jsx": "jsx",
+    ".tsx": "tsx",
+    ".rs": "rust",
+    ".go": "go",
+    ".rb": "ruby",
+    ".java": "java",
+    ".c": "c",
+    ".cpp": "cpp",
+    ".h": "c",
+    ".hpp": "cpp",
+    ".cs": "csharp",
+    ".swift": "swift",
+    ".kt": "kotlin",
+    ".sh": "bash",
+    ".bash": "bash",
+    ".zsh": "zsh",
+    ".yml": "yaml",
+    ".yaml": "yaml",
+    ".json": "json",
+    ".toml": "toml",
+    ".xml": "xml",
+    ".html": "html",
+    ".css": "css",
+    ".scss": "scss",
+    ".sql": "sql",
+    ".md": "markdown",
+    ".txt": "",
+    ".cfg": "ini",
+    ".ini": "ini",
+    ".env": "bash",
+    ".dockerfile": "dockerfile",
+    ".tf": "hcl",
+    ".lua": "lua",
+    ".r": "r",
+    ".R": "r",
+}
 
 MAX_TABS = 10  # Maximum number of concurrent tabs
 
@@ -505,6 +552,57 @@ class ChatInput(TextArea):
                 self.clear()
                 self.insert(self._tab_matches[0])
                 return
+
+        # Path completion for /include <path>
+        if text.startswith("/include "):
+            partial_path = text[len("/include ") :].rstrip()
+            # Strip --send flag for completion purposes
+            if partial_path.endswith("--send"):
+                return
+            partial_path = partial_path.strip()
+            if not partial_path:
+                partial_path = ""
+            try:
+                p = Path(os.path.expanduser(partial_path or "."))
+                if p.is_dir():
+                    parent = p
+                    prefix = ""
+                else:
+                    parent = p.parent if p.parent.is_dir() else Path(".")
+                    prefix = p.name
+                entries = sorted(parent.iterdir())
+                path_matches = []
+                for entry in entries:
+                    name = str(entry)
+                    if entry.name.startswith("."):
+                        continue  # skip hidden files
+                    if prefix and not entry.name.startswith(prefix):
+                        continue
+                    display = name + ("/" if entry.is_dir() else "")
+                    path_matches.append(f"/include {display}")
+                if not path_matches:
+                    return
+                if len(path_matches) == 1:
+                    self.clear()
+                    self.insert(path_matches[0])
+                    self._tab_matches = []
+                    self._tab_prefix = ""
+                    return
+                common = os.path.commonprefix(path_matches)
+                if len(common) > len(text):
+                    self.clear()
+                    self.insert(common)
+                    self._tab_matches = []
+                    self._tab_prefix = ""
+                    return
+                self._tab_matches = path_matches
+                self._tab_prefix = text
+                self._tab_index = 0
+                self.clear()
+                self.insert(self._tab_matches[0])
+            except OSError:
+                pass
+            return
 
         # Fresh completion: include built-in commands + user aliases
         app_aliases = getattr(self.app, "_aliases", {})
@@ -1138,6 +1236,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/keys", "Keyboard shortcuts overlay", "/keys"),
     ("/quit", "Quit the application", "/quit"),
     ("/run", "Run a shell command inline (/! shorthand)", "/run"),
+    ("/include", "Include file contents in prompt (@file syntax too)", "/include"),
     # ── Keyboard-shortcut actions ───────────────────────────────────────────
     ("New Session  Ctrl+N", "Start a new conversation", "action:new_session"),
     ("New Tab  Ctrl+T", "Open a new conversation tab", "action:new_tab"),
@@ -3387,11 +3486,15 @@ class AmplifierChicApp(App):
 
         self._clear_welcome()
         self._add_user_message(text)
+
+        # Expand @file mentions (e.g. @./src/main.py) before sending
+        expanded = self._expand_at_mentions(text)
+
         has_session = self.session_manager and getattr(
             self.session_manager, "session", None
         )
         self._start_processing("Starting session" if not has_session else "Thinking")
-        self._send_message_worker(text)
+        self._send_message_worker(expanded)
 
     # ── Slash Commands ────────────────────────────────────────
 
@@ -3500,6 +3603,7 @@ class AmplifierChicApp(App):
             "/palette": self.action_command_palette,
             "/commands": self.action_command_palette,
             "/run": lambda: self._cmd_run(args),
+            "/include": lambda: self._cmd_include(args),
         }
 
         handler = handlers.get(cmd)
@@ -3569,6 +3673,8 @@ class AmplifierChicApp(App):
             "  /tabs         List all open tabs\n"
             "  /run          Run shell command inline (/run ls -la, /run git status)\n"
             "  /!            Shorthand for /run (/! git diff)\n"
+            "  /include      Include file contents (/include src/main.py, /include *.py --send)\n"
+            "                Also: @./path/to/file in your prompt auto-includes\n"
             "  /keys         Keyboard shortcut overlay\n"
             "  /palette      Command palette (Ctrl+P) – fuzzy search all commands\n"
             "  /quit         Quit\n"
@@ -3667,6 +3773,157 @@ class AmplifierChicApp(App):
             self._add_system_message(f"Command timed out after {_RUN_TIMEOUT}s: {text}")
         except Exception as e:
             self._add_system_message(f"Error running command: {e}")
+
+    # -- /include helpers ------------------------------------------------------
+
+    @staticmethod
+    def _is_binary(path: Path) -> bool:
+        """Check if a file appears to be binary."""
+        try:
+            chunk = path.read_bytes()[:8192]
+            return b"\x00" in chunk
+        except Exception:
+            return True
+
+    def _read_file_for_include(self, path: Path) -> str | None:
+        """Read a file and format it for inclusion in a prompt."""
+        if not path.is_file():
+            self._add_system_message(f"Not a file: {path}")
+            return None
+
+        if self._is_binary(path):
+            self._add_system_message(f"Skipping binary file: {path.name}")
+            return None
+
+        size = path.stat().st_size
+        if size > MAX_INCLUDE_SIZE:
+            self._add_system_message(
+                f"File too large: {path.name} ({size / 1024:.1f} KB). "
+                f"Max: {MAX_INCLUDE_SIZE / 1024:.0f} KB"
+            )
+            return None
+
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:
+            self._add_system_message(f"Error reading {path.name}: {e}")
+            return None
+
+        lines = text.splitlines()
+        lang = EXTENSION_TO_LANGUAGE.get(path.suffix.lower(), "")
+
+        truncated = ""
+        if len(lines) > MAX_INCLUDE_LINES:
+            text = "\n".join(lines[:MAX_INCLUDE_LINES])
+            truncated = f"\n... ({len(lines) - MAX_INCLUDE_LINES} more lines)"
+
+        header = f"# {path.name} ({len(lines)} lines)"
+        return f"{header}\n```{lang}\n{text}{truncated}\n```"
+
+    def _cmd_include(self, text: str) -> None:
+        """Include file contents in the prompt."""
+        text = text.strip()
+        if not text:
+            self._add_system_message(
+                "Usage: /include <path> [--send]\n"
+                "  /include src/main.py          Insert into input\n"
+                "  /include src/main.py --send    Insert and send\n"
+                "  /include src/*.py              Glob pattern\n"
+                "  /include config.yaml           Auto-detect language\n\n"
+                "Also: Type @./path/to/file in your prompt"
+            )
+            return
+
+        auto_send = False
+        if text.endswith("--send"):
+            auto_send = True
+            text = text[:-6].strip()
+
+        # Expand ~ and resolve path
+        raw = text
+        path = Path(text).expanduser()
+
+        # Check for glob pattern
+        if any(c in raw for c in ["*", "?", "["]):
+            files = sorted(Path(".").glob(raw))
+            if not files:
+                self._add_system_message(f"No files matching: {raw}")
+                return
+
+            parts: list[str] = []
+            for f in files[:20]:  # Max 20 files
+                content = self._read_file_for_include(f)
+                if content:
+                    parts.append(content)
+
+            if len(files) > 20:
+                parts.append(f"\n... and {len(files) - 20} more files")
+
+            combined = "\n\n".join(parts)
+            if auto_send:
+                self._include_and_send(combined)
+            else:
+                self._include_into_input(combined)
+                self._add_system_message(
+                    f"Included {min(len(files), 20)} files. Edit and send."
+                )
+            return
+
+        # Single file
+        if not path.exists():
+            # Try relative to CWD
+            path = Path.cwd() / raw
+            if not path.exists():
+                self._add_system_message(f"File not found: {raw}")
+                return
+
+        content = self._read_file_for_include(path)
+        if not content:
+            return
+
+        if auto_send:
+            self._include_and_send(content)
+        else:
+            self._include_into_input(content)
+            self._add_system_message(f"Included: {path.name}. Edit and send.")
+
+    def _include_into_input(self, content: str) -> None:
+        """Insert content into the chat input, appending if there's existing text."""
+        input_widget = self.query_one("#chat-input", ChatInput)
+        current = input_widget.text.strip()
+        input_widget.clear()
+        if current:
+            input_widget.insert(f"{current}\n\n{content}")
+        else:
+            input_widget.insert(content)
+
+    def _include_and_send(self, content: str) -> None:
+        """Set content into the input and immediately submit it."""
+        input_widget = self.query_one("#chat-input", ChatInput)
+        input_widget.clear()
+        input_widget.insert(content)
+        self._submit_message()
+
+    def _expand_at_mentions(self, text: str) -> str:
+        """Expand @file references in input text.
+
+        Only matches paths that start with ./, ../, ~/, or /
+        to avoid matching @usernames.
+        """
+
+        def _replace_at_file(match: re.Match[str]) -> str:
+            filepath = match.group(1)
+            path = Path(filepath).expanduser()
+            if not path.exists():
+                path = Path.cwd() / filepath
+            if path.exists() and path.is_file():
+                content = self._read_file_for_include(path)
+                if content:
+                    return content
+            return match.group(0)  # Keep original if file not found
+
+        # Match @path/to/file.ext — only paths starting with ./ ../ ~/ or /
+        return re.sub(r"@((?:\.\.?/|~/|/)\S+)", _replace_at_file, text)
 
     def _cmd_alias(self, text: str) -> None:
         """List, create, or remove custom command aliases."""
