@@ -340,6 +340,13 @@ CollapsibleTitle:hover {
     text-style: italic;
 }
 
+/* -- Streaming content -------------------------------- */
+
+.streaming-content {
+    padding: 0 2;
+    text-style: none;
+}
+
 /* -- Welcome screen ----------------------------------- */
 
 .welcome-screen {

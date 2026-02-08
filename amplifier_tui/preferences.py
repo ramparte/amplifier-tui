@@ -175,6 +175,7 @@ display:
   word_wrap: true                # wrap long lines (off = horizontal scroll)
   compact_mode: false            # dense layout with reduced spacing
   vim_mode: false                # vim-style keybindings in input area
+  streaming_enabled: true        # progressive token streaming (tokens appear as they arrive)
 
 model:
   preferred: ""                   # preferred model for new sessions (empty = use default)
@@ -228,6 +229,7 @@ class DisplayPreferences:
     word_wrap: bool = True
     compact_mode: bool = False
     vim_mode: bool = False
+    streaming_enabled: bool = True  # Progressive token streaming display
 
 
 @dataclass
@@ -294,6 +296,8 @@ def load_preferences(path: Path | None = None) -> Preferences:
                     prefs.display.compact_mode = bool(ddata["compact_mode"])
                 if "vim_mode" in ddata:
                     prefs.display.vim_mode = bool(ddata["vim_mode"])
+                if "streaming_enabled" in ddata:
+                    prefs.display.streaming_enabled = bool(ddata["streaming_enabled"])
             if isinstance(data.get("model"), dict):
                 mdata = data["model"]
                 if "preferred" in mdata:
@@ -634,6 +638,49 @@ def save_vim_mode(enabled: bool, path: Path | None = None) -> None:
         else:
             # No display section at all — append it
             text = text.rstrip() + f"\n\ndisplay:\n  vim_mode: {value}\n"
+
+        path.write_text(text)
+    except Exception:
+        pass  # Best-effort persistence
+
+
+def save_streaming_enabled(enabled: bool, path: Path | None = None) -> None:
+    """Persist the streaming_enabled display preference to the preferences file.
+
+    Surgically updates only the streaming_enabled value, preserving the rest of the
+    file (including user comments) as-is.
+    """
+    import re
+
+    path = path or PREFS_PATH
+    try:
+        if path.exists():
+            text = path.read_text()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = _DEFAULT_YAML
+
+        value = "true" if enabled else "false"
+        if re.search(r"^\s+streaming_enabled:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(\s+streaming_enabled:).*$",
+                f"\\1 {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        elif re.search(r"^display:", text, re.MULTILINE):
+            # display section exists but no streaming_enabled key
+            text = re.sub(
+                r"^(display:.*)$",
+                f"\\1\n  streaming_enabled: {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            # No display section at all — append it
+            text = text.rstrip() + f"\n\ndisplay:\n  streaming_enabled: {value}\n"
 
         path.write_text(text)
     except Exception:

@@ -46,6 +46,7 @@ from .preferences import (
     save_preferred_model,
     save_session_sort,
     save_show_timestamps,
+    save_streaming_enabled,
     save_theme_name,
     save_vim_mode,
     save_word_wrap,
@@ -131,6 +132,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/vim",
     "/watch",
     "/split",
+    "/stream",
 )
 
 # Known context window sizes (tokens) for popular models.
@@ -781,6 +783,7 @@ SHORTCUTS_TEXT = """\
  CHAT ───────────────────────────────────
   Enter            Send message
   Shift+Enter      New line (also Ctrl+J)
+  Escape           Cancel AI streaming
   Ctrl+C           Cancel AI response
   Ctrl+L           Clear chat
   Ctrl+A           Toggle auto-scroll
@@ -842,6 +845,7 @@ SHORTCUTS_TEXT = """\
   /wrap            Toggle word wrap
   /timestamps      Toggle timestamps
   /focus           Toggle focus mode
+  /stream          Toggle streaming display
   /scroll          Toggle auto-scroll
 
  EXPORT & DATA ─────────────────────────
@@ -1097,6 +1101,8 @@ class AmplifierChicApp(App):
         self._stream_widget: Static | None = None
         self._stream_container: Collapsible | None = None
         self._stream_block_type: str | None = None
+        self._streaming_cancelled: bool = False
+        self._stream_accumulated_text: str = ""
 
         # Search index: parallel list of (role, text, widget) for /search
         self._search_messages: list[tuple[str, str, Static | None]] = []
@@ -2047,8 +2053,15 @@ class AmplifierChicApp(App):
         counter.display = True
 
     def on_key(self, event) -> None:
-        """Handle Escape: exit focus mode, or clear session filter."""
+        """Handle Escape: cancel streaming, exit focus mode, or clear session filter."""
         if event.key == "escape":
+            # Cancel in-progress streaming takes highest priority
+            if self.is_processing:
+                self.action_cancel_streaming()
+                event.prevent_default()
+                event.stop()
+                return
+
             # Exit focus mode first if active (only when input is empty
             # so we don't conflict with vim mode or other Escape uses)
             if self._focus_mode:
@@ -2795,6 +2808,7 @@ class AmplifierChicApp(App):
             "/vim": lambda: self._cmd_vim(args),
             "/watch": lambda: self._cmd_watch(args),
             "/split": lambda: self._cmd_split(args),
+            "/stream": lambda: self._cmd_stream(args),
         }
 
         handler = handlers.get(cmd)
@@ -2856,6 +2870,7 @@ class AmplifierChicApp(App):
             "  /undo         Remove last exchange (/undo <N> for last N exchanges)\n"
             "  /redo         Re-send last user message (/redo <N> for Nth-to-last)\n"
             "  /split        Toggle split view (/split pins|chat|file <path>|on|off)\n"
+            "  /stream       Toggle streaming display (/stream on, /stream off)\n"
             "  /vim          Toggle vim keybindings (/vim on, /vim off)\n"
             "  /keys         Keyboard shortcut overlay\n"
             "  /quit         Quit\n"
@@ -2878,6 +2893,7 @@ class AmplifierChicApp(App):
             "  Ctrl+B        Toggle sidebar\n"
             "  Ctrl+N        New session\n"
             "  Ctrl+L        Clear chat\n"
+            "  Escape        Cancel streaming generation\n"
             "  Ctrl+Home     Jump to top of chat\n"
             "  Ctrl+End      Jump to bottom of chat\n"
             "  Ctrl+Up/Down  Scroll chat up/down\n"
@@ -4411,6 +4427,39 @@ class AmplifierChicApp(App):
 
         state = "on" if wrap else "off"
         self._add_system_message(f"Word wrap: {state}")
+
+    def _cmd_stream(self, args: str) -> None:
+        """Toggle streaming token display on/off."""
+        arg = args.strip().lower()
+
+        if arg in ("on", "true", "1"):
+            enabled = True
+        elif arg in ("off", "false", "0"):
+            enabled = False
+        elif not arg:
+            enabled = not self._prefs.display.streaming_enabled
+        else:
+            self._add_system_message(
+                "Usage: /stream [on|off]\n"
+                "  /stream      Toggle streaming display\n"
+                "  /stream on   Enable progressive token streaming\n"
+                "  /stream off  Disable streaming (show full response at once)"
+            )
+            return
+
+        self._prefs.display.streaming_enabled = enabled
+        save_streaming_enabled(enabled)
+
+        if enabled:
+            self._add_system_message(
+                "Streaming: ON\n"
+                "Tokens appear progressively as they arrive.\n"
+                "Press Escape to cancel mid-stream."
+            )
+        else:
+            self._add_system_message(
+                "Streaming: OFF\nFull response will appear after generation completes."
+            )
 
     def _cmd_fold(self, text: str) -> None:
         """Fold/unfold long messages or set fold threshold."""
@@ -6265,9 +6314,34 @@ class AmplifierChicApp(App):
         self._scroll_if_auto(indicator)
         self._update_status(f"{label}...")
 
+    def action_cancel_streaming(self) -> None:
+        """Cancel in-progress streaming (Escape key).
+
+        If we're not processing, this is a no-op so it doesn't interfere
+        with other Escape uses (modals, search, etc.).
+        """
+        if not self.is_processing:
+            return
+        self._streaming_cancelled = True
+
+        # Finalize whatever has been streamed so far
+        if self._stream_widget and self._stream_accumulated_text:
+            block_type = self._stream_block_type or "text"
+            self._finalize_streaming_block(block_type, self._stream_accumulated_text)
+
+        # Cancel running workers (send_message_worker)
+        self.workers.cancel_group(self, "default")
+
+        self._add_system_message("Generation cancelled.")
+        self._finish_processing()
+
     def _finish_processing(self) -> None:
+        if not self.is_processing:
+            return  # Already finished (e.g. cancel + worker finally)
         self.is_processing = False
         self._processing_label = None
+        self._streaming_cancelled = False
+        self._stream_accumulated_text = ""
         # Clean up any leftover streaming state
         self._stream_widget = None
         self._stream_container = None
@@ -6665,7 +6739,11 @@ class AmplifierChicApp(App):
             self.call_from_thread(self._begin_streaming_block, block_type)
 
         def on_block_delta(block_type: str, delta: str) -> None:
+            if self._streaming_cancelled:
+                return
             accumulated["text"] += delta
+            # Keep app-level accumulator in sync for cancel-recovery
+            self._stream_accumulated_text = accumulated["text"]
             now = time.monotonic()
             if now - last_update["t"] >= 0.05:  # Throttle: 50ms minimum
                 last_update["t"] = now
@@ -6748,6 +6826,7 @@ class AmplifierChicApp(App):
             self._stream_container = None
 
         self._stream_block_type = block_type
+        self._stream_accumulated_text = ""
         self._update_status("Streaming\u2026")
 
     def _update_streaming_content(self, block_type: str, text: str) -> None:
@@ -6755,10 +6834,26 @@ class AmplifierChicApp(App):
 
         Called on content_block:delta (throttled to ~50ms). Shows a
         cursor character at the end to indicate more content is coming.
+
+        For text blocks, renders progressively through Rich Markdown so
+        the user sees formatted output (headings, code, lists) as it
+        streams in.  Falls back to plain text on any rendering error.
         """
         if not self._stream_widget:
             return
-        self._stream_widget.update(text + " \u258d")
+
+        display_text = text + " \u258d"
+
+        if block_type not in ("thinking", "reasoning"):
+            try:
+                from rich.markdown import Markdown as RichMarkdown
+
+                self._stream_widget.update(RichMarkdown(display_text))
+            except Exception:
+                self._stream_widget.update(display_text)
+        else:
+            self._stream_widget.update(display_text)
+
         self._check_smart_scroll_pause()
         self._scroll_if_auto(self._stream_widget)
 
@@ -6832,16 +6927,22 @@ class AmplifierChicApp(App):
                 self._session_title = self._extract_title(message)
                 self.call_from_thread(self._apply_session_title)
 
-            self._setup_streaming_callbacks()
+            if self._prefs.display.streaming_enabled:
+                self._setup_streaming_callbacks()
             self.call_from_thread(self._update_status, "Thinking...")
 
             response = await self.session_manager.send_message(message)
+
+            if self._streaming_cancelled:
+                return  # Already finalized in action_cancel_streaming
 
             # Fallback: if no hooks fired, show the full response
             if not self._got_stream_content and response:
                 self.call_from_thread(self._add_assistant_message, response)
 
         except Exception as e:
+            if self._streaming_cancelled:
+                return  # Suppress errors from cancelled workers
             self.call_from_thread(self._show_error, str(e))
         finally:
             self.call_from_thread(self._finish_processing)
@@ -6887,7 +6988,8 @@ class AmplifierChicApp(App):
                 self.initial_prompt = None
                 self.call_from_thread(self._add_user_message, prompt)
                 self.call_from_thread(self._start_processing)
-                self._setup_streaming_callbacks()
+                if self._prefs.display.streaming_enabled:
+                    self._setup_streaming_callbacks()
                 response = await self.session_manager.send_message(prompt)
                 if not self._got_stream_content and response:
                     self.call_from_thread(self._add_assistant_message, response)
