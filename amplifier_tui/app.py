@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -361,12 +362,13 @@ class ChatInput(TextArea):
             self.insert(choice)
             return
 
-        # Snippet name completion for /snippet use|send|remove|edit <name>
+        # Snippet name completion for /snippet use|send|remove|edit|tag <name>
         for prefix_cmd in (
             "/snippet use ",
             "/snippet send ",
             "/snippet remove ",
             "/snippet edit ",
+            "/snippet tag ",
         ):
             if text.startswith(prefix_cmd):
                 partial = text[len(prefix_cmd) :]
@@ -975,12 +977,27 @@ class AmplifierChicApp(App):
     REFS_FILE = Path.home() / ".amplifier" / "tui-refs.json"
     CRASH_DRAFT_FILE = Path.home() / ".amplifier" / "tui-draft.txt"
 
-    DEFAULT_SNIPPETS: dict[str, str] = {
-        "review": "Please review this code for bugs, security issues, and best practices.",
-        "explain": "Explain this code step by step, focusing on the key logic and design decisions.",
-        "refactor": "Refactor this code to be more readable, maintainable, and following best practices.",
-        "test": "Write comprehensive tests for this code, covering edge cases and error conditions.",
-        "doc": "Add clear documentation comments to this code.",
+    DEFAULT_SNIPPETS: dict[str, dict[str, str]] = {
+        "review": {
+            "content": "Please review this code for bugs, security issues, and best practices.",
+            "category": "prompts",
+        },
+        "explain": {
+            "content": "Explain this code step by step, focusing on the key logic and design decisions.",
+            "category": "prompts",
+        },
+        "refactor": {
+            "content": "Refactor this code to be more readable, maintainable, and following best practices.",
+            "category": "prompts",
+        },
+        "test": {
+            "content": "Write comprehensive tests for this code, covering edge cases and error conditions.",
+            "category": "prompts",
+        },
+        "doc": {
+            "content": "Add clear documentation comments to this code.",
+            "category": "prompts",
+        },
     }
 
     DEFAULT_TEMPLATES: dict[str, str] = {
@@ -1086,8 +1103,8 @@ class AmplifierChicApp(App):
         # Custom command aliases
         self._aliases: dict[str, str] = {}
 
-        # Reusable prompt snippets
-        self._snippets: dict[str, str] = {}
+        # Reusable prompt snippets (values: {content, category, created})
+        self._snippets: dict[str, dict[str, str]] = {}
 
         # Prompt templates with {{variable}} placeholders
         self._templates: dict[str, str] = {}
@@ -1463,11 +1480,25 @@ class AmplifierChicApp(App):
 
     # ── Snippets ────────────────────────────────────────────
 
-    def _load_snippets(self) -> dict[str, str]:
-        """Load reusable prompt snippets from the JSON file."""
+    def _load_snippets(self) -> dict[str, dict[str, str]]:
+        """Load reusable prompt snippets from the JSON file.
+
+        Handles migration from old ``{name: text}`` format to the new
+        ``{name: {content, category, created}}`` structure.
+        """
         try:
             if self.SNIPPETS_FILE.exists():
-                return json.loads(self.SNIPPETS_FILE.read_text())
+                raw = json.loads(self.SNIPPETS_FILE.read_text())
+                migrated = self._migrate_snippets(raw)
+                if migrated is not raw:
+                    # Re-persist in the new format
+                    try:
+                        self.SNIPPETS_FILE.write_text(
+                            json.dumps(migrated, indent=2, sort_keys=True)
+                        )
+                    except Exception:
+                        pass
+                return migrated
         except Exception:
             pass
         # First run: seed with default snippets
@@ -1480,6 +1511,23 @@ class AmplifierChicApp(App):
         except Exception:
             pass
         return defaults
+
+    @staticmethod
+    def _migrate_snippets(
+        data: dict[str, str | dict[str, str]],
+    ) -> dict[str, dict[str, str]]:
+        """Migrate old ``{name: text}`` format to ``{name: {content, category, created}}``."""
+        needs_migration = any(isinstance(v, str) for v in data.values())
+        if not needs_migration:
+            return data  # type: ignore[return-value]
+        migrated: dict[str, dict[str, str]] = {}
+        today = datetime.now().strftime("%Y-%m-%d")
+        for name, value in data.items():
+            if isinstance(value, str):
+                migrated[name] = {"content": value, "category": "", "created": today}
+            else:
+                migrated[name] = value  # type: ignore[assignment]
+        return migrated
 
     def _save_snippets(self) -> None:
         """Persist reusable prompt snippets."""
@@ -2865,7 +2913,7 @@ class AmplifierChicApp(App):
             "  /sort         Sort sessions: date, name, project (/sort <mode>)\n"
             "  /edit         Open $EDITOR for longer prompts (same as Ctrl+G)\n"
             "  /draft        Show/save/clear/load input draft (/draft save, /draft clear, /draft load)\n"
-            "  /snippet      Prompt snippets (/snippet save|use|remove|clear|<name>)\n"
+            "  /snippet      Prompt snippets (/snippet save|use|remove|search|cat|tag|export|import|<name>)\n"
             "  /template     Prompt templates with {{variables}} (/template save|use|remove|clear|<name>)\n"
             "  /alias        List/create/remove custom shortcuts\n"
             "  /compact      Toggle compact view mode (/compact on, /compact off)\n"
@@ -2983,32 +3031,69 @@ class AmplifierChicApp(App):
         self._save_aliases()
         self._add_system_message(f"Alias created: /{name} \u2192 {expansion}")
 
+    # -- Snippet helpers ------------------------------------------------
+
+    @staticmethod
+    def _snippet_content(data: dict[str, str] | str) -> str:
+        """Return the text content regardless of old/new format."""
+        if isinstance(data, dict):
+            return data.get("content", "")
+        return data  # legacy plain-string value
+
+    @staticmethod
+    def _snippet_category(data: dict[str, str] | str) -> str:
+        """Return the category (empty string for uncategorised)."""
+        if isinstance(data, dict):
+            return data.get("category", "")
+        return ""
+
+    # -- /snippet command -----------------------------------------------
+
     def _cmd_snippet(self, text: str) -> None:
-        """List, save, use, send, remove, clear, or edit reusable prompt snippets."""
+        """List, save, search, tag, export, import, use, remove, clear, or edit snippets."""
         text = text.strip()
 
+        # ── No arguments → list all snippets grouped by category ──
         if not text:
-            # List all snippets
             if not self._snippets:
                 self._add_system_message(
                     "No snippets saved.\n"
-                    "Save: /snippet save <name> <text>\n"
+                    "Save: /snippet save <name> [#category] <text>\n"
                     "Use:  /snippet <name>"
                 )
                 return
-
-            lines = ["Saved snippets:"]
-            for name, content in sorted(self._snippets.items()):
-                preview = content[:60].replace("\n", " ")
-                if len(content) > 60:
-                    preview += "..."
-                lines.append(f"  {name}: {preview}")
+            categorized: dict[str, list[str]] = defaultdict(list)
+            uncategorized: list[str] = []
+            for name, data in sorted(self._snippets.items()):
+                cat = self._snippet_category(data)
+                if cat:
+                    categorized[cat].append(name)
+                else:
+                    uncategorized.append(name)
+            lines: list[str] = ["Saved snippets:"]
+            for cat in sorted(categorized):
+                lines.append(f"\n  [{cat}]")
+                for name in categorized[cat]:
+                    content = self._snippet_content(self._snippets[name])
+                    preview = content[:60].replace("\n", " ")
+                    if len(content) > 60:
+                        preview += "..."
+                    lines.append(f"    {name}: {preview}")
+            if uncategorized:
+                if categorized:
+                    lines.append("\n  [uncategorised]")
+                for name in uncategorized:
+                    content = self._snippet_content(self._snippets[name])
+                    preview = content[:60].replace("\n", " ")
+                    if len(content) > 60:
+                        preview += "..."
+                    lines.append(f"    {name}: {preview}")
             lines.append("")
             lines.append("Insert: /snippet <name>  |  Send: /snippet use <name>")
             self._add_system_message("\n".join(lines))
             return
 
-        # Parse subcommand
+        # ── Parse subcommand ──
         parts = text.split(maxsplit=2)
         subcmd = parts[0].lower()
 
@@ -3018,56 +3103,10 @@ class AmplifierChicApp(App):
             self._add_system_message("All snippets cleared")
 
         elif subcmd == "save":
-            if len(parts) < 3:
-                self._add_system_message("Usage: /snippet save <name> <text>")
-                return
-            sname = parts[1]
-            # Validate name: alphanumeric + hyphens/underscores
-            import re
-
-            if not re.match(r"^[a-zA-Z0-9_-]+$", sname):
-                self._add_system_message(
-                    "Snippet names must be alphanumeric "
-                    "(hyphens and underscores allowed)"
-                )
-                return
-            content = parts[2]
-            self._snippets[sname] = content
-            self._save_snippets()
-            self._add_system_message(f"Snippet '{sname}' saved ({len(content)} chars)")
+            self._cmd_snippet_save(parts)
 
         elif subcmd in ("use", "send"):
-            # Send the snippet as a message immediately
-            if len(parts) < 2:
-                self._add_system_message("Usage: /snippet use <name>")
-                return
-            sname = parts[1]
-            if sname not in self._snippets:
-                self._add_system_message(f"No snippet named '{sname}'")
-                return
-            # Guard: don't send while already processing
-            if self.is_processing:
-                self._add_system_message(
-                    "Please wait for the current response to finish."
-                )
-                return
-            if not self._amplifier_available:
-                self._add_system_message("Amplifier is not available.")
-                return
-            if not self._amplifier_ready:
-                self._add_system_message("Still loading Amplifier...")
-                return
-            message = self._snippets[sname]
-            self._add_system_message(f"Sending snippet '{sname}'")
-            self._clear_welcome()
-            self._add_user_message(message)
-            has_session = self.session_manager and getattr(
-                self.session_manager, "session", None
-            )
-            self._start_processing(
-                "Starting session" if not has_session else "Thinking"
-            )
-            self._send_message_worker(message)
+            self._cmd_snippet_use(parts)
 
         elif subcmd == "remove":
             if len(parts) < 2:
@@ -3086,8 +3125,39 @@ class AmplifierChicApp(App):
                 self._add_system_message("Usage: /snippet edit <name>")
                 return
             sname = parts[1]
-            content = self._snippets.get(sname, "")
+            content = (
+                self._snippet_content(self._snippets[sname])
+                if sname in self._snippets
+                else ""
+            )
             self._edit_snippet_in_editor(sname, content)
+
+        elif subcmd == "search":
+            query = text[len("search") :].strip()
+            if not query:
+                self._add_system_message("Usage: /snippet search <query>")
+                return
+            self._cmd_snippet_search(query)
+
+        elif subcmd == "cat":
+            category = text[len("cat") :].strip()
+            if not category:
+                self._add_system_message("Usage: /snippet cat <category>")
+                return
+            self._cmd_snippet_cat(category)
+
+        elif subcmd == "tag":
+            self._cmd_snippet_tag(parts)
+
+        elif subcmd == "export":
+            self._cmd_snippet_export()
+
+        elif subcmd == "import":
+            path = text[len("import") :].strip()
+            if not path:
+                self._add_system_message("Usage: /snippet import <path>")
+                return
+            self._cmd_snippet_import(path)
 
         else:
             # Default: insert snippet into input (doesn't send)
@@ -3095,7 +3165,7 @@ class AmplifierChicApp(App):
                 try:
                     inp = self.query_one("#chat-input", ChatInput)
                     inp.clear()
-                    inp.insert(self._snippets[subcmd])
+                    inp.insert(self._snippet_content(self._snippets[subcmd]))
                     inp.focus()
                     self._add_system_message(f"Snippet '{subcmd}' inserted")
                 except Exception:
@@ -3105,6 +3175,178 @@ class AmplifierChicApp(App):
                     f"No snippet '{subcmd}'.\n"
                     "Use /snippet to list, /snippet save <name> <text> to create."
                 )
+
+    # -- /snippet sub-command implementations ---------------------------
+
+    def _cmd_snippet_save(self, parts: list[str]) -> None:
+        """Save a snippet with an optional ``#category`` tag."""
+        if len(parts) < 3:
+            self._add_system_message("Usage: /snippet save <name> [#category] <text>")
+            return
+        sname = parts[1]
+        if not re.match(r"^[a-zA-Z0-9_-]+$", sname):
+            self._add_system_message(
+                "Snippet names must be alphanumeric (hyphens and underscores allowed)"
+            )
+            return
+        remaining = parts[2]
+        # Parse optional #category prefix
+        category = ""
+        cat_match = re.match(r"#(\w+)\s+", remaining)
+        if cat_match:
+            category = cat_match.group(1)
+            remaining = remaining[cat_match.end() :]
+        today = datetime.now().strftime("%Y-%m-%d")
+        self._snippets[sname] = {
+            "content": remaining,
+            "category": category,
+            "created": today,
+        }
+        self._save_snippets()
+        cat_note = f" [{category}]" if category else ""
+        self._add_system_message(
+            f"Snippet '{sname}'{cat_note} saved ({len(remaining)} chars)"
+        )
+
+    def _cmd_snippet_use(self, parts: list[str]) -> None:
+        """Send a snippet as a chat message immediately."""
+        if len(parts) < 2:
+            self._add_system_message("Usage: /snippet use <name>")
+            return
+        sname = parts[1]
+        if sname not in self._snippets:
+            self._add_system_message(f"No snippet named '{sname}'")
+            return
+        if self.is_processing:
+            self._add_system_message("Please wait for the current response to finish.")
+            return
+        if not self._amplifier_available:
+            self._add_system_message("Amplifier is not available.")
+            return
+        if not self._amplifier_ready:
+            self._add_system_message("Still loading Amplifier...")
+            return
+        message = self._snippet_content(self._snippets[sname])
+        self._add_system_message(f"Sending snippet '{sname}'")
+        self._clear_welcome()
+        self._add_user_message(message)
+        has_session = self.session_manager and getattr(
+            self.session_manager, "session", None
+        )
+        self._start_processing("Starting session" if not has_session else "Thinking")
+        self._send_message_worker(message)
+
+    def _cmd_snippet_search(self, query: str) -> None:
+        """Fuzzy search across snippet names, content, and categories."""
+        query_lower = query.lower()
+        matches: list[tuple[str, str, str]] = []
+        for name, data in self._snippets.items():
+            content = self._snippet_content(data)
+            category = self._snippet_category(data)
+            if (
+                query_lower in name.lower()
+                or query_lower in content.lower()
+                or query_lower in category.lower()
+            ):
+                matches.append((name, content, category))
+
+        if not matches:
+            self._add_system_message(f"No snippets matching: {query}")
+            return
+
+        lines = [f"Snippets matching '{query}':"]
+        for name, content, cat in sorted(matches):
+            cat_str = f" [{cat}]" if cat else ""
+            preview = content[:60].replace("\n", " ")
+            if len(content) > 60:
+                preview += "..."
+            lines.append(f"  {name}{cat_str}: {preview}")
+        lines.append(f"\n{len(matches)} match(es)")
+        self._add_system_message("\n".join(lines))
+
+    def _cmd_snippet_cat(self, category: str) -> None:
+        """List all snippets belonging to *category*."""
+        matches: list[tuple[str, str]] = []
+        for name, data in self._snippets.items():
+            cat = self._snippet_category(data)
+            if cat.lower() == category.lower():
+                matches.append((name, self._snippet_content(data)))
+
+        if not matches:
+            self._add_system_message(f"No snippets in category: {category}")
+            return
+
+        lines = [f"Category '{category}':"]
+        for name, content in sorted(matches):
+            preview = content[:60].replace("\n", " ")
+            if len(content) > 60:
+                preview += "..."
+            lines.append(f"  {name}: {preview}")
+        lines.append(f"\n{len(matches)} snippet(s)")
+        self._add_system_message("\n".join(lines))
+
+    def _cmd_snippet_tag(self, parts: list[str]) -> None:
+        """Add or change the category tag on an existing snippet."""
+        if len(parts) < 3:
+            self._add_system_message("Usage: /snippet tag <name> <category>")
+            return
+        sname = parts[1]
+        category = parts[2]
+        if sname not in self._snippets:
+            self._add_system_message(f"No snippet named '{sname}'")
+            return
+        data = self._snippets[sname]
+        if isinstance(data, str):
+            # Shouldn't happen after migration, but be safe
+            data = {
+                "content": data,
+                "category": "",
+                "created": datetime.now().strftime("%Y-%m-%d"),
+            }
+        data["category"] = category
+        self._snippets[sname] = data
+        self._save_snippets()
+        self._add_system_message(f"Snippet '{sname}' tagged [{category}]")
+
+    def _cmd_snippet_export(self) -> None:
+        """Export all snippets as JSON to ``~/.amplifier/tui-snippets-export.json``."""
+        if not self._snippets:
+            self._add_system_message("No snippets to export")
+            return
+        export_path = Path.home() / ".amplifier" / "tui-snippets-export.json"
+        try:
+            export_path.parent.mkdir(parents=True, exist_ok=True)
+            export_path.write_text(json.dumps(self._snippets, indent=2, sort_keys=True))
+            self._add_system_message(
+                f"Exported {len(self._snippets)} snippets to:\n{export_path}"
+            )
+        except Exception as e:
+            self._add_system_message(f"Export error: {e}")
+
+    def _cmd_snippet_import(self, path: str) -> None:
+        """Import snippets from a JSON file (additive — existing names are kept)."""
+        abs_path = Path(path).expanduser().resolve()
+        if not abs_path.exists():
+            self._add_system_message(f"File not found: {path}")
+            return
+        try:
+            raw = json.loads(abs_path.read_text())
+            data = self._migrate_snippets(raw) if isinstance(raw, dict) else {}
+            count = 0
+            for name, value in data.items():
+                if name not in self._snippets:
+                    self._snippets[name] = value
+                    count += 1
+            self._save_snippets()
+            skipped = len(data) - count
+            self._add_system_message(
+                f"Imported {count} new snippet(s)"
+                + (f" ({skipped} already existed)" if skipped else "")
+            )
+        except Exception as e:
+            self._add_system_message(f"Import error: {e}")
+
+    # -- Snippet editor -------------------------------------------------
 
     def _edit_snippet_in_editor(self, name: str, content: str) -> None:
         """Edit a snippet in $EDITOR, reusing the Ctrl+G infrastructure."""
@@ -3141,7 +3383,17 @@ class AmplifierChicApp(App):
                 self._add_system_message(f"Snippet '{name}' unchanged (empty content)")
                 return
 
-            self._snippets[name] = new_content
+            # Preserve existing metadata when editing
+            existing = self._snippets.get(name, {})
+            if isinstance(existing, dict):
+                existing["content"] = new_content
+                self._snippets[name] = existing
+            else:
+                self._snippets[name] = {
+                    "content": new_content,
+                    "category": "",
+                    "created": datetime.now().strftime("%Y-%m-%d"),
+                }
             self._save_snippets()
             self._add_system_message(
                 f"Snippet '{name}' updated ({len(new_content)} chars)"
