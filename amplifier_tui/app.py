@@ -104,6 +104,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/wrap",
     "/alias",
     "/info",
+    "/fold",
 )
 
 # Known context window sizes (tokens) for popular models.
@@ -439,6 +440,30 @@ class SystemMessage(Static):
         super().__init__(content, classes="chat-message system-message")
 
 
+class FoldToggle(Static):
+    """Clickable indicator to fold/unfold a long message."""
+
+    def __init__(
+        self, target: Static, line_count: int, *, folded: bool = False
+    ) -> None:
+        self._target = target
+        self._line_count = line_count
+        super().__init__(self._make_label(folded=folded), classes="fold-toggle")
+
+    def _make_label(self, *, folded: bool) -> str:
+        if folded:
+            return f"▶ {self._line_count} lines (click to expand)"
+        return f"▼ {self._line_count} lines (click to fold)"
+
+    def on_click(self) -> None:
+        folded = self._target.has_class("folded")
+        if folded:
+            self._target.remove_class("folded")
+        else:
+            self._target.add_class("folded")
+        self.update(self._make_label(folded=not folded))
+
+
 # ── Shortcut Overlay ────────────────────────────────────────
 
 SHORTCUTS_TEXT = """\
@@ -502,6 +527,7 @@ SHORTCUTS_TEXT = """\
   /alias      List/create/remove shortcuts
   /draft      Show/save/clear input draft
   /compact    Clear chat, keep session
+  /fold       Fold/unfold long messages
   /quit       Quit
 
        Press Escape to close\
@@ -679,6 +705,9 @@ class AmplifierChicApp(App):
 
         # Pinned sessions (appear at top of sidebar)
         self._pinned_sessions: set[str] = set()
+
+        # Message folding state
+        self._fold_threshold: int = 30
 
     # ── Layout ──────────────────────────────────────────────────
 
@@ -1702,6 +1731,7 @@ class AmplifierChicApp(App):
             "/sort": lambda: self._cmd_sort(text),
             "/edit": self.action_open_editor,
             "/wrap": lambda: self._cmd_wrap(text),
+            "/fold": lambda: self._cmd_fold(text),
             "/alias": lambda: self._cmd_alias(args),
         }
 
@@ -1738,6 +1768,7 @@ class AmplifierChicApp(App):
             "  /scroll       Toggle auto-scroll on/off\n"
             "  /timestamps   Toggle message timestamps on/off\n"
             "  /wrap         Toggle word wrap on/off (/wrap on, /wrap off)\n"
+            "  /fold         Fold/unfold long messages (/fold all, /fold none, /fold <n>)\n"
             "  /theme        Switch color theme (dark, light, solarized, monokai, nord, dracula)\n"
             "  /colors       View/set colors (/colors reset, /colors <key> <#hex>)\n"
             "  /focus        Toggle focus mode (hide chrome)\n"
@@ -2174,6 +2205,66 @@ class AmplifierChicApp(App):
 
         state = "on" if wrap else "off"
         self._add_system_message(f"Word wrap: {state}")
+
+    def _cmd_fold(self, text: str) -> None:
+        """Fold/unfold long messages or set fold threshold."""
+        parts = text.strip().split(None, 1)
+        arg = parts[1].strip().lower() if len(parts) > 1 else ""
+
+        if arg == "all":
+            self._fold_all_messages()
+            return
+        if arg in ("none", "off"):
+            self._unfold_all_messages()
+            return
+        if arg.isdigit():
+            threshold = max(5, int(arg))
+            self._fold_threshold = threshold
+            self._add_system_message(f"Fold threshold set to {threshold} lines")
+            return
+        if not arg:
+            self._toggle_fold_all()
+            return
+
+        self._add_system_message(
+            "Usage: /fold [all|none|<n>]\n"
+            "  /fold        Toggle fold on long messages\n"
+            "  /fold all    Fold all long messages\n"
+            "  /fold none   Unfold all messages\n"
+            "  /fold <n>    Set fold threshold (min 5)"
+        )
+
+    def _fold_all_messages(self) -> None:
+        """Fold all messages that have fold toggles."""
+        count = 0
+        for toggle in self.query(FoldToggle):
+            if not toggle._target.has_class("folded"):
+                toggle._target.add_class("folded")
+                toggle.update(toggle._make_label(folded=True))
+                count += 1
+        self._add_system_message(f"Folded {count} message{'s' if count != 1 else ''}")
+
+    def _unfold_all_messages(self) -> None:
+        """Unfold all folded messages."""
+        count = 0
+        for toggle in self.query(FoldToggle):
+            if toggle._target.has_class("folded"):
+                toggle._target.remove_class("folded")
+                toggle.update(toggle._make_label(folded=False))
+                count += 1
+        self._add_system_message(f"Unfolded {count} message{'s' if count != 1 else ''}")
+
+    def _toggle_fold_all(self) -> None:
+        """Toggle: fold unfolded messages, or unfold all if all are folded."""
+        toggles = list(self.query(FoldToggle))
+        if not toggles:
+            self._add_system_message("No foldable messages")
+            return
+        any_unfolded = any(not t._target.has_class("folded") for t in toggles)
+        if any_unfolded:
+            self._fold_all_messages()
+        else:
+            self._unfold_all_messages()
 
     def _cmd_keys(self) -> None:
         """Show the keyboard shortcut overlay."""
@@ -3056,6 +3147,16 @@ class AmplifierChicApp(App):
         widget.styles.color = c.system_text
         widget.styles.border_left = ("thick", c.system_border)
 
+    def _maybe_add_fold_toggle(self, widget: Static, content: str) -> None:
+        """Add a fold toggle after a long message for expand/collapse."""
+        line_count = content.count("\n") + 1
+        if line_count <= self._fold_threshold:
+            return
+        chat_view = self.query_one("#chat-view", ScrollableContainer)
+        widget.add_class("folded")
+        toggle = FoldToggle(widget, line_count, folded=True)
+        chat_view.mount(toggle, after=widget)
+
     def _add_user_message(self, text: str, ts: datetime | None = None) -> None:
         chat_view = self.query_one("#chat-view", ScrollableContainer)
         ts_widget = self._make_timestamp(ts)
@@ -3066,6 +3167,7 @@ class AmplifierChicApp(App):
         self._style_user(msg)
         self._scroll_if_auto(msg)
         self._search_messages.append(("user", text, msg))
+        self._maybe_add_fold_toggle(msg, text)
         words = self._count_words(text)
         self._total_words += words
         self._user_message_count += 1
@@ -3086,6 +3188,7 @@ class AmplifierChicApp(App):
         self._last_assistant_text = text
         self._last_assistant_widget = msg
         self._search_messages.append(("assistant", text, msg))
+        self._maybe_add_fold_toggle(msg, text)
         words = self._count_words(text)
         self._total_words += words
         self._assistant_message_count += 1
@@ -3658,6 +3761,7 @@ class AmplifierChicApp(App):
                 self._scroll_if_auto(msg)
                 self._last_assistant_widget = msg
                 self._search_messages.append(("assistant", text, msg))
+                self._maybe_add_fold_toggle(msg, text)
                 words = self._count_words(text)
                 self._total_words += words
                 self._assistant_message_count += 1
@@ -3780,6 +3884,7 @@ class AmplifierChicApp(App):
                     chat_view.mount(widget)
                     self._style_user(widget)
                     self._search_messages.append(("user", block.content, widget))
+                    self._maybe_add_fold_toggle(widget, block.content)
                     words = self._count_words(block.content)
                     self._total_words += words
                     self._user_message_count += 1
@@ -3799,6 +3904,7 @@ class AmplifierChicApp(App):
                     chat_view.mount(widget)
                     self._style_assistant(widget)
                     self._search_messages.append(("assistant", block.content, widget))
+                    self._maybe_add_fold_toggle(widget, block.content)
                     words = self._count_words(block.content)
                     self._total_words += words
                     self._assistant_message_count += 1

@@ -160,6 +160,26 @@ Screen {
     background: #1a1608;
 }
 
+/* -- Message folding (toggled by /fold command) ------- */
+
+.chat-message.folded {
+    max-height: 5;
+    overflow-y: hidden;
+}
+
+.fold-toggle {
+    color: #666666;
+    text-style: italic;
+    padding: 0 2;
+    height: 1;
+    margin: 0 0 0 0;
+}
+
+.fold-toggle:hover {
+    color: #999999;
+    background: #151515;
+}
+
 /* -- Thinking blocks: PURPLE, dim, italic ------------- */
 
 /* Thinking blocks are visually "recessed" - smaller, dimmer, tinted.
