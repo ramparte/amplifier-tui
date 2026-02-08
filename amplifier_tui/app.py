@@ -424,15 +424,30 @@ class ChatInput(TextArea):
     # -- Key handling --------------------------------------------------------
 
     def _update_line_indicator(self) -> None:
-        """Show line count in border subtitle and cursor position in border title."""
-        total = self.text.count("\n") + 1
-        if total > 1:
-            self.border_subtitle = f"{total} lines"
-            row, col = self.cursor_location
-            self.border_title = f"L{row + 1}/{total} C{col + 1}"
-        else:
-            self.border_subtitle = ""
+        """Show cursor position in border title and word/char count in border subtitle."""
+        text = self.text
+
+        if not text.strip():
             self.border_title = ""
+            self.border_subtitle = ""
+            return
+
+        # Line/cursor info in border_title (multi-line only)
+        total_lines = text.count("\n") + 1
+        if total_lines > 1:
+            row, col = self.cursor_location
+            self.border_title = f"L{row + 1}/{total_lines} C{col + 1}"
+        else:
+            self.border_title = ""
+
+        # Word/char count in border_subtitle
+        words = len(text.split())
+        chars = len(text)
+        if chars > 500:
+            est_tokens = int(words * 1.3)
+            self.border_subtitle = f"{words}w {chars}c ~{est_tokens}tok"
+        else:
+            self.border_subtitle = f"{words}w {chars}c"
 
     async def _on_key(self, event) -> None:  # noqa: C901
         # ── Reverse search mode intercepts all keys ──────────────
