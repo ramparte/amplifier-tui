@@ -46,6 +46,7 @@ from .preferences import (
     save_session_sort,
     save_show_timestamps,
     save_theme_name,
+    save_vim_mode,
     save_word_wrap,
 )
 from .theme import TEXTUAL_THEMES
@@ -124,6 +125,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/diff",
     "/ref",
     "/refs",
+    "/vim",
 )
 
 # Known context window sizes (tokens) for popular models.
@@ -335,6 +337,10 @@ class ChatInput(TextArea):
         self._tab_matches: list[str] = []
         self._tab_index: int = 0
         self._tab_prefix: str = ""
+        # Vim mode state
+        self._vim_enabled: bool = False
+        self._vim_state: str = "insert"  # "normal" or "insert"
+        self._vim_key_buffer: str = ""  # for multi-char combos like dd, gg
 
     # -- Slash command tab-completion ----------------------------------------
 
@@ -421,6 +427,130 @@ class ChatInput(TextArea):
         self._tab_index = 0
         self._tab_prefix = ""
 
+    # -- Vim mode ------------------------------------------------------------
+
+    def _update_vim_border(self) -> None:
+        """Update the border title to show vim mode indicator."""
+        if not self._vim_enabled:
+            # When vim is off, let _update_line_indicator manage border_title
+            return
+        if self._vim_state == "normal":
+            self.border_title = "-- NORMAL --"
+        else:
+            self.border_title = "-- INSERT --"
+
+    def _handle_vim_normal_key(self, event) -> bool:
+        """Handle a keypress in vim normal mode.
+
+        Returns True if the event was consumed and should not propagate.
+        """
+        key = event.key
+        buf = self._vim_key_buffer
+
+        # Multi-char combos: accumulate into buffer
+        if buf == "d" and key == "d":
+            self._vim_key_buffer = ""
+            self.action_delete_line()
+            return True
+        if buf == "g" and key == "g":
+            self._vim_key_buffer = ""
+            self.action_cursor_document_start()
+            return True
+        # If buffer was waiting for a second char but got something else, reset
+        if buf:
+            self._vim_key_buffer = ""
+
+        # Start of potential multi-char combo
+        if key == "d":
+            self._vim_key_buffer = "d"
+            return True
+        if key == "g":
+            self._vim_key_buffer = "g"
+            return True
+
+        # Mode switching
+        if key == "i":
+            self._vim_state = "insert"
+            self._update_vim_border()
+            return True
+        if key == "a":
+            self._vim_state = "insert"
+            self.action_cursor_right()
+            self._update_vim_border()
+            return True
+        if key == "shift+a" or key == "A":
+            self._vim_state = "insert"
+            self.action_cursor_line_end()
+            self._update_vim_border()
+            return True
+        if key == "shift+i" or key == "I":
+            self._vim_state = "insert"
+            self.action_cursor_line_start()
+            self._update_vim_border()
+            return True
+        if key == "o":
+            self._vim_state = "insert"
+            self.action_cursor_line_end()
+            self.insert("\n")
+            self._update_vim_border()
+            return True
+        if key == "shift+o" or key == "O":
+            self._vim_state = "insert"
+            self.action_cursor_line_start()
+            self.insert("\n")
+            self.action_cursor_up()
+            self._update_vim_border()
+            return True
+
+        # Navigation
+        if key == "h":
+            self.action_cursor_left()
+            return True
+        if key == "j":
+            self.action_cursor_down()
+            return True
+        if key == "k":
+            self.action_cursor_up()
+            return True
+        if key == "l":
+            self.action_cursor_right()
+            return True
+        if key == "w":
+            self.action_cursor_word_right()
+            return True
+        if key == "b":
+            self.action_cursor_word_left()
+            return True
+        if key == "0" or key == "home":
+            self.action_cursor_line_start()
+            return True
+        if key in ("$", "end"):
+            self.action_cursor_line_end()
+            return True
+        if key in ("shift+g", "G"):
+            self.action_cursor_document_end()
+            return True
+
+        # Editing in normal mode
+        if key == "x":
+            self.action_delete_right()
+            return True
+        if key in ("shift+x", "X"):
+            self.action_delete_left()
+            return True
+
+        # Enter in normal mode enters insert mode (like vim's Enter moves down)
+        if key == "enter":
+            # Submit message just like non-vim mode
+            return False  # Let _on_key handle it
+
+        # Ignore other printable characters in normal mode (don't insert them)
+        if len(key) == 1 and key.isprintable():
+            return True
+
+        # Let unrecognized keys pass through (ctrl combos, etc.)
+        return False
+
     # -- Key handling --------------------------------------------------------
 
     def _update_line_indicator(self) -> None:
@@ -457,6 +587,24 @@ class ChatInput(TextArea):
                 event.stop()
                 return
             # Returned False → search accepted, fall through to normal handling
+
+        # ── Vim mode intercept ──────────────────────────────────
+        if self._vim_enabled:
+            if self._vim_state == "normal":
+                consumed = self._handle_vim_normal_key(event)
+                if consumed:
+                    event.prevent_default()
+                    event.stop()
+                    self._update_vim_border()
+                    return
+                # Not consumed → fall through to normal handlers (enter, ctrl combos)
+            elif self._vim_state == "insert" and event.key == "escape":
+                self._vim_state = "normal"
+                self._vim_key_buffer = ""
+                self._update_vim_border()
+                event.prevent_default()
+                event.stop()
+                return
 
         if event.key == "shift+enter":
             # Insert newline (Shift+Enter = multi-line composition)
@@ -669,6 +817,7 @@ SHORTCUTS_TEXT = """\
   /draft           Save/load input drafts
   /snippet         Prompt templates
   /alias           Custom command shortcuts
+  /vim             Toggle vim keybindings
   /prefs           Preferences
   /notify          Toggle notifications
   /sound           Toggle notification sound
@@ -931,6 +1080,7 @@ class AmplifierChicApp(App):
                     yield Static("No session", id="status-session")
                     yield Static("Ready", id="status-state")
                     yield Static("", id="status-stash")
+                    yield Static("", id="status-vim")
                     yield Static("\u2195 ON", id="status-scroll")
                     yield Static("0 words", id="status-wordcount")
                     yield Static("", id="status-context")
@@ -953,6 +1103,14 @@ class AmplifierChicApp(App):
         # Apply compact-mode preference (default: off; on adds compact-mode CSS class)
         if self._prefs.display.compact_mode:
             self.add_class("compact-mode")
+
+        # Apply vim-mode preference (default: off; starts in normal mode)
+        if self._prefs.display.vim_mode:
+            input_w = self.query_one("#chat-input", ChatInput)
+            input_w._vim_enabled = True
+            input_w._vim_state = "normal"
+            input_w._update_vim_border()
+            self._update_vim_status()
 
         # Show UI immediately, defer Amplifier import to background
         self._show_welcome()
@@ -2490,6 +2648,7 @@ class AmplifierChicApp(App):
             "/diff": lambda: self._cmd_diff(args),
             "/ref": lambda: self._cmd_ref(text),
             "/refs": lambda: self._cmd_ref(text),
+            "/vim": lambda: self._cmd_vim(args),
         }
 
         handler = handlers.get(cmd)
@@ -2548,6 +2707,7 @@ class AmplifierChicApp(App):
             "  /history      Browse input history (/history clear, /history <N>)\n"
             "  /undo         Remove last exchange (/undo <N> for last N exchanges)\n"
             "  /redo         Re-send last user message (/redo <N> for Nth-to-last)\n"
+            "  /vim          Toggle vim keybindings (/vim on, /vim off)\n"
             "  /keys         Keyboard shortcut overlay\n"
             "  /quit         Quit\n"
             "\n"
@@ -3103,6 +3263,41 @@ class AmplifierChicApp(App):
         state = "ON" if compact else "OFF"
         self._update_status()
         self._add_system_message(f"Compact mode: {state}")
+
+    def _cmd_vim(self, text: str) -> None:
+        """Toggle vim-style keybindings in the input area."""
+        text = text.strip().lower()
+
+        if text in ("on", "true", "1"):
+            vim = True
+        elif text in ("off", "false", "0"):
+            vim = False
+        elif not text:
+            vim = not self._prefs.display.vim_mode
+        else:
+            self._add_system_message("Usage: /vim [on|off]")
+            return
+
+        self._prefs.display.vim_mode = vim
+        save_vim_mode(vim)
+
+        input_widget = self.query_one("#chat-input", ChatInput)
+        input_widget._vim_enabled = vim
+
+        if vim:
+            input_widget._vim_state = "normal"
+            input_widget._vim_key_buffer = ""
+            input_widget._update_vim_border()
+            self._add_system_message(
+                "Vim mode enabled (NORMAL mode — press i for INSERT)"
+            )
+        else:
+            input_widget._vim_state = "insert"
+            input_widget._vim_key_buffer = ""
+            input_widget.border_title = ""
+            self._add_system_message("Vim mode disabled")
+
+        self._update_vim_status()
 
     def _cmd_search(self, text: str) -> None:
         """Search all chat messages for a query string."""
@@ -5508,6 +5703,14 @@ class AmplifierChicApp(App):
         label = "\u2195 ON" if self._auto_scroll else "\u2195 OFF"
         try:
             self.query_one("#status-scroll", Static).update(label)
+        except Exception:
+            pass
+
+    def _update_vim_status(self) -> None:
+        """Update the status bar vim mode indicator."""
+        label = "[vim]" if self._prefs.display.vim_mode else ""
+        try:
+            self.query_one("#status-vim", Static).update(label)
         except Exception:
             pass
 

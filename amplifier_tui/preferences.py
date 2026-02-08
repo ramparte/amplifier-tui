@@ -172,6 +172,7 @@ display:
   show_timestamps: true          # show HH:MM timestamps on messages
   word_wrap: true                # wrap long lines (off = horizontal scroll)
   compact_mode: false            # dense layout with reduced spacing
+  vim_mode: false                # vim-style keybindings in input area
 
 model:
   preferred: ""                   # preferred model for new sessions (empty = use default)
@@ -220,6 +221,7 @@ class DisplayPreferences:
     show_timestamps: bool = True
     word_wrap: bool = True
     compact_mode: bool = False
+    vim_mode: bool = False
 
 
 @dataclass
@@ -278,6 +280,8 @@ def load_preferences(path: Path | None = None) -> Preferences:
                     prefs.display.word_wrap = bool(ddata["word_wrap"])
                 if "compact_mode" in ddata:
                     prefs.display.compact_mode = bool(ddata["compact_mode"])
+                if "vim_mode" in ddata:
+                    prefs.display.vim_mode = bool(ddata["vim_mode"])
             if isinstance(data.get("model"), dict):
                 mdata = data["model"]
                 if "preferred" in mdata:
@@ -575,6 +579,49 @@ def save_compact_mode(enabled: bool, path: Path | None = None) -> None:
         else:
             # No display section at all — append it
             text = text.rstrip() + f"\n\ndisplay:\n  compact_mode: {value}\n"
+
+        path.write_text(text)
+    except Exception:
+        pass  # Best-effort persistence
+
+
+def save_vim_mode(enabled: bool, path: Path | None = None) -> None:
+    """Persist the vim_mode display preference to the preferences file.
+
+    Surgically updates only the vim_mode value, preserving the rest of the
+    file (including user comments) as-is.
+    """
+    import re
+
+    path = path or PREFS_PATH
+    try:
+        if path.exists():
+            text = path.read_text()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = _DEFAULT_YAML
+
+        value = "true" if enabled else "false"
+        if re.search(r"^\s+vim_mode:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(\s+vim_mode:).*$",
+                f"\\1 {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        elif re.search(r"^display:", text, re.MULTILINE):
+            # display section exists but no vim_mode key
+            text = re.sub(
+                r"^(display:.*)$",
+                f"\\1\n  vim_mode: {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            # No display section at all — append it
+            text = text.rstrip() + f"\n\ndisplay:\n  vim_mode: {value}\n"
 
         path.write_text(text)
     except Exception:
