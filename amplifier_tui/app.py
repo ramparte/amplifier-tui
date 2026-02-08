@@ -171,6 +171,8 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/include",
     "/autosave",
     "/system",
+    "/note",
+    "/notes",
 )
 
 # -- System prompt presets -----------------------------------------------------
@@ -317,6 +319,7 @@ class TabState:
     session_bookmarks: list = field(default_factory=list)
     session_refs: list = field(default_factory=list)
     message_pins: list = field(default_factory=list)
+    session_notes: list = field(default_factory=list)
     created_at: str = ""
     # Custom system prompt for this tab
     system_prompt: str = ""
@@ -1049,6 +1052,13 @@ class SystemMessage(Static):
         super().__init__(content, classes="chat-message system-message")
 
 
+class NoteMessage(Static):
+    """A user annotation/note displayed as a sticky-note in the chat."""
+
+    def __init__(self, content: str) -> None:
+        super().__init__(content, classes="chat-message note-message")
+
+
 class FoldToggle(Static):
     """Clickable indicator to fold/unfold a long message."""
 
@@ -1151,6 +1161,8 @@ SHORTCUTS_TEXT = """\
   /unpin N         Remove a pin
   /bookmark        Bookmark last response
   /bookmarks       List/jump to bookmarks
+  /note            Add a session note (/note list, /note clear)
+  /notes           List all notes (alias for /note list)
   /ref             Save URL/reference
   /refs             List saved references
 
@@ -1358,6 +1370,10 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/pins", "List pinned messages", "/pins"),
     ("/unpin", "Remove a pin by number", "/unpin"),
     ("/pin-session", "Pin or unpin session in sidebar", "/pin-session"),
+    ("/note", "Add a session note (not sent to AI)", "/note"),
+    ("/note list", "List all session notes", "/note list"),
+    ("/note clear", "Remove all session notes", "/note clear"),
+    ("/notes", "List all session notes", "/notes"),
     ("/delete", "Delete session (with confirmation)", "/delete"),
     ("/export", "Export chat (md, html, json, txt)", "/export"),
     ("/notify", "Toggle notifications (on, off, sound, silent, flash)", "/notify"),
@@ -1563,6 +1579,7 @@ class AmplifierChicApp(App):
     TEMPLATES_FILE = Path.home() / ".amplifier" / "tui-templates.json"
     SESSION_TITLES_FILE = Path.home() / ".amplifier" / "tui-session-titles.json"
     REFS_FILE = Path.home() / ".amplifier" / "tui-refs.json"
+    NOTES_FILE = Path.home() / ".amplifier" / "tui-notes.json"
     CRASH_DRAFT_FILE = Path.home() / ".amplifier" / "tui-draft.txt"
 
     DEFAULT_SNIPPETS: dict[str, dict[str, str]] = {
@@ -1735,6 +1752,9 @@ class AmplifierChicApp(App):
 
         # Pinned messages (per-session bookmarks for quick recall)
         self._message_pins: list[dict] = []
+
+        # Session notes (user annotations, not sent to AI)
+        self._session_notes: list[dict] = []
 
         # Message folding state
         self._fold_threshold: int = 30
@@ -1964,6 +1984,7 @@ class AmplifierChicApp(App):
         tab.session_bookmarks = self._session_bookmarks
         tab.session_refs = self._session_refs
         tab.message_pins = self._message_pins
+        tab.session_notes = self._session_notes
         tab.system_prompt = self._system_prompt
         tab.system_preset_name = self._system_preset_name
 
@@ -1988,6 +2009,7 @@ class AmplifierChicApp(App):
         self._session_bookmarks = tab.session_bookmarks
         self._session_refs = tab.session_refs
         self._message_pins = tab.message_pins
+        self._session_notes = tab.session_notes
         self._system_prompt = tab.system_prompt
         self._system_preset_name = tab.system_preset_name
 
@@ -2110,6 +2132,7 @@ class AmplifierChicApp(App):
         self._session_bookmarks = []
         self._session_refs = []
         self._message_pins = []
+        self._session_notes = []
 
         # Update UI
         self._update_tab_bar()
@@ -3152,6 +3175,40 @@ class AmplifierChicApp(App):
         except Exception:
             pass
 
+    # ── Session Notes ─────────────────────────────────────────────────
+
+    def _load_notes(self) -> list[dict]:
+        """Load notes for the current session."""
+        try:
+            if self.NOTES_FILE.exists():
+                all_notes = json.loads(self.NOTES_FILE.read_text())
+                sid = self._get_session_id() or "default"
+                return all_notes.get(sid, [])
+        except Exception:
+            pass
+        return []
+
+    def _save_notes(self) -> None:
+        """Persist session notes keyed by session ID."""
+        try:
+            all_notes: dict[str, list[dict]] = {}
+            if self.NOTES_FILE.exists():
+                all_notes = json.loads(self.NOTES_FILE.read_text())
+            sid = self._get_session_id() or "default"
+            if self._session_notes:
+                all_notes[sid] = self._session_notes
+            elif sid in all_notes:
+                del all_notes[sid]
+            # Keep last 50 sessions worth of notes
+            if len(all_notes) > 50:
+                keys = list(all_notes.keys())
+                for k in keys[:-50]:
+                    del all_notes[k]
+            self.NOTES_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self.NOTES_FILE.write_text(json.dumps(all_notes, indent=2))
+        except Exception:
+            pass
+
     def _add_message_pin(self, index: int, content: str, label: str = "") -> None:
         """Pin a message by its _search_messages index."""
         preview = content[:80].replace("\n", " ")
@@ -3989,6 +4046,7 @@ class AmplifierChicApp(App):
         self._session_bookmarks = []
         self._session_refs = []
         self._message_pins = []
+        self._session_notes = []
         self._search_messages = []
         self._session_start_time = time.monotonic()
         self._update_word_count_display()
@@ -4362,6 +4420,8 @@ class AmplifierChicApp(App):
             "/include": lambda: self._cmd_include(args),
             "/autosave": lambda: self._cmd_autosave(args),
             "/system": lambda: self._cmd_system(args),
+            "/note": lambda: self._cmd_note(args),
+            "/notes": lambda: self._show_notes(),
         }
 
         handler = handlers.get(cmd)
@@ -4396,6 +4456,8 @@ class AmplifierChicApp(App):
             "  /pin          Pin message (/pin, /pin N, /pin list, /pin clear, /pin remove N)\n"
             "  /pins         List all pinned messages (alias for /pin list)\n"
             "  /unpin <N>    Remove a pin by its pin number\n"
+            "  /note         Add a session note (/note <text>, /note list, /note clear)\n"
+            "  /notes        List all session notes (alias for /note list)\n"
             "  /pin-session  Pin/unpin session (pinned appear at top of sidebar)\n"
             "  /delete       Delete session (with confirmation)\n"
             "  /export       Export chat (md/html/json/txt) | /export <fmt> [path] | --clipboard\n"
@@ -8744,6 +8806,98 @@ class AmplifierChicApp(App):
 
         self._remove_pin(int(arg))
 
+    # ── Session Notes Commands ─────────────────────────────────────────
+
+    def _cmd_note(self, args: str) -> None:
+        """Add or manage session notes.
+
+        /note <text>    – add a note
+        /note list      – show all notes
+        /note clear     – remove all notes
+        /notes          – alias for /note list
+        """
+        text = args.strip()
+
+        if not text:
+            self._add_system_message(
+                "Usage:\n"
+                "  /note <text>    Add a note\n"
+                "  /note list      Show all notes\n"
+                "  /note clear     Remove all notes\n"
+                "  /notes          Alias for /note list"
+            )
+            return
+
+        if text.lower() == "list":
+            self._show_notes()
+            return
+
+        if text.lower() == "clear":
+            self._session_notes.clear()
+            self._save_notes()
+            self._add_system_message("All notes cleared.")
+            return
+
+        # Add a note
+        note = {
+            "text": text,
+            "created_at": datetime.now().isoformat(),
+            "position": len(self._search_messages),
+        }
+        self._session_notes.append(note)
+        self._save_notes()
+
+        # Display the note in chat with special styling
+        self._add_note_message(text)
+
+    def _show_notes(self) -> None:
+        """Show all session notes."""
+        if not self._session_notes:
+            self._add_system_message("No notes. Use /note <text> to add one.")
+            return
+
+        lines = [f"\U0001f4dd Session Notes ({len(self._session_notes)})"]
+        lines.append("=" * 30)
+        for i, note in enumerate(self._session_notes, 1):
+            try:
+                ts = datetime.fromisoformat(note["created_at"]).strftime("%H:%M:%S")
+            except Exception:
+                ts = "?"
+            lines.append(f"\n{i}. [{ts}] {note['text']}")
+
+        self._add_system_message("\n".join(lines))
+
+    def _add_note_message(self, text: str) -> None:
+        """Add a visually distinct note widget to the chat."""
+        timestamp = datetime.now().strftime("%H:%M")
+        note_text = f"\U0001f4dd Note ({timestamp}): {text}"
+
+        chat_view = self._active_chat_view()
+        msg = NoteMessage(note_text)
+        chat_view.mount(msg)
+        self._style_note(msg)
+        self._scroll_if_auto(msg)
+        self._search_messages.append(("note", text, msg))
+
+    def _style_note(self, widget: Static) -> None:
+        """Apply sticky-note styling to a note message."""
+        widget.styles.color = "#e0d080"
+        widget.styles.border_left = ("thick", "#c0a030")
+
+    def _replay_notes(self) -> None:
+        """Re-mount note widgets when restoring a session."""
+        chat_view = self._active_chat_view()
+        for note in self._session_notes:
+            try:
+                ts = datetime.fromisoformat(note["created_at"]).strftime("%H:%M")
+            except Exception:
+                ts = "?"
+            note_text = f"\U0001f4dd Note ({ts}): {note['text']}"
+            msg = NoteMessage(note_text)
+            chat_view.mount(msg)
+            self._style_note(msg)
+            self._search_messages.append(("note", note["text"], msg))
+
     _SORT_MODES = ("date", "name", "project")
 
     def _cmd_sort(self, text: str) -> None:
@@ -10178,6 +10332,10 @@ class AmplifierChicApp(App):
 
         # Restore saved references for this session
         self._session_refs = self._load_session_refs()
+
+        # Restore notes for this session
+        self._session_notes = self._load_notes()
+        self._replay_notes()
 
         chat_view.scroll_end(animate=False)
 

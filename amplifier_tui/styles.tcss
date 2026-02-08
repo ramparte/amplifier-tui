@@ -218,6 +218,16 @@ Screen {
     background: #1a1608;
 }
 
+/* -- Note messages: sticky-note yellow appearance ----- */
+
+.note-message {
+    background: #2a2a10;
+    border-left: thick #c0a030;
+    color: #e0d080;
+    margin: 0 2;
+    padding: 0 1;
+}
+
 /* -- Pinned messages: coral/orange left accent ------- */
 
 .pinned {
