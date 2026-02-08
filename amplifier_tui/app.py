@@ -81,6 +81,19 @@ TOOL_LABELS: dict[str, str] = {
 
 _MAX_LABEL_LEN = 38  # Keep status labels under ~40 chars total
 
+# /run shell execution settings
+_DANGEROUS_PATTERNS: tuple[str, ...] = (
+    "rm -rf /",
+    "rm -rf /*",
+    "sudo rm",
+    "mkfs",
+    "dd if=",
+    ":(){:|:&};:",
+    "> /dev/sda",
+)
+_MAX_RUN_OUTPUT_LINES = 100
+_RUN_TIMEOUT = 30
+
 # Canonical list of slash commands – used by both _handle_slash_command and
 # ChatInput tab-completion.  Keep in sync with the handlers dict below.
 SLASH_COMMANDS: tuple[str, ...] = (
@@ -145,6 +158,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/tabs",
     "/palette",
     "/commands",
+    "/run",
 )
 
 
@@ -920,6 +934,7 @@ SHORTCUTS_TEXT = """\
   /export          Export chat (md/html/json/txt)
   /diff            Show git diff (color-coded)
   /watch           Watch files for changes
+  /run <cmd>       Run shell command inline (/! shorthand)
   /tokens          Token/context usage
   /context         Context window details
 
@@ -1119,6 +1134,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/tabs", "List all open tabs", "/tabs"),
     ("/keys", "Keyboard shortcuts overlay", "/keys"),
     ("/quit", "Quit the application", "/quit"),
+    ("/run", "Run a shell command inline (/! shorthand)", "/run"),
     # ── Keyboard-shortcut actions ───────────────────────────────────────────
     ("New Session  Ctrl+N", "Start a new conversation", "action:new_session"),
     ("New Tab  Ctrl+T", "Open a new conversation tab", "action:new_tab"),
@@ -3380,6 +3396,12 @@ class AmplifierChicApp(App):
             self._add_system_message("Alias recursion limit reached")
             return
 
+        # /! shorthand for /run  (parsed before normal dispatch)
+        stripped = text.strip()
+        if stripped.startswith("/!"):
+            self._cmd_run(stripped[2:].strip())
+            return
+
         parts = text.strip().split(None, 1)
         cmd = parts[0].lower()
         args = parts[1] if len(parts) > 1 else ""
@@ -3471,6 +3493,7 @@ class AmplifierChicApp(App):
             "/tabs": lambda: self._cmd_tab(""),
             "/palette": self.action_command_palette,
             "/commands": self.action_command_palette,
+            "/run": lambda: self._cmd_run(args),
         }
 
         handler = handlers.get(cmd)
@@ -3537,6 +3560,8 @@ class AmplifierChicApp(App):
             "  /vim          Toggle vim keybindings (/vim on, /vim off)\n"
             "  /tab          Tab management (/tab new|switch|close|rename|list)\n"
             "  /tabs         List all open tabs\n"
+            "  /run          Run shell command inline (/run ls -la, /run git status)\n"
+            "  /!            Shorthand for /run (/! git diff)\n"
             "  /keys         Keyboard shortcut overlay\n"
             "  /palette      Command palette (Ctrl+P) – fuzzy search all commands\n"
             "  /quit         Quit\n"
@@ -3571,6 +3596,70 @@ class AmplifierChicApp(App):
             "  Ctrl+Q        Quit"
         )
         self._add_system_message(help_text)
+
+    def _cmd_run(self, text: str) -> None:
+        """Execute a shell command and display output inline."""
+        text = text.strip()
+        if not text:
+            self._add_system_message(
+                "Usage: /run <command>\n"
+                "  /run ls -la\n"
+                "  /run git status\n"
+                "  /! git diff     (shorthand)\n"
+                "\nTimeout: 30s. Max output: 100 lines."
+            )
+            return
+
+        # Safety check
+        cmd_lower = text.lower()
+        for pattern in _DANGEROUS_PATTERNS:
+            if pattern in cmd_lower:
+                self._add_system_message(
+                    f"Blocked: potentially dangerous command\n  {text}"
+                )
+                return
+
+        # Record in history so Ctrl+R can find it
+        self._history.add(f"/run {text}", force=True)
+
+        try:
+            result = subprocess.run(
+                text,
+                shell=True,  # noqa: S602  — needed for pipes/globs
+                capture_output=True,
+                text=True,
+                timeout=_RUN_TIMEOUT,
+                cwd=os.getcwd(),
+            )
+
+            output_parts: list[str] = []
+
+            if result.stdout:
+                lines = result.stdout.splitlines()
+                if len(lines) > _MAX_RUN_OUTPUT_LINES:
+                    output_parts.append("\n".join(lines[:_MAX_RUN_OUTPUT_LINES]))
+                    remaining = len(lines) - _MAX_RUN_OUTPUT_LINES
+                    output_parts.append(f"\n... ({remaining} more lines)")
+                else:
+                    output_parts.append(result.stdout.rstrip())
+
+            if result.stderr:
+                output_parts.append(f"\n[stderr]\n{result.stderr.rstrip()}")
+
+            if result.returncode != 0:
+                output_parts.append(f"\n[exit code: {result.returncode}]")
+
+            if not output_parts:
+                output_parts.append("(no output)")
+
+            header = f"$ {text}"
+            output = "\n".join(output_parts)
+            self._add_system_message(f"{header}\n```\n{output}\n```")
+
+        except subprocess.TimeoutExpired:
+            self._add_system_message(f"Command timed out after {_RUN_TIMEOUT}s: {text}")
+        except Exception as e:
+            self._add_system_message(f"Error running command: {e}")
 
     def _cmd_alias(self, text: str) -> None:
         """List, create, or remove custom command aliases."""

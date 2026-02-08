@@ -51,11 +51,15 @@ class PromptHistory:
     def entry_count(self) -> int:
         return len(self._entries)
 
-    def add(self, prompt: str) -> None:
-        """Add a prompt to history (deduplicates, skips slash commands)."""
+    def add(self, prompt: str, *, force: bool = False) -> None:
+        """Add a prompt to history (deduplicates, skips slash commands).
+
+        If *force* is True the slash-command filter is bypassed so that
+        entries like ``/run git status`` can be recorded.
+        """
         # Flatten multiline to single line
         prompt = " ".join(prompt.split())
-        if not prompt or prompt.startswith("/"):
+        if not prompt or (prompt.startswith("/") and not force):
             # Always reset browsing state even for skipped prompts
             self._cursor = -1
             self._draft = ""
