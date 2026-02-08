@@ -1059,6 +1059,7 @@ class AmplifierChicApp(App):
 
         # Focus mode state (zen mode - hides chrome)
         self._focus_mode = False
+        self._sidebar_was_visible_before_focus = False
 
         # Word count tracking
         self._total_words: int = 0
@@ -2044,12 +2045,21 @@ class AmplifierChicApp(App):
     def on_key(self, event) -> None:
         """Handle Escape: exit focus mode, or clear session filter."""
         if event.key == "escape":
-            # Exit focus mode first if active
+            # Exit focus mode first if active (only when input is empty
+            # so we don't conflict with vim mode or other Escape uses)
             if self._focus_mode:
-                self.action_toggle_focus_mode()
-                event.prevent_default()
-                event.stop()
-                return
+                input_empty = True
+                try:
+                    input_empty = not self.query_one(
+                        "#chat-input", ChatInput
+                    ).text.strip()
+                except Exception:
+                    pass
+                if input_empty:
+                    self._set_focus_mode(False)
+                    event.prevent_default()
+                    event.stop()
+                    return
             try:
                 filt = self.query_one("#session-filter", Input)
                 if filt.has_focus and filt.value:
@@ -2472,25 +2482,25 @@ class AmplifierChicApp(App):
 
     def action_toggle_focus_mode(self) -> None:
         """Toggle focus mode: hide all chrome, show only chat + input."""
-        self._focus_mode = not self._focus_mode
+        self._set_focus_mode(not self._focus_mode)
 
-        # Hide/show the status bar and breadcrumb
-        try:
-            self.query_one("#status-bar").display = not self._focus_mode
-        except Exception:
-            pass
-        try:
-            self.query_one("#breadcrumb-bar").display = not self._focus_mode
-        except Exception:
-            pass
+    def _set_focus_mode(self, enabled: bool) -> None:
+        """Apply focus mode state using a CSS class on the app."""
+        if enabled == self._focus_mode:
+            return
 
-        # If entering focus mode with sidebar open, close it
-        if self._focus_mode and self._sidebar_visible:
-            self.action_toggle_sidebar()
-
-        if self._focus_mode:
+        if enabled:
+            # Remember sidebar state so we can restore it on exit
+            self._sidebar_was_visible_before_focus = self._sidebar_visible
+            self._focus_mode = True
+            self.add_class("focus-mode")
             self._add_system_message("Focus mode ON (F11 or /focus to exit)")
         else:
+            self._focus_mode = False
+            self.remove_class("focus-mode")
+            # Restore sidebar to its pre-focus state
+            if self._sidebar_was_visible_before_focus and not self._sidebar_visible:
+                self.action_toggle_sidebar()
             self._add_system_message("Focus mode OFF")
 
         # Keep input focused
@@ -2711,7 +2721,7 @@ class AmplifierChicApp(App):
             "/model": lambda: self._cmd_model(text),
             "/quit": self._cmd_quit,
             "/exit": self._cmd_quit,
-            "/focus": self._cmd_focus,
+            "/focus": lambda: self._cmd_focus(text),
             "/compact": lambda: self._cmd_compact(text),
             "/copy": lambda: self._cmd_copy(text),
             "/notify": lambda: self._cmd_notify(text),
@@ -2801,7 +2811,7 @@ class AmplifierChicApp(App):
             "  /fold         Fold/unfold long messages (/fold all, /fold none, /fold <n>)\n"
             "  /theme        Switch color theme (dark, light, solarized, monokai, nord, dracula)\n"
             "  /colors       View/set colors (/colors <role> <#hex>, /colors reset)\n"
-            "  /focus        Toggle focus mode (hide chrome)\n"
+            "  /focus        Toggle focus mode (/focus on, /focus off)\n"
             "  /search       Search chat messages (e.g. /search my query)\n"
             "  /grep         Search with options (/grep <pattern>, /grep -c <pattern> for case-sensitive)\n"
             "  /diff         Show git changes (/diff <file|all|staged|last>)\n"
@@ -3972,9 +3982,20 @@ class AmplifierChicApp(App):
                 return
         self._add_system_message(f"```diff\n{output}\n```")
 
-    def _cmd_focus(self) -> None:
-        """Toggle focus mode via slash command."""
-        self.action_toggle_focus_mode()
+    def _cmd_focus(self, text: str = "") -> None:
+        """Toggle focus mode via slash command.
+
+        /focus      - toggle
+        /focus on   - enable
+        /focus off  - disable
+        """
+        arg = text.strip().lower()
+        if arg == "on":
+            self._set_focus_mode(True)
+        elif arg == "off":
+            self._set_focus_mode(False)
+        else:
+            self._set_focus_mode(not self._focus_mode)
 
     def _cmd_copy(self, text: str) -> None:
         """Copy a message to clipboard.

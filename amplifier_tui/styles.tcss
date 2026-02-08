@@ -567,3 +567,28 @@ HistorySearchScreen {
     margin: 1 0;
     padding: 1 2;
 }
+
+/* -- Focus mode (toggled by /focus or F11) ------------ */
+/* Hides all chrome: sidebar, status bar, breadcrumb,    */
+/* input counter.  Only chat + input remain visible.     */
+
+.focus-mode #session-sidebar {
+    display: none;
+}
+
+.focus-mode #status-bar {
+    display: none;
+}
+
+.focus-mode #breadcrumb-bar {
+    display: none;
+}
+
+.focus-mode #input-counter {
+    display: none;
+}
+
+/* Let chat fill full width in focus mode */
+.focus-mode #chat-view {
+    max-width: 100%;
+}
