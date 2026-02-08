@@ -122,6 +122,8 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/snippets",
     "/title",
     "/diff",
+    "/ref",
+    "/refs",
 )
 
 # Known context window sizes (tokens) for popular models.
@@ -629,6 +631,8 @@ SHORTCUTS_TEXT = """\
   /unpin N         Remove a pin
   /bookmark        Bookmark last response
   /bookmarks       List/jump to bookmarks
+  /ref             Save URL/reference
+  /refs             List saved references
 
  MODEL & DISPLAY ───────────────────────
   /model [name]    View/switch AI model
@@ -759,6 +763,7 @@ class AmplifierChicApp(App):
     ALIASES_FILE = Path.home() / ".amplifier" / "tui-aliases.json"
     SNIPPETS_FILE = Path.home() / ".amplifier" / "tui-snippets.json"
     SESSION_TITLES_FILE = Path.home() / ".amplifier" / "tui-session-titles.json"
+    REFS_FILE = Path.home() / ".amplifier" / "tui-refs.json"
     CRASH_DRAFT_FILE = Path.home() / ".amplifier" / "tui-draft.txt"
 
     DEFAULT_SNIPPETS: dict[str, str] = {
@@ -850,6 +855,9 @@ class AmplifierChicApp(App):
         self._assistant_msg_index: int = 0
         self._last_assistant_widget: Static | None = None
         self._session_bookmarks: list[dict] = []
+
+        # URL/reference collector (/ref command)
+        self._session_refs: list[dict] = []
 
         # Streaming display state
         self._stream_widget: Static | None = None
@@ -1373,6 +1381,147 @@ class AmplifierChicApp(App):
             idx = getattr(widget, "msg_index", None)
             if idx is not None and idx in bookmarked_indices:
                 widget.add_class("bookmarked")
+
+    # ── URL/Reference Collector (/ref) ───────────────────────────────
+
+    def _load_all_refs(self) -> dict[str, list[dict]]:
+        """Load all refs from the JSON file."""
+        try:
+            if self.REFS_FILE.exists():
+                return json.loads(self.REFS_FILE.read_text())
+        except Exception:
+            pass
+        return {}
+
+    def _save_refs(self) -> None:
+        """Persist the current session's refs to disk."""
+        sid = self._get_session_id()
+        if not sid:
+            return
+        try:
+            all_refs = self._load_all_refs()
+            all_refs[sid] = self._session_refs
+            self.REFS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self.REFS_FILE.write_text(json.dumps(all_refs, indent=2))
+        except Exception:
+            pass
+
+    def _load_session_refs(self, session_id: str | None = None) -> list[dict]:
+        """Load refs for the current (or given) session."""
+        sid = session_id or self._get_session_id()
+        if not sid:
+            return []
+        return self._load_all_refs().get(sid, [])
+
+    def _cmd_ref(self, text: str) -> None:
+        """Handle /ref command for URL/reference collection."""
+        # Strip the command prefix ("/ref" or "/refs")
+        parts = text.strip().split(None, 1)
+        args = parts[1].strip() if len(parts) > 1 else ""
+
+        # /ref  or  /refs  — list all refs
+        if not args:
+            if not self._session_refs:
+                self._add_system_message(
+                    "No saved references.\n"
+                    "Add: /ref <url-or-text> [label]\n"
+                    "Example: /ref https://docs.python.org Python Docs"
+                )
+                return
+            lines = ["Saved References:"]
+            for i, ref in enumerate(self._session_refs, 1):
+                label = ref.get("label", "")
+                url = ref["url"]
+                ts = ref.get("timestamp", "")[:10]
+                if label:
+                    lines.append(f"  {i}. [{label}] {url}  ({ts})")
+                else:
+                    lines.append(f"  {i}. {url}  ({ts})")
+            lines.append("")
+            lines.append("  /ref remove <#> | /ref clear | /ref export")
+            self._add_system_message("\n".join(lines))
+            return
+
+        # /ref clear
+        if args == "clear":
+            count = len(self._session_refs)
+            self._session_refs.clear()
+            self._save_refs()
+            self._add_system_message(f"Cleared {count} reference(s)")
+            return
+
+        # /ref remove <N>
+        if args.startswith("remove"):
+            remove_parts = args.split()
+            if len(remove_parts) < 2:
+                self._add_system_message("Usage: /ref remove <number>")
+                return
+            try:
+                idx = int(remove_parts[1]) - 1
+                if 0 <= idx < len(self._session_refs):
+                    removed = self._session_refs.pop(idx)
+                    self._save_refs()
+                    self._add_system_message(f"Removed: {removed['url']}")
+                else:
+                    self._add_system_message(
+                        f"Invalid index. Range: 1-{len(self._session_refs)}"
+                    )
+            except (ValueError, IndexError):
+                self._add_system_message("Usage: /ref remove <number>")
+            return
+
+        # /ref export
+        if args == "export":
+            self._export_refs()
+            return
+
+        # /ref <url-or-text> [label]  — add a new reference
+        add_parts = args.split(None, 1)
+        url = add_parts[0]
+        label = add_parts[1] if len(add_parts) > 1 else ""
+
+        self._session_refs.append(
+            {
+                "url": url,
+                "label": label,
+                "timestamp": datetime.now().isoformat(),
+                "source": "manual",
+            }
+        )
+        self._save_refs()
+
+        msg = f"Saved reference: {url}"
+        if label:
+            msg += f" [{label}]"
+        self._add_system_message(msg)
+
+    def _export_refs(self) -> None:
+        """Export saved references to a markdown file."""
+        if not self._session_refs:
+            self._add_system_message("No references to export")
+            return
+
+        sid = self._get_session_id() or "default"
+        lines = [
+            "# Session References",
+            "",
+            f"Session: `{sid[:12]}`",
+            f"Exported: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            "",
+        ]
+        for i, ref in enumerate(self._session_refs, 1):
+            label = ref.get("label") or ref["url"]
+            url = ref["url"]
+            ts = ref.get("timestamp", "")[:10]
+            source = ref.get("source", "manual")
+            lines.append(f"{i}. [{label}]({url}) -- {ts} ({source})")
+
+        filepath = Path.home() / ".amplifier" / "refs-export.md"
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        filepath.write_text("\n".join(lines) + "\n")
+        self._add_system_message(
+            f"Exported {len(self._session_refs)} reference(s) to {filepath}"
+        )
 
     # ── Message Pins ─────────────────────────────────────────────
 
@@ -2008,6 +2157,7 @@ class AmplifierChicApp(App):
         self._assistant_msg_index = 0
         self._last_assistant_widget = None
         self._session_bookmarks = []
+        self._session_refs = []
         self._message_pins = []
         self._search_messages = []
         self._session_start_time = time.monotonic()
@@ -2323,6 +2473,8 @@ class AmplifierChicApp(App):
             "/snippets": lambda: self._cmd_snippet(""),
             "/title": lambda: self._cmd_title(args),
             "/diff": lambda: self._cmd_diff(args),
+            "/ref": lambda: self._cmd_ref(text),
+            "/refs": lambda: self._cmd_ref(text),
         }
 
         handler = handlers.get(cmd)
@@ -2350,6 +2502,8 @@ class AmplifierChicApp(App):
             "  /copy         Copy last response | /copy N | /copy all | /copy code\n"
             "  /bookmark     Bookmark last response (/bm alias, optional label)\n"
             "  /bookmarks    List bookmarks | /bookmarks <N> to jump\n"
+            "  /ref          Save a URL/reference (/ref <url> [label], /ref remove/clear/export)\n"
+            "  /refs         List all saved references (same as /ref with no args)\n"
             "  /title        View/set session title (/title <text> or /title clear)\n"
             "  /rename       Rename current session (e.g. /rename My Project)\n"
             "  /pin          Pin last AI message | /pin <N> | /pin clear\n"
@@ -5912,6 +6066,9 @@ class AmplifierChicApp(App):
 
         # Restore message pins for this session
         self._message_pins = self._load_message_pins()
+
+        # Restore saved references for this session
+        self._session_refs = self._load_session_refs()
 
         chat_view.scroll_end(animate=False)
 
