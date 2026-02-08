@@ -103,6 +103,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/edit",
     "/wrap",
     "/alias",
+    "/info",
 )
 
 # Known context window sizes (tokens) for popular models.
@@ -464,6 +465,7 @@ SHORTCUTS_TEXT = """\
   /delete     Delete session
   /stats      Session statistics
   /tokens     Token / context usage
+  /info       Session details
   /copy [N]   Copy last response (or msg N)
   /bookmark   Bookmark last response
   /bookmarks  List / jump to bookmarks
@@ -1662,6 +1664,7 @@ class AmplifierChicApp(App):
             "/keys": self._cmd_keys,
             "/stats": self._cmd_stats,
             "/tokens": self._cmd_tokens,
+            "/info": self._cmd_info,
             "/theme": lambda: self._cmd_theme(text),
             "/export": lambda: self._cmd_export(text),
             "/rename": lambda: self._cmd_rename(text),
@@ -1699,6 +1702,7 @@ class AmplifierChicApp(App):
             "  /model        Show model info | /model list | /model <name>\n"
             "  /stats        Show session statistics\n"
             "  /tokens       Detailed token / context usage breakdown\n"
+            "  /info         Show session details (ID, model, project, counts)\n"
             "  /copy         Copy last response | /copy N for message N\n"
             "  /bookmark     Bookmark last response (/bm alias, optional label)\n"
             "  /bookmarks    List bookmarks | /bookmarks <N> to jump\n"
@@ -2206,6 +2210,105 @@ class AmplifierChicApp(App):
             f"Model:      {model}"
         )
         self._add_system_message(stats)
+
+    def _cmd_info(self) -> None:
+        """Show comprehensive session information."""
+        session_id = self._get_session_id()
+        if not session_id:
+            self._add_system_message("No active session")
+            return
+
+        sm = self.session_manager
+        names = self._load_session_names()
+        pins = self._pinned_sessions
+        bookmarks = self._load_bookmarks()
+
+        # Gather info
+        custom_name = names.get(session_id, "")
+        is_pinned = session_id in pins
+        bookmark_count = len(bookmarks.get(session_id, []))
+
+        # Message counts
+        user_msgs = self._user_message_count
+        asst_msgs = self._assistant_message_count
+        total_msgs = user_msgs + asst_msgs
+        tool_calls = self._tool_call_count
+
+        # Token info from session manager
+        input_tokens = getattr(sm, "total_input_tokens", 0) if sm else 0
+        output_tokens = getattr(sm, "total_output_tokens", 0) if sm else 0
+        context_window = getattr(sm, "context_window", 0) if sm else 0
+
+        # Word-based estimate as fallback
+        total_words = self._user_words + self._assistant_words
+        est_tokens = int(total_words * 1.3)
+
+        # Model info
+        model = (getattr(sm, "model_name", "") if sm else "") or ""
+        preferred = getattr(self._prefs, "preferred_model", "")
+        model_display = model or preferred or "unknown"
+
+        # Project directory
+        project = str(Path.cwd())
+
+        # Duration
+        elapsed = time.monotonic() - self._session_start_time
+        if elapsed < 60:
+            duration = f"{int(elapsed)} seconds"
+        elif elapsed < 3600:
+            duration = f"{int(elapsed / 60)} minutes"
+        else:
+            hours = int(elapsed / 3600)
+            mins = int((elapsed % 3600) / 60)
+            duration = f"{hours}h {mins}m"
+
+        # Build display
+        lines = [
+            "Session Information",
+            "\u2500" * 40,
+            f"  ID:          {session_id[:12]}{'...' if len(session_id) > 12 else ''}",
+        ]
+
+        if custom_name:
+            lines.append(f"  Name:        {custom_name}")
+
+        lines.extend(
+            [
+                f"  Model:       {model_display}",
+                f"  Project:     {project}",
+                f"  Duration:    {duration}",
+                f"  Pinned:      {'Yes' if is_pinned else 'No'}",
+                f"  Bookmarks:   {bookmark_count}",
+                "",
+                f"  Messages:    {total_msgs} total",
+                f"    User:      {user_msgs}",
+                f"    Assistant: {asst_msgs}",
+                f"  Tool calls:  {tool_calls}",
+            ]
+        )
+
+        # Show actual token usage if available, otherwise estimate
+        if input_tokens or output_tokens:
+            lines.append(
+                f"  Tokens:      {input_tokens:,} in \u00b7 {output_tokens:,} out"
+            )
+            if context_window:
+                lines.append(f"  Context:     {context_window:,} window")
+        else:
+            lines.append(f"  Est. tokens: ~{est_tokens:,}")
+
+        # Theme and sort info
+        theme = getattr(self._prefs, "theme_name", "dark")
+        sort_mode = getattr(self._prefs, "session_sort", "date")
+        lines.extend(
+            [
+                "",
+                f"  Theme:       {theme}",
+                f"  Sort:        {sort_mode}",
+            ]
+        )
+
+        self._add_system_message("\n".join(lines))
 
     def _cmd_tokens(self) -> None:
         """Show detailed token / context usage breakdown."""
