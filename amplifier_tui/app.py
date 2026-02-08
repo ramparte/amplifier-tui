@@ -102,6 +102,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/sort",
     "/edit",
     "/wrap",
+    "/alias",
 )
 
 # Known context window sizes (tokens) for popular models.
@@ -290,8 +291,10 @@ class ChatInput(TextArea):
             self.insert(choice)
             return
 
-        # Fresh completion: find all commands matching the typed prefix
-        matches = sorted(c for c in SLASH_COMMANDS if c.startswith(text))
+        # Fresh completion: include built-in commands + user aliases
+        app_aliases = getattr(self.app, "_aliases", {})
+        all_commands = list(SLASH_COMMANDS) + ["/" + a for a in app_aliases]
+        matches = sorted(c for c in all_commands if c.startswith(text))
 
         if not matches:
             return  # nothing to complete
@@ -474,6 +477,7 @@ SHORTCUTS_TEXT = """\
   /search     Search chat messages
   /sort       Sort sessions (date/name/project)
   /edit       Open $EDITOR for longer prompts
+  /alias      List/create/remove shortcuts
   /draft      Show/save/clear input draft
   /compact    Clear chat, keep session
   /quit       Quit
@@ -569,6 +573,7 @@ class AmplifierChicApp(App):
     BOOKMARKS_FILE = Path.home() / ".amplifier" / "tui-bookmarks.json"
     PINNED_SESSIONS_FILE = Path.home() / ".amplifier" / "tui-pinned-sessions.json"
     DRAFTS_FILE = Path.home() / ".amplifier" / "tui-drafts.json"
+    ALIASES_FILE = Path.home() / ".amplifier" / "tui-aliases.json"
 
     BINDINGS = [
         Binding("f1", "show_shortcuts", "Help", show=True),
@@ -633,6 +638,9 @@ class AmplifierChicApp(App):
         self._user_words: int = 0
         self._assistant_words: int = 0
         self._session_start_time: float = time.monotonic()
+
+        # Custom command aliases
+        self._aliases: dict[str, str] = {}
 
         # Bookmark tracking
         self._assistant_msg_index: int = 0
@@ -699,6 +707,9 @@ class AmplifierChicApp(App):
 
         # Load pinned sessions
         self._pinned_sessions = self._load_pinned_sessions()
+
+        # Load custom command aliases
+        self._aliases = self._load_aliases()
 
         # Periodic draft auto-save in case of crash
         self.set_interval(30, self._auto_save_draft)
@@ -808,6 +819,27 @@ class AmplifierChicApp(App):
         if session_id in self._pinned_sessions:
             self._pinned_sessions.discard(session_id)
             self._save_pinned_sessions()
+
+    # ── Aliases ──────────────────────────────────────────────
+
+    def _load_aliases(self) -> dict[str, str]:
+        """Load custom command aliases from the JSON file."""
+        try:
+            if self.ALIASES_FILE.exists():
+                return json.loads(self.ALIASES_FILE.read_text())
+        except Exception:
+            pass
+        return {}
+
+    def _save_aliases(self) -> None:
+        """Persist custom command aliases."""
+        try:
+            self.ALIASES_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self.ALIASES_FILE.write_text(
+                json.dumps(self._aliases, indent=2, sort_keys=True)
+            )
+        except Exception:
+            pass
 
     # ── Drafts ────────────────────────────────────────────────
 
@@ -1575,11 +1607,40 @@ class AmplifierChicApp(App):
 
     # ── Slash Commands ────────────────────────────────────────
 
-    def _handle_slash_command(self, text: str) -> None:
+    def _handle_slash_command(self, text: str, _alias_depth: int = 0) -> None:
         """Route a slash command to the appropriate handler."""
+        if _alias_depth > 5:
+            self._add_system_message("Alias recursion limit reached")
+            return
+
         parts = text.strip().split(None, 1)
         cmd = parts[0].lower()
-        # arg = parts[1] if len(parts) > 1 else ""
+        args = parts[1] if len(parts) > 1 else ""
+
+        # Check aliases BEFORE built-in commands
+        alias_name = cmd.lstrip("/")
+        if alias_name in self._aliases:
+            expansion = self._aliases[alias_name]
+            if expansion.startswith("/"):
+                # Command alias – recurse
+                full = expansion + (" " + args if args else "")
+                self._handle_slash_command(full, _alias_depth + 1)
+            else:
+                # Prompt alias – send expanded text to Amplifier
+                full = expansion + (" " + args if args else "")
+                if not self._amplifier_available:
+                    return
+                if not self._amplifier_ready:
+                    self._add_system_message("Still loading Amplifier...")
+                    return
+                has_session = self.session_manager and getattr(
+                    self.session_manager, "session", None
+                )
+                self._start_processing(
+                    "Starting session" if not has_session else "Thinking"
+                )
+                self._send_message_worker(full)
+            return
 
         handlers = {
             "/help": self._cmd_help,
@@ -1615,6 +1676,7 @@ class AmplifierChicApp(App):
             "/sort": lambda: self._cmd_sort(text),
             "/edit": self.action_open_editor,
             "/wrap": lambda: self._cmd_wrap(text),
+            "/alias": lambda: self._cmd_alias(args),
         }
 
         handler = handlers.get(cmd)
@@ -1656,6 +1718,7 @@ class AmplifierChicApp(App):
             "  /sort         Sort sessions: date, name, project (/sort <mode>)\n"
             "  /edit         Open $EDITOR for longer prompts (same as Ctrl+G)\n"
             "  /draft        Show/save/clear input draft (/draft save, /draft clear)\n"
+            "  /alias        List/create/remove custom shortcuts\n"
             "  /compact      Clear chat, keep session\n"
             "  /keys         Keyboard shortcut overlay\n"
             "  /quit         Quit\n"
@@ -1683,6 +1746,65 @@ class AmplifierChicApp(App):
             "  Ctrl+Q        Quit"
         )
         self._add_system_message(help_text)
+
+    def _cmd_alias(self, text: str) -> None:
+        """List, create, or remove custom command aliases."""
+        text = text.strip()
+
+        if not text:
+            # List all aliases
+            if not self._aliases:
+                self._add_system_message(
+                    "No aliases defined.\n"
+                    "Usage: /alias <name> = <expansion>\n"
+                    "       /alias remove <name>"
+                )
+                return
+            lines = ["Defined aliases:"]
+            for name, expansion in sorted(self._aliases.items()):
+                lines.append(f"  /{name} = {expansion}")
+            lines.append("")
+            lines.append("Usage: /alias <name> = <expansion>")
+            lines.append("       /alias remove <name>")
+            self._add_system_message("\n".join(lines))
+            return
+
+        # Remove alias
+        if text.startswith("remove "):
+            name = text[7:].strip().lstrip("/")
+            if name in self._aliases:
+                del self._aliases[name]
+                self._save_aliases()
+                self._add_system_message(f"Alias '/{name}' removed")
+            else:
+                self._add_system_message(f"No alias '/{name}' found")
+            return
+
+        # Create/update alias: name = expansion
+        if "=" not in text:
+            self._add_system_message(
+                "Usage: /alias <name> = <expansion>\n       /alias remove <name>"
+            )
+            return
+
+        name, expansion = text.split("=", 1)
+        name = name.strip().lstrip("/")
+        expansion = expansion.strip()
+
+        if not name or not expansion:
+            self._add_system_message(
+                "Both name and expansion required: /alias <name> = <expansion>"
+            )
+            return
+
+        # Don't allow overriding built-in commands
+        if "/" + name in SLASH_COMMANDS:
+            self._add_system_message(f"Cannot override built-in command '/{name}'")
+            return
+
+        self._aliases[name] = expansion
+        self._save_aliases()
+        self._add_system_message(f"Alias set: /{name} = {expansion}")
 
     def _cmd_draft(self, text: str) -> None:
         """Show, save, or clear the input draft for this session."""
