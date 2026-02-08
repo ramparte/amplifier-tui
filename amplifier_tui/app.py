@@ -254,6 +254,7 @@ SHORTCUTS_TEXT = """\
   Ctrl+Y      Copy last response
   Ctrl+M      Bookmark last response
   Ctrl+A      Toggle auto-scroll
+  Ctrl+F      Search chat messages
   Ctrl+R      Search prompt history
   Up/Down     Browse prompt history
   F1          This help
@@ -282,6 +283,7 @@ SHORTCUTS_TEXT = """\
   /notify     Toggle notifications
   /timestamps Toggle timestamps
   /keys       This overlay
+  /search     Search chat messages
   /compact    Clear chat, keep session
   /quit       Quit
 
@@ -387,6 +389,7 @@ class AmplifierChicApp(App):
         Binding("ctrl+l", "clear_chat", "Clear", show=False),
         Binding("ctrl+m", "bookmark_last", "Bookmark", show=False),
         Binding("ctrl+r", "search_history", "History", show=False),
+        Binding("ctrl+f", "search_chat", "Search", show=False),
         Binding("ctrl+q", "quit", "Quit", show=True),
     ]
 
@@ -443,6 +446,9 @@ class AmplifierChicApp(App):
         self._stream_widget: Static | None = None
         self._stream_container: Collapsible | None = None
         self._stream_block_type: str | None = None
+
+        # Search index: parallel list of (role, text, widget) for /search
+        self._search_messages: list[tuple[str, str, Static | None]] = []
 
     # ── Layout ──────────────────────────────────────────────────
 
@@ -845,6 +851,16 @@ class AmplifierChicApp(App):
 
         self.push_screen(HistorySearchScreen(self._history), _on_result)
 
+    def action_search_chat(self) -> None:
+        """Focus the input and pre-fill /search for quick chat searching (Ctrl+F)."""
+        try:
+            input_widget = self.query_one("#chat-input", ChatInput)
+            input_widget.clear()
+            input_widget.insert("/search ")
+            input_widget.focus()
+        except Exception:
+            pass
+
     async def action_quit(self) -> None:
         """Clean up the Amplifier session before quitting.
 
@@ -912,6 +928,7 @@ class AmplifierChicApp(App):
         self._assistant_msg_index = 0
         self._last_assistant_widget = None
         self._session_bookmarks = []
+        self._search_messages = []
         self._session_start_time = time.monotonic()
         self._update_word_count_display()
         self.query_one("#chat-input", ChatInput).focus()
@@ -926,6 +943,7 @@ class AmplifierChicApp(App):
         self._tool_call_count = 0
         self._user_words = 0
         self._assistant_words = 0
+        self._search_messages = []
         self._update_word_count_display()
 
     def action_toggle_auto_scroll(self) -> None:
@@ -1137,6 +1155,7 @@ class AmplifierChicApp(App):
             "/bookmark": lambda: self._cmd_bookmark(text),
             "/bm": lambda: self._cmd_bookmark(text),
             "/bookmarks": lambda: self._cmd_bookmarks(text),
+            "/search": lambda: self._cmd_search(text),
         }
 
         handler = handlers.get(cmd)
@@ -1169,6 +1188,7 @@ class AmplifierChicApp(App):
             "  /timestamps   Toggle message timestamps on/off\n"
             "  /theme        Switch color theme (dark, light, solarized)\n"
             "  /focus        Toggle focus mode (hide chrome)\n"
+            "  /search       Search chat messages (e.g. /search my query)\n"
             "  /compact      Clear chat, keep session\n"
             "  /keys         Keyboard shortcut overlay\n"
             "  /quit         Quit\n"
@@ -1181,6 +1201,7 @@ class AmplifierChicApp(App):
             "  F1            Keyboard shortcuts overlay\n"
             "  F11           Toggle focus mode (hide chrome)\n"
             "  Ctrl+A        Toggle auto-scroll\n"
+            "  Ctrl+F        Search chat messages\n"
             "  Ctrl+G        Open $EDITOR for longer prompts\n"
             "  Ctrl+Y        Copy last response to clipboard\n"
             "  Ctrl+M        Bookmark last response\n"
@@ -1343,7 +1364,54 @@ class AmplifierChicApp(App):
         chat_view = self.query_one("#chat-view", ScrollableContainer)
         for child in list(chat_view.children):
             child.remove()
+        self._search_messages = []
         self._add_system_message("Chat cleared. Session continues.")
+
+    def _cmd_search(self, text: str) -> None:
+        """Search all chat messages for a query string."""
+        parts = text.strip().split(None, 1)
+        query = parts[1] if len(parts) > 1 else ""
+        if not query:
+            self._add_system_message("Usage: /search <query>")
+            return
+
+        query_lower = query.lower()
+        matches: list[dict] = []
+
+        for i, (role, msg_text, widget) in enumerate(self._search_messages):
+            if query_lower in msg_text.lower():
+                idx = msg_text.lower().index(query_lower)
+                start = max(0, idx - 30)
+                end = min(len(msg_text), idx + len(query) + 30)
+                snippet = msg_text[start:end].replace("\n", " ")
+                if start > 0:
+                    snippet = "..." + snippet
+                if end < len(msg_text):
+                    snippet = snippet + "..."
+                matches.append(
+                    {"index": i + 1, "role": role, "snippet": snippet, "widget": widget}
+                )
+
+        if not matches:
+            self._add_system_message(f"No matches found for '{query}'")
+            return
+
+        count = len(matches)
+        label = "match" if count == 1 else "matches"
+        lines = [f"Found {count} {label} for '{query}':"]
+        for m in matches[:20]:
+            lines.append(f"  [{m['role']}] {m['snippet']}")
+        if count > 20:
+            lines.append(f"  ... and {count - 20} more")
+        self._add_system_message("\n".join(lines))
+
+        # Scroll to the first match
+        first_widget = matches[0].get("widget")
+        if first_widget is not None:
+            try:
+                first_widget.scroll_visible()
+            except Exception:
+                pass
 
     def _cmd_focus(self) -> None:
         """Toggle focus mode via slash command."""
@@ -1964,6 +2032,7 @@ class AmplifierChicApp(App):
         chat_view.mount(msg)
         self._style_user(msg)
         self._scroll_if_auto(msg)
+        self._search_messages.append(("user", text, msg))
         words = self._count_words(text)
         self._total_words += words
         self._user_message_count += 1
@@ -1983,6 +2052,7 @@ class AmplifierChicApp(App):
         self._scroll_if_auto(msg)
         self._last_assistant_text = text
         self._last_assistant_widget = msg
+        self._search_messages.append(("assistant", text, msg))
         words = self._count_words(text)
         self._total_words += words
         self._assistant_message_count += 1
@@ -1999,6 +2069,7 @@ class AmplifierChicApp(App):
         chat_view.mount(msg)
         self._style_system(msg)
         self._scroll_if_auto(msg)
+        self._search_messages.append(("system", text, msg))
 
     def _add_thinking_block(self, text: str) -> None:
         chat_view = self.query_one("#chat-view", ScrollableContainer)
@@ -2499,6 +2570,7 @@ class AmplifierChicApp(App):
                 old.remove()
                 self._scroll_if_auto(msg)
                 self._last_assistant_widget = msg
+                self._search_messages.append(("assistant", text, msg))
                 words = self._count_words(text)
                 self._total_words += words
                 self._assistant_message_count += 1
@@ -2599,6 +2671,7 @@ class AmplifierChicApp(App):
         self._assistant_msg_index = 0
         self._last_assistant_widget = None
         self._session_start_time = time.monotonic()
+        self._search_messages = []
         tool_results: dict[str, str] = {}
 
         for msg in load_transcript(transcript_path):
@@ -2615,6 +2688,7 @@ class AmplifierChicApp(App):
                     widget = UserMessage(block.content)
                     chat_view.mount(widget)
                     self._style_user(widget)
+                    self._search_messages.append(("user", block.content, widget))
                     words = self._count_words(block.content)
                     self._total_words += words
                     self._user_message_count += 1
@@ -2633,6 +2707,7 @@ class AmplifierChicApp(App):
                     self._last_assistant_widget = widget
                     chat_view.mount(widget)
                     self._style_assistant(widget)
+                    self._search_messages.append(("assistant", block.content, widget))
                     words = self._count_words(block.content)
                     self._total_words += words
                     self._assistant_message_count += 1
