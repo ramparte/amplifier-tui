@@ -48,6 +48,7 @@ from .preferences import (
     save_autosave_enabled,
     save_colors,
     save_compact_mode,
+    save_context_window_size,
     save_notification_enabled,
     save_notification_min_seconds,
     save_notification_sound,
@@ -55,6 +56,7 @@ from .preferences import (
     save_preferred_model,
     save_session_sort,
     save_show_timestamps,
+    save_show_token_usage,
     save_streaming_enabled,
     save_theme_name,
     save_multiline_default,
@@ -140,6 +142,8 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/drafts",
     "/tokens",
     "/context",
+    "/showtokens",
+    "/contextwindow",
     "/sort",
     "/edit",
     "/editor",
@@ -1403,6 +1407,8 @@ SHORTCUTS_TEXT = """\
   /run <cmd>       Run shell command inline (/! shorthand)
   /tokens          Token/context usage
   /context         Context window details
+  /showtokens      Toggle token display
+  /contextwindow   Set context window size
 
  FILES ─────────────────────────────────────
   /attach <path>   Attach file(s) to next message
@@ -1602,6 +1608,8 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/stats", "Session statistics (tools, tokens, time)", "/stats"),
     ("/tokens", "Detailed token and context usage breakdown", "/tokens"),
     ("/context", "Visual context window usage bar", "/context"),
+    ("/showtokens", "Toggle token/context usage in status bar", "/showtokens"),
+    ("/contextwindow", "Set context window size (e.g. 128k, auto)", "/contextwindow"),
     ("/info", "Session details (ID, model, project, counts)", "/info"),
     ("/copy", "Copy last response (last, N, all, code)", "/copy"),
     ("/bookmark", "Bookmark last AI response", "/bookmark"),
@@ -4915,6 +4923,8 @@ class AmplifierChicApp(App):
             "/stats": lambda: self._cmd_stats(args),
             "/tokens": self._cmd_tokens,
             "/context": self._cmd_context,
+            "/showtokens": lambda: self._cmd_showtokens(text),
+            "/contextwindow": lambda: self._cmd_contextwindow(text),
             "/info": self._cmd_info,
             "/theme": lambda: self._cmd_theme(text),
             "/export": lambda: self._cmd_export(text),
@@ -4997,6 +5007,8 @@ class AmplifierChicApp(App):
             "  /stats        Show session statistics | /stats tools | /stats tokens | /stats time\n"
             "  /tokens       Detailed token / context usage breakdown\n"
             "  /context      Visual context window usage bar\n"
+            "  /showtokens   Toggle token/context usage in status bar (/showtokens on|off)\n"
+            "  /contextwindow Set context window size (/contextwindow 128k, auto)\n"
             "  /info         Show session details (ID, model, project, counts)\n"
             "  /copy         Copy last response | /copy last | /copy N | /copy all | /copy code\n"
             "  /bookmark     Bookmark last response (/bm alias) | /bookmark N (toggle Nth from bottom)\n"
@@ -9819,19 +9831,27 @@ class AmplifierChicApp(App):
                 f"  Total:       ~{fmt(api_total)}",
             ]
 
+        # Rough cost estimate (~$3/1M input, ~$15/1M output for Claude 3.5)
+        input_cost = (est_user + est_sys) / 1_000_000 * 3.0
+        output_cost = est_asst / 1_000_000 * 15.0
+        if api_total > 0:
+            input_cost = input_tok / 1_000_000 * 3.0
+            output_cost = output_tok / 1_000_000 * 15.0
+        total_cost = input_cost + output_cost
+
         lines += [
             "",
             "Breakdown (~4 chars/token):",
-            f"  User:        ~{fmt(est_user)} tokens",
-            f"  Assistant:   ~{fmt(est_asst)} tokens",
-            f"  System:      ~{fmt(est_sys)} tokens",
+            f"  User:        ~{fmt(est_user)} tokens  ({user_msg_count} messages)",
+            f"  Assistant:   ~{fmt(est_asst)} tokens  ({asst_msg_count} messages)",
+            f"  System:      ~{fmt(est_sys)} tokens  ({sys_msg_count} messages)",
             "",
-            f"Messages: {msg_count} total"
-            f" ({user_msg_count} user,"
-            f" {asst_msg_count} assistant,"
-            f" {sys_msg_count} system)",
+            f"Messages: {msg_count} total",
+            f"  Est. cost:   ~${total_cost:.4f}"
+            f" (in ~${input_cost:.4f} + out ~${output_cost:.4f})",
             "",
             "Note: Token counts are estimates (~4 chars/token).",
+            "Cost assumes Claude 3.5 Sonnet pricing ($3/1M in, $15/1M out).",
             "Actual usage may vary by model tokenizer. Context also",
             "includes system prompts, tool schemas, and overhead",
             "(typically ~10-20K tokens). Use /compact to free space.",
@@ -9910,6 +9930,83 @@ class AmplifierChicApp(App):
             ]
 
         self._add_system_message("\n".join(lines))
+
+    def _cmd_showtokens(self, text: str) -> None:
+        """Toggle the status-bar token/context usage display on or off."""
+        parts = text.strip().split(None, 1)
+        arg = parts[1].strip().lower() if len(parts) > 1 else ""
+
+        if arg in ("on", "true", "1"):
+            enabled = True
+        elif arg in ("off", "false", "0"):
+            enabled = False
+        elif not arg:
+            enabled = not self._prefs.display.show_token_usage
+        else:
+            self._add_system_message("Usage: /showtokens [on|off]")
+            return
+
+        self._prefs.display.show_token_usage = enabled
+        save_show_token_usage(enabled)
+        self._update_token_display()
+
+        state = "ON" if enabled else "OFF"
+        self._add_system_message(f"Token usage display: {state}")
+
+    def _cmd_contextwindow(self, text: str) -> None:
+        """Set the context window size override (0 = auto-detect)."""
+        parts = text.strip().split(None, 1)
+        arg = parts[1].strip().lower() if len(parts) > 1 else ""
+
+        if not arg:
+            current = self._prefs.display.context_window_size
+            effective = self._get_context_window()
+            if current > 0:
+                self._add_system_message(
+                    f"Context window: {current:,} tokens (user override)\n"
+                    f"Use /contextwindow auto to auto-detect from model.\n"
+                    f"Use /contextwindow <number> to set a custom size."
+                )
+            else:
+                self._add_system_message(
+                    f"Context window: {effective:,} tokens (auto-detected)\n"
+                    f"Use /contextwindow <number> to override (e.g. 128000).\n"
+                    f"Use /contextwindow auto to reset to auto-detect."
+                )
+            return
+
+        if arg in ("auto", "0", "reset"):
+            size = 0
+        else:
+            try:
+                # Accept shorthand like "128k" or "200K"
+                if arg.endswith("k"):
+                    size = int(float(arg[:-1]) * 1_000)
+                elif arg.endswith("m"):
+                    size = int(float(arg[:-1]) * 1_000_000)
+                else:
+                    size = int(arg)
+            except ValueError:
+                self._add_system_message(
+                    "Usage: /contextwindow <size|auto>\n"
+                    "Examples: /contextwindow 128000, /contextwindow 128k, "
+                    "/contextwindow auto"
+                )
+                return
+
+        self._prefs.display.context_window_size = size
+        save_context_window_size(size)
+        self._update_token_display()
+
+        if size > 0:
+            self._add_system_message(
+                f"Context window set to {size:,} tokens (user override)"
+            )
+        else:
+            effective = self._get_context_window()
+            self._add_system_message(
+                f"Context window: auto-detect ({effective:,} tokens)"
+            )
 
     def _cmd_theme(self, text: str) -> None:
         """Switch color theme or show current/available themes."""
@@ -12054,9 +12151,16 @@ class AmplifierChicApp(App):
     def _get_context_window(self) -> int:
         """Get context window size for the current model.
 
-        Uses the provider-reported value when available, otherwise falls
-        back to ``MODEL_CONTEXT_WINDOWS`` keyed by model name substring.
+        If the user has set a non-zero ``context_window_size`` preference it
+        takes priority.  Otherwise uses the provider-reported value when
+        available, falling back to ``MODEL_CONTEXT_WINDOWS`` keyed by model
+        name substring.
         """
+        # User-configured override (0 = auto-detect)
+        override = self._prefs.display.context_window_size
+        if override > 0:
+            return override
+
         sm = self.session_manager
         if sm and sm.context_window > 0:
             return sm.context_window
@@ -12079,6 +12183,12 @@ class AmplifierChicApp(App):
     def _update_token_display(self) -> None:
         """Update the status bar with current token usage and model info."""
         try:
+            # Honour the show_token_usage preference
+            if not self._prefs.display.show_token_usage:
+                self.query_one("#status-model", Static).update("")
+                self.query_one("#status-context", Static).update("")
+                return
+
             sm = self.session_manager
             parts: list[str] = []
 

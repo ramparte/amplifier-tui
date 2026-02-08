@@ -291,6 +291,8 @@ display:
   vim_mode: false                # vim-style keybindings in input area
   streaming_enabled: true        # progressive token streaming (tokens appear as they arrive)
   multiline_default: false       # start in multiline mode (Enter = newline, Ctrl+Enter = send)
+  show_token_usage: true         # show token/context gauge in status bar
+  context_window_size: 0         # override context window size (0 = auto-detect from model)
 
 model:
   preferred: ""                   # preferred model for new sessions (empty = use default)
@@ -356,6 +358,8 @@ class DisplayPreferences:
     streaming_enabled: bool = True  # Progressive token streaming display
     editor_auto_send: bool = False  # Auto-send message after external editor closes
     multiline_default: bool = False  # Start in multiline mode
+    show_token_usage: bool = True  # Show token/context gauge in status bar
+    context_window_size: int = 0  # Override context window (0 = auto-detect from model)
 
 
 @dataclass
@@ -437,6 +441,12 @@ def load_preferences(path: Path | None = None) -> Preferences:
                     prefs.display.streaming_enabled = bool(ddata["streaming_enabled"])
                 if "multiline_default" in ddata:
                     prefs.display.multiline_default = bool(ddata["multiline_default"])
+                if "show_token_usage" in ddata:
+                    prefs.display.show_token_usage = bool(ddata["show_token_usage"])
+                if "context_window_size" in ddata:
+                    prefs.display.context_window_size = int(
+                        ddata["context_window_size"] or 0
+                    )
             if isinstance(data.get("model"), dict):
                 mdata = data["model"]
                 if "preferred" in mdata:
@@ -1170,6 +1180,89 @@ def save_autosave_interval(seconds: int, path: Path | None = None) -> None:
             )
         else:
             text = text.rstrip() + f"\n\nautosave:\n  interval: {value}\n"
+
+        path.write_text(text)
+    except Exception:
+        pass  # Best-effort persistence
+
+
+def save_show_token_usage(enabled: bool, path: Path | None = None) -> None:
+    """Persist the show_token_usage display preference to the preferences file.
+
+    Surgically updates only the show_token_usage value, preserving the rest of
+    the file (including user comments) as-is.
+    """
+    import re
+
+    path = path or PREFS_PATH
+    try:
+        if path.exists():
+            text = path.read_text()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = _DEFAULT_YAML
+
+        value = "true" if enabled else "false"
+        if re.search(r"^\s+show_token_usage:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(\s+show_token_usage:).*$",
+                f"\\1 {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        elif re.search(r"^display:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(display:.*)$",
+                f"\\1\n  show_token_usage: {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            text = text.rstrip() + f"\n\ndisplay:\n  show_token_usage: {value}\n"
+
+        path.write_text(text)
+    except Exception:
+        pass  # Best-effort persistence
+
+
+def save_context_window_size(size: int, path: Path | None = None) -> None:
+    """Persist the context_window_size display preference to the preferences file.
+
+    Surgically updates only the context_window_size value, preserving the rest
+    of the file (including user comments) as-is.  A value of 0 means
+    auto-detect from model.
+    """
+    import re
+
+    path = path or PREFS_PATH
+    try:
+        if path.exists():
+            text = path.read_text()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = _DEFAULT_YAML
+
+        value = str(max(0, size))
+        if re.search(r"^\s+context_window_size:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(\s+context_window_size:).*$",
+                f"\\1 {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        elif re.search(r"^display:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(display:.*)$",
+                f"\\1\n  context_window_size: {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            text = text.rstrip() + f"\n\ndisplay:\n  context_window_size: {value}\n"
 
         path.write_text(text)
     except Exception:
