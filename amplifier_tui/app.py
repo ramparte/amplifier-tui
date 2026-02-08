@@ -850,7 +850,7 @@ SHORTCUTS_TEXT = """\
 
  EXPORT & DATA ─────────────────────────
   /export          Export chat (md/txt/json)
-  /diff            Show git changes
+  /diff            Show git diff (color-coded)
   /watch           Watch files for changes
   /tokens          Token/context usage
   /context         Context window details
@@ -2860,7 +2860,7 @@ class AmplifierChicApp(App):
             "  /focus        Toggle focus mode (/focus on, /focus off)\n"
             "  /search       Search chat messages (e.g. /search my query)\n"
             "  /grep         Search with options (/grep <pattern>, /grep -c <pattern> for case-sensitive)\n"
-            "  /diff         Show git changes (/diff <file|all|staged|last>)\n"
+            "  /diff         Show git diff (/diff staged|all|last|<file>|<f1> <f2>|HEAD~N)\n"
             "  /watch        Watch files for changes (/watch <path>, stop, diff)\n"
             "  /sort         Sort sessions: date, name, project (/sort <mode>)\n"
             "  /edit         Open $EDITOR for longer prompts (same as Ctrl+G)\n"
@@ -4134,8 +4134,82 @@ class AmplifierChicApp(App):
         except Exception as exc:
             return False, str(exc)
 
+    # ------------------------------------------------------------------
+    # Diff display helpers
+    # ------------------------------------------------------------------
+
+    def _looks_like_commit_ref(self, text: str) -> bool:
+        """Check if *text* looks like a git commit reference."""
+        if text.startswith("HEAD"):
+            return True
+        # SHA-like hex string (7-40 chars)
+        if re.fullmatch(r"[0-9a-fA-F]{7,40}", text):
+            return True
+        # Contains ~ or ^ (e.g., main~3, abc123^2)
+        if "~" in text or "^" in text:
+            return True
+        return False
+
+    def _colorize_diff(self, diff_text: str) -> str:
+        """Apply Rich markup colors to diff output."""
+        from rich.markup import escape
+
+        lines: list[str] = []
+        for line in diff_text.split("\n"):
+            escaped = escape(line)
+            if line.startswith("+++") or line.startswith("---"):
+                lines.append(f"[bold]{escaped}[/bold]")
+            elif line.startswith("@@"):
+                lines.append(f"[cyan]{escaped}[/cyan]")
+            elif line.startswith("+"):
+                lines.append(f"[green]{escaped}[/green]")
+            elif line.startswith("-"):
+                lines.append(f"[red]{escaped}[/red]")
+            elif line.startswith("diff "):
+                lines.append(f"[bold yellow]{escaped}[/bold yellow]")
+            else:
+                lines.append(escaped)
+        return "\n".join(lines)
+
+    def _show_diff(self, diff_output: str, header: str = "") -> None:
+        """Display colorized diff output, truncating if too large."""
+        max_lines = 500
+        all_lines = diff_output.split("\n")
+        total = len(all_lines)
+        truncated = total > max_lines
+
+        text = "\n".join(all_lines[:max_lines]) if truncated else diff_output
+        colored = self._colorize_diff(text)
+
+        if header:
+            from rich.markup import escape
+
+            colored = escape(header) + colored
+
+        if truncated:
+            colored += (
+                f"\n\n... truncated ({total} total lines)."
+                " Use /diff <file> to see specific files."
+            )
+
+        self._add_system_message(colored)
+
+    # ------------------------------------------------------------------
+    # /diff command
+    # ------------------------------------------------------------------
+
     def _cmd_diff(self, text: str) -> None:
-        """Show git diff / status information."""
+        """Show git diff with color-coded output.
+
+        /diff              Unstaged changes (or file summary when clean)
+        /diff staged       Staged changes
+        /diff all          All unstaged (+ staged fallback)
+        /diff last         Changes in last commit
+        /diff <file>       Diff for one file (tries staged too)
+        /diff <f1> <f2>    Compare two files
+        /diff HEAD~N       Changes since N commits ago
+        /diff <commit>     Changes since a commit
+        """
         text = text.strip()
 
         # Check if we're inside a git repo
@@ -4144,51 +4218,55 @@ class AmplifierChicApp(App):
             self._add_system_message("Not in a git repository")
             return
 
-        # --- /diff  (no args) -> file summary ---
+        # --- /diff (no args) -> unstaged diff, or status summary ---
         if not text:
-            ok, output = self._run_git("status", "--short")
+            ok, output = self._run_git("diff", "--color=never")
             if not ok:
                 self._add_system_message(f"git error: {output}")
                 return
             if not output:
-                self._add_system_message("No changes detected (working tree clean)")
+                # No unstaged diff — show status summary as guidance
+                ok, status = self._run_git("status", "--short")
+                if not ok or not status:
+                    self._add_system_message("No changes detected (working tree clean)")
+                    return
+                lines = ["No unstaged changes. Changed files:", ""]
+                for line in status.split("\n"):
+                    if line.strip():
+                        lines.append(f"  {line}")
+                lines.append("")
+                lines.append("Use /diff staged, /diff <file>, or /diff all")
+                self._add_system_message("\n".join(lines))
                 return
-
-            lines = ["Changed files:", ""]
-            for line in output.split("\n"):
-                if line.strip():
-                    lines.append(f"  {line}")
-            lines.append("")
-            lines.append("Use /diff <file> for details, /diff all for everything")
-            self._add_system_message("\n".join(lines))
+            self._show_diff(output)
             return
 
         # --- /diff all ---
         if text == "all":
-            ok, output = self._run_git("diff")
+            ok, output = self._run_git("diff", "--color=never")
             if not ok or not output:
                 # Also check staged changes
-                ok2, staged = self._run_git("diff", "--staged")
+                ok2, staged = self._run_git("diff", "--staged", "--color=never")
                 if staged:
                     output = staged
                 elif not output:
-                    self._add_system_message("No unstaged changes")
+                    self._add_system_message("No changes")
                     return
-            self._add_system_message(f"```diff\n{output}\n```")
+            self._show_diff(output)
             return
 
         # --- /diff staged ---
         if text == "staged":
-            ok, output = self._run_git("diff", "--staged")
+            ok, output = self._run_git("diff", "--staged", "--color=never")
             if not ok or not output:
                 self._add_system_message("No staged changes")
                 return
-            self._add_system_message(f"```diff\n{output}\n```")
+            self._show_diff(output)
             return
 
         # --- /diff last ---
         if text == "last":
-            ok, output = self._run_git("diff", "HEAD~1", "HEAD")
+            ok, output = self._run_git("diff", "HEAD~1", "HEAD", "--color=never")
             if not ok:
                 self._add_system_message(f"git error: {output}")
                 return
@@ -4198,21 +4276,53 @@ class AmplifierChicApp(App):
             # Prepend the commit summary line when available
             ok2, msg = self._run_git("log", "-1", "--oneline")
             header = f"Last commit: {msg}\n\n" if ok2 and msg else ""
-            self._add_system_message(f"{header}```diff\n{output}\n```")
+            self._show_diff(output, header=header)
+            return
+
+        # --- /diff <file1> <file2> (two paths) ---
+        if " " in text:
+            parts = text.split(None, 1)
+            if len(parts) == 2:
+                # --no-index returns exit-code 1 when files differ (normal)
+                _ok, output = self._run_git(
+                    "diff",
+                    "--no-index",
+                    "--color=never",
+                    parts[0],
+                    parts[1],
+                )
+                if not output:
+                    self._add_system_message(
+                        f"No differences between '{parts[0]}' and '{parts[1]}'"
+                    )
+                    return
+                self._show_diff(output)
+                return
+
+        # --- /diff HEAD~N or commit-ish ---
+        if self._looks_like_commit_ref(text):
+            ok, output = self._run_git("diff", text, "--color=never")
+            if not ok:
+                self._add_system_message(f"git error: {output}")
+                return
+            if not output:
+                self._add_system_message(f"No changes from {text}")
+                return
+            self._show_diff(output)
             return
 
         # --- /diff <file> ---
-        ok, output = self._run_git("diff", text)
+        ok, output = self._run_git("diff", "--color=never", "--", text)
         if not ok:
             self._add_system_message(f"git error: {output}")
             return
         if not output:
             # Try staged changes for this file
-            ok, output = self._run_git("diff", "--staged", text)
+            ok, output = self._run_git("diff", "--staged", "--color=never", "--", text)
             if not ok or not output:
                 self._add_system_message(f"No changes for '{text}'")
                 return
-        self._add_system_message(f"```diff\n{output}\n```")
+        self._show_diff(output)
 
     def _cmd_focus(self, text: str = "") -> None:
         """Toggle focus mode via slash command.
