@@ -106,6 +106,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/info",
     "/fold",
     "/history",
+    "/grep",
 )
 
 # Known context window sizes (tokens) for popular models.
@@ -564,6 +565,7 @@ SHORTCUTS_TEXT = """\
   /wrap       Toggle word wrap
   /keys       This overlay
   /search     Search chat messages
+  /grep       Search chat (/grep -c for case-sensitive)
   /sort       Sort sessions (date/name/project)
   /edit       Open $EDITOR for longer prompts
   /alias      List/create/remove shortcuts
@@ -1498,11 +1500,11 @@ class AmplifierChicApp(App):
             pass
 
     def action_search_chat(self) -> None:
-        """Focus the input and pre-fill /search for quick chat searching (Ctrl+F)."""
+        """Focus the input and pre-fill /grep for quick chat searching (Ctrl+F)."""
         try:
             input_widget = self.query_one("#chat-input", ChatInput)
             input_widget.clear()
-            input_widget.insert("/search ")
+            input_widget.insert("/grep ")
             input_widget.focus()
         except Exception:
             pass
@@ -1911,6 +1913,7 @@ class AmplifierChicApp(App):
             "/fold": lambda: self._cmd_fold(text),
             "/alias": lambda: self._cmd_alias(args),
             "/history": lambda: self._cmd_history(args),
+            "/grep": lambda: self._cmd_grep(text),
         }
 
         handler = handlers.get(cmd)
@@ -1951,6 +1954,7 @@ class AmplifierChicApp(App):
             "  /colors       View/set colors (/colors reset, /colors <key> <#hex>)\n"
             "  /focus        Toggle focus mode (hide chrome)\n"
             "  /search       Search chat messages (e.g. /search my query)\n"
+            "  /grep         Search with options (/grep <pattern>, /grep -c <pattern> for case-sensitive)\n"
             "  /sort         Sort sessions: date, name, project (/sort <mode>)\n"
             "  /edit         Open $EDITOR for longer prompts (same as Ctrl+G)\n"
             "  /draft        Show/save/clear input draft (/draft save, /draft clear)\n"
@@ -2267,6 +2271,81 @@ class AmplifierChicApp(App):
 
         # Scroll to the first match
         first_widget = matches[0].get("widget")
+        if first_widget is not None:
+            try:
+                first_widget.scroll_visible()
+            except Exception:
+                pass
+
+    def _cmd_grep(self, text: str) -> None:
+        """Search chat messages with options (case-sensitive flag, role labels)."""
+        parts = text.strip().split(None, 1)
+        args = parts[1] if len(parts) > 1 else ""
+
+        if not args.strip():
+            self._add_system_message(
+                "Usage: /grep <pattern>  (search conversation, case-insensitive)\n"
+                "       /grep -c <pattern>  (case-sensitive search)"
+            )
+            return
+
+        # Parse flags
+        case_sensitive = False
+        pattern = args.strip()
+        if pattern.startswith("-c "):
+            case_sensitive = True
+            pattern = pattern[3:].strip()
+
+        if not pattern:
+            self._add_system_message("Please provide a search pattern.")
+            return
+
+        if not self._search_messages:
+            self._add_system_message("No messages to search.")
+            return
+
+        # Search through messages
+        search_pat = pattern if case_sensitive else pattern.lower()
+        matches: list[tuple[int, str, str, "Static | None"]] = []
+
+        for i, (role, msg_text, widget) in enumerate(self._search_messages):
+            text_to_search = msg_text if case_sensitive else msg_text.lower()
+            if search_pat not in text_to_search:
+                continue
+            # Find matching lines for context
+            for line in msg_text.split("\n"):
+                line_search = line if case_sensitive else line.lower()
+                if search_pat in line_search:
+                    preview = line.strip()
+                    if len(preview) > 80:
+                        preview = preview[:80] + "..."
+                    matches.append((i, role, preview, widget))
+                    break  # one match per message is enough
+
+        if not matches:
+            flag_hint = "" if case_sensitive else " (case-insensitive)"
+            self._add_system_message(f"No matches for '{pattern}'{flag_hint}")
+            return
+
+        # Format results
+        count = len(matches)
+        label = "match" if count == 1 else "matches"
+        cs_label = " (case-sensitive)" if case_sensitive else ""
+        lines = [f"Found {count} {label} for '{pattern}'{cs_label}:"]
+
+        role_labels = {"user": "You", "assistant": "AI", "system": "Sys"}
+        shown = min(count, 20)
+        for msg_idx, role, preview, _widget in matches[:shown]:
+            role_label = role_labels.get(role, role)
+            lines.append(f"  [{role_label} #{msg_idx + 1}] {preview}")
+
+        if count > shown:
+            lines.append(f"  ... and {count - shown} more matches")
+
+        self._add_system_message("\n".join(lines))
+
+        # Scroll to the first match
+        first_widget = matches[0][3]
         if first_widget is not None:
             try:
                 first_widget.scroll_visible()
