@@ -120,6 +120,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/sound",
     "/scroll",
     "/timestamps",
+    "/ts",
     "/keys",
     "/stats",
     "/theme",
@@ -1388,7 +1389,7 @@ SHORTCUTS_TEXT = """\
   /theme [name]    Switch color theme (/theme preview)
   /colors          View/set text colors (/colors presets, /colors use <preset>)
   /wrap            Toggle word wrap
-  /timestamps      Toggle timestamps
+  /timestamps      Toggle timestamps (/ts)
   /focus           Toggle focus mode
   /stream          Toggle streaming display
   /scroll          Toggle auto-scroll
@@ -1627,6 +1628,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/sound", "Toggle notification sound (on, off, test)", "/sound"),
     ("/scroll", "Toggle auto-scroll on/off", "/scroll"),
     ("/timestamps", "Toggle message timestamps", "/timestamps"),
+    ("/ts", "Toggle message timestamps (alias for /timestamps)", "/ts"),
     ("/wrap", "Toggle word wrap (on, off)", "/wrap"),
     ("/fold", "Fold or unfold long messages", "/fold"),
     ("/fold all", "Fold all long messages", "/fold all"),
@@ -1964,6 +1966,7 @@ class AmplifierChicApp(App):
         self._sidebar_visible = False
         self._spinner_frame = 0
         self._spinner_timer: object | None = None
+        self._timestamp_timer: object | None = None
         self._processing_label: str | None = None
         self._status_activity_label: str = "Ready"
         self._prefs = load_preferences()
@@ -2189,6 +2192,10 @@ class AmplifierChicApp(App):
         # Start the spinner timer
         self._spinner_frame = 0
         self._spinner_timer = self.set_interval(0.3, self._animate_spinner)
+
+        # Periodic timestamp refresh (updates relative times like "2m ago")
+        if self._prefs.display.show_timestamps:
+            self._timestamp_timer = self.set_interval(30.0, self._refresh_timestamps)
 
         # Load pinned sessions
         self._pinned_sessions = self._load_pinned_sessions()
@@ -4903,6 +4910,7 @@ class AmplifierChicApp(App):
             "/sound": lambda: self._cmd_sound(text),
             "/scroll": self._cmd_scroll,
             "/timestamps": self._cmd_timestamps,
+            "/ts": self._cmd_timestamps,
             "/keys": self._cmd_keys,
             "/stats": lambda: self._cmd_stats(args),
             "/tokens": self._cmd_tokens,
@@ -5010,7 +5018,7 @@ class AmplifierChicApp(App):
             "  /notify       Toggle notifications (/notify on|off|sound|silent|flash|<secs>)\n"
             "  /sound        Toggle notification sound (/sound on|off|test)\n"
             "  /scroll       Toggle auto-scroll on/off\n"
-            "  /timestamps   Toggle message timestamps on/off\n"
+            "  /timestamps   Toggle message timestamps on/off (alias: /ts)\n"
             "  /wrap         Toggle word wrap on/off (/wrap on, /wrap off)\n"
             "  /fold         Fold last long message (/fold all, /fold none, /fold <n>)\n"
             "  /unfold       Unfold last folded message (/unfold all to unfold all)\n"
@@ -8591,7 +8599,39 @@ class AmplifierChicApp(App):
         # Show/hide existing timestamp widgets
         for ts_widget in self.query(".msg-timestamp"):
             ts_widget.display = self._prefs.display.show_timestamps
+        # Manage periodic refresh timer for relative timestamps
+        if self._prefs.display.show_timestamps:
+            self._refresh_timestamps()
+            if self._timestamp_timer is None:
+                self._timestamp_timer = self.set_interval(
+                    30.0, self._refresh_timestamps
+                )
+        else:
+            if self._timestamp_timer is not None:
+                self._timestamp_timer.stop()
+                self._timestamp_timer = None
         self._add_system_message(f"Timestamps {state}")
+
+    def _refresh_timestamps(self) -> None:
+        """Update all visible timestamp displays with current relative times."""
+        if not self._prefs.display.show_timestamps:
+            return
+        for ts_widget in self.query(".msg-timestamp"):
+            dt = getattr(ts_widget, "_created_at", None)
+            if dt is None:
+                continue
+            content: str = getattr(ts_widget, "_meta_content", "")
+            response_time: float | None = getattr(
+                ts_widget, "_meta_response_time", None
+            )
+            parts: list[str] = [self._format_timestamp(dt)]
+            if content:
+                tokens = len(content) // 4
+                if tokens > 0:
+                    parts.append(f"~{tokens} tokens")
+            if response_time is not None:
+                parts.append(f"⏱ {response_time:.1f}s")
+            ts_widget.update(" · ".join(parts))
 
     def _cmd_wrap(self, text: str) -> None:
         """Toggle word wrap on/off for chat messages."""
@@ -11443,6 +11483,9 @@ class AmplifierChicApp(App):
         if response_time is not None:
             parts.append(f"⏱ {response_time:.1f}s")
         widget = MessageMeta(" · ".join(parts), classes="msg-timestamp")
+        widget._created_at = dt  # type: ignore[attr-defined]
+        widget._meta_content = content  # type: ignore[attr-defined]
+        widget._meta_response_time = response_time  # type: ignore[attr-defined]
         widget.styles.color = self._prefs.colors.timestamp
         return widget
 
@@ -12513,7 +12556,9 @@ class AmplifierChicApp(App):
             for block in blocks:
                 if block.kind == "user":
                     if not ts_shown:
-                        ts_widget = self._make_timestamp(msg_ts, fallback_now=False)
+                        ts_widget = self._make_message_meta(
+                            dt=msg_ts, fallback_now=False
+                        )
                         if ts_widget:
                             chat_view.mount(ts_widget)
                         ts_shown = True
@@ -12529,7 +12574,9 @@ class AmplifierChicApp(App):
 
                 elif block.kind == "text":
                     if not ts_shown:
-                        ts_widget = self._make_timestamp(msg_ts, fallback_now=False)
+                        ts_widget = self._make_message_meta(
+                            dt=msg_ts, fallback_now=False
+                        )
                         if ts_widget:
                             chat_view.mount(ts_widget)
                         ts_shown = True
