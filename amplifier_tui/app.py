@@ -122,6 +122,8 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/undo",
     "/snippet",
     "/snippets",
+    "/template",
+    "/templates",
     "/title",
     "/diff",
     "/ref",
@@ -385,6 +387,39 @@ class ChatInput(TextArea):
                     self._tab_prefix = ""
                     return
                 self._tab_matches = snippet_matches
+                self._tab_prefix = text
+                self._tab_index = 0
+                self.clear()
+                self.insert(self._tab_matches[0])
+                return
+
+        # Template name completion for /template use|remove <name>
+        for prefix_cmd in (
+            "/template use ",
+            "/template remove ",
+        ):
+            if text.startswith(prefix_cmd):
+                partial = text[len(prefix_cmd) :]
+                app_templates = getattr(self.app, "_templates", {})
+                tmpl_matches = sorted(
+                    prefix_cmd + n for n in app_templates if n.startswith(partial)
+                )
+                if not tmpl_matches:
+                    return
+                if len(tmpl_matches) == 1:
+                    self.clear()
+                    self.insert(tmpl_matches[0])
+                    self._tab_matches = []
+                    self._tab_prefix = ""
+                    return
+                prefix = os.path.commonprefix(tmpl_matches)
+                if len(prefix) > len(text):
+                    self.clear()
+                    self.insert(prefix)
+                    self._tab_matches = []
+                    self._tab_prefix = ""
+                    return
+                self._tab_matches = tmpl_matches
                 self._tab_prefix = text
                 self._tab_index = 0
                 self.clear()
@@ -818,7 +853,8 @@ SHORTCUTS_TEXT = """\
  INPUT & SETTINGS ──────────────────────
   /edit            Open $EDITOR for input
   /draft           Save/load input drafts
-  /snippet         Prompt templates
+  /snippet         Prompt snippets
+  /template        Prompt templates with {{variables}}
   /alias           Custom command shortcuts
   /vim             Toggle vim keybindings
   /prefs           Preferences
@@ -929,6 +965,7 @@ class AmplifierChicApp(App):
     DRAFTS_FILE = Path.home() / ".amplifier" / "tui-drafts.json"
     ALIASES_FILE = Path.home() / ".amplifier" / "tui-aliases.json"
     SNIPPETS_FILE = Path.home() / ".amplifier" / "tui-snippets.json"
+    TEMPLATES_FILE = Path.home() / ".amplifier" / "tui-templates.json"
     SESSION_TITLES_FILE = Path.home() / ".amplifier" / "tui-session-titles.json"
     REFS_FILE = Path.home() / ".amplifier" / "tui-refs.json"
     CRASH_DRAFT_FILE = Path.home() / ".amplifier" / "tui-draft.txt"
@@ -939,6 +976,30 @@ class AmplifierChicApp(App):
         "refactor": "Refactor this code to be more readable, maintainable, and following best practices.",
         "test": "Write comprehensive tests for this code, covering edge cases and error conditions.",
         "doc": "Add clear documentation comments to this code.",
+    }
+
+    DEFAULT_TEMPLATES: dict[str, str] = {
+        "review": (
+            "Review this code for bugs, performance issues, and best practices:\n\n"
+            "```{{language}}\n{{code}}\n```"
+        ),
+        "explain": (
+            "Explain this {{language}} code in detail, covering what it does and why:\n\n"
+            "```{{language}}\n{{code}}\n```"
+        ),
+        "refactor": (
+            "Refactor this {{language}} code to improve {{aspect}}:\n\n"
+            "```{{language}}\n{{code}}\n```"
+        ),
+        "test": (
+            "Write comprehensive tests for this {{language}} function:\n\n"
+            "```{{language}}\n{{code}}\n```"
+        ),
+        "debug": (
+            "Help me debug this {{language}} code. The error is: {{error}}\n\n"
+            "```{{language}}\n{{code}}\n```"
+        ),
+        "commit": "Write a commit message for these changes:\n\n{{diff}}",
     }
 
     BINDINGS = [
@@ -1017,6 +1078,9 @@ class AmplifierChicApp(App):
 
         # Reusable prompt snippets
         self._snippets: dict[str, str] = {}
+
+        # Prompt templates with {{variable}} placeholders
+        self._templates: dict[str, str] = {}
 
         # Bookmark tracking
         self._assistant_msg_index: int = 0
@@ -1138,6 +1202,9 @@ class AmplifierChicApp(App):
 
         # Load reusable prompt snippets
         self._snippets = self._load_snippets()
+
+        # Load prompt templates with {{variable}} placeholders
+        self._templates = self._load_templates()
 
         # Periodic draft auto-save in case of crash
         self.set_interval(30, self._auto_save_draft)
@@ -1406,6 +1473,36 @@ class AmplifierChicApp(App):
             self.SNIPPETS_FILE.parent.mkdir(parents=True, exist_ok=True)
             self.SNIPPETS_FILE.write_text(
                 json.dumps(self._snippets, indent=2, sort_keys=True)
+            )
+        except Exception:
+            pass
+
+    # ── Templates ─────────────────────────────────────────
+
+    def _load_templates(self) -> dict[str, str]:
+        """Load prompt templates from the JSON file."""
+        try:
+            if self.TEMPLATES_FILE.exists():
+                return json.loads(self.TEMPLATES_FILE.read_text())
+        except Exception:
+            pass
+        # First run: seed with default templates
+        defaults = dict(self.DEFAULT_TEMPLATES)
+        try:
+            self.TEMPLATES_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self.TEMPLATES_FILE.write_text(
+                json.dumps(defaults, indent=2, sort_keys=True)
+            )
+        except Exception:
+            pass
+        return defaults
+
+    def _save_templates(self) -> None:
+        """Persist prompt templates."""
+        try:
+            self.TEMPLATES_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self.TEMPLATES_FILE.write_text(
+                json.dumps(self._templates, indent=2, sort_keys=True)
             )
         except Exception:
             pass
@@ -2651,6 +2748,8 @@ class AmplifierChicApp(App):
             "/undo": lambda: self._cmd_undo(args),
             "/snippet": lambda: self._cmd_snippet(args),
             "/snippets": lambda: self._cmd_snippet(""),
+            "/template": lambda: self._cmd_template(args),
+            "/templates": lambda: self._cmd_template(""),
             "/title": lambda: self._cmd_title(args),
             "/diff": lambda: self._cmd_diff(args),
             "/ref": lambda: self._cmd_ref(text),
@@ -2710,7 +2809,8 @@ class AmplifierChicApp(App):
             "  /sort         Sort sessions: date, name, project (/sort <mode>)\n"
             "  /edit         Open $EDITOR for longer prompts (same as Ctrl+G)\n"
             "  /draft        Show/save/clear/load input draft (/draft save, /draft clear, /draft load)\n"
-            "  /snippet      Prompt templates (/snippet save|use|remove|clear|<name>)\n"
+            "  /snippet      Prompt snippets (/snippet save|use|remove|clear|<name>)\n"
+            "  /template     Prompt templates with {{variables}} (/template save|use|remove|clear|<name>)\n"
             "  /alias        List/create/remove custom shortcuts\n"
             "  /compact      Toggle compact view mode (/compact on, /compact off)\n"
             "  /history      Browse input history (/history clear, /history <N>)\n"
@@ -2994,6 +3094,122 @@ class AmplifierChicApp(App):
                 os.unlink(tmpfile)
             except OSError:
                 pass
+
+    def _cmd_template(self, text: str) -> None:
+        """List, save, use, remove, or clear prompt templates with {{variable}} placeholders."""
+        text = text.strip()
+
+        if not text:
+            # List all templates
+            if not self._templates:
+                self._add_system_message(
+                    "No templates saved.\n"
+                    "Save: /template save <name> <text with {{vars}}>\n"
+                    "Use:  /template <name>"
+                )
+                return
+            lines = ["Saved templates:"]
+            for name, tmpl in sorted(self._templates.items()):
+                variables = re.findall(r"\{\{(\w+)\}\}", tmpl)
+                vars_str = (
+                    ", ".join(dict.fromkeys(variables)) if variables else "no variables"
+                )
+                preview = tmpl[:60].replace("\n", " ")
+                if len(tmpl) > 60:
+                    preview += "..."
+                lines.append(f"  {name:15s} ({vars_str})")
+                lines.append(f"                  {preview}")
+            lines.append("")
+            lines.append(f"{len(self._templates)} template(s)")
+            lines.append("Insert: /template <name>  |  Use: /template use <name>")
+            self._add_system_message("\n".join(lines))
+            return
+
+        parts = text.split(maxsplit=2)
+        subcmd = parts[0].lower()
+
+        if subcmd == "clear":
+            self._templates.clear()
+            self._save_templates()
+            self._add_system_message("All templates cleared")
+
+        elif subcmd == "save":
+            if len(parts) < 3:
+                self._add_system_message(
+                    "Usage: /template save <name> <text with {{vars}}>"
+                )
+                return
+            tname = parts[1]
+            if not re.match(r"^[a-zA-Z0-9_-]+$", tname):
+                self._add_system_message(
+                    "Template names must be alphanumeric "
+                    "(hyphens and underscores allowed)"
+                )
+                return
+            content = parts[2]
+            self._templates[tname] = content
+            self._save_templates()
+            variables = re.findall(r"\{\{(\w+)\}\}", content)
+            unique_vars = list(dict.fromkeys(variables))
+            self._add_system_message(
+                f"Template '{tname}' saved ({len(content)} chars)"
+                + (f" — variables: {', '.join(unique_vars)}" if unique_vars else "")
+            )
+
+        elif subcmd == "use":
+            # Insert template into input (doesn't send)
+            if len(parts) < 2:
+                self._add_system_message("Usage: /template use <name>")
+                return
+            tname = parts[1]
+            if tname not in self._templates:
+                self._add_system_message(f"No template named '{tname}'")
+                return
+            tmpl = self._templates[tname]
+            variables = re.findall(r"\{\{(\w+)\}\}", tmpl)
+            unique_vars = list(dict.fromkeys(variables))
+            try:
+                inp = self.query_one("#chat-input", ChatInput)
+                inp.clear()
+                inp.insert(tmpl)
+                inp.focus()
+            except Exception:
+                pass
+            if unique_vars:
+                self._add_system_message(
+                    f"Template '{tname}' inserted. "
+                    f"Fill in placeholders: {', '.join(unique_vars)}"
+                )
+            else:
+                self._add_system_message(f"Template '{tname}' inserted")
+
+        elif subcmd == "remove":
+            if len(parts) < 2:
+                self._add_system_message("Usage: /template remove <name>")
+                return
+            tname = parts[1]
+            if tname in self._templates:
+                del self._templates[tname]
+                self._save_templates()
+                self._add_system_message(f"Template '{tname}' removed")
+            else:
+                self._add_system_message(f"No template named '{tname}'")
+
+        else:
+            # Default: treat subcmd as a template name (shortcut for /template use <name>)
+            if subcmd in self._templates:
+                self._cmd_template(f"use {subcmd}")
+            else:
+                self._add_system_message(
+                    f"No template '{subcmd}'.\n"
+                    "Usage:\n"
+                    "  /template              List templates\n"
+                    "  /template save <name> <text>  Save template with {{vars}}\n"
+                    "  /template use <name>   Insert template into input\n"
+                    "  /template remove <name>  Remove template\n"
+                    "  /template clear        Remove all\n"
+                    "  /template <name>       Quick insert"
+                )
 
     def _cmd_draft(self, text: str) -> None:
         """Show, save, clear, or load the input draft."""
