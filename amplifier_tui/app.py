@@ -13,7 +13,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -1128,7 +1128,7 @@ SHORTCUTS_TEXT = """\
   /tab             Tab management
   /tabs            List open tabs
   /info            Session details
-  /stats           Session statistics (tools, tokens)
+  /stats           Session statistics (tools, tokens, time)
 
  CHAT & HISTORY ─────────────────────────
   /clear           Clear chat display
@@ -1343,7 +1343,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/sessions", "Toggle session sidebar", "/sessions"),
     ("/prefs", "Open preferences", "/preferences"),
     ("/model", "Show or switch AI model", "/model"),
-    ("/stats", "Session statistics (tools, tokens)", "/stats"),
+    ("/stats", "Session statistics (tools, tokens, time)", "/stats"),
     ("/tokens", "Detailed token and context usage breakdown", "/tokens"),
     ("/context", "Visual context window usage bar", "/context"),
     ("/info", "Session details (ID, model, project, counts)", "/info"),
@@ -4331,7 +4331,7 @@ class AmplifierChicApp(App):
             "  /sessions     Toggle session sidebar\n"
             "  /prefs        Show preferences\n"
             "  /model        Show/switch model | /model list | /model <name>\n"
-            "  /stats        Show session statistics | /stats tools | /stats tokens\n"
+            "  /stats        Show session statistics | /stats tools | /stats tokens | /stats time\n"
             "  /tokens       Detailed token / context usage breakdown\n"
             "  /context      Visual context window usage bar\n"
             "  /info         Show session details (ID, model, project, counts)\n"
@@ -7240,6 +7240,7 @@ class AmplifierChicApp(App):
             /stats          Full overview
             /stats tools    Detailed tool usage breakdown
             /stats tokens   Detailed token breakdown with cost estimate
+            /stats time     Detailed timing metrics
         """
         sub = text.strip().lower()
 
@@ -7249,10 +7250,13 @@ class AmplifierChicApp(App):
         if sub == "tokens":
             self._cmd_stats_tokens()
             return
+        if sub == "time":
+            self._cmd_stats_time()
+            return
         if sub:
             self._add_system_message(
                 f"Unknown subcommand: /stats {sub}\n"
-                "Usage: /stats | /stats tools | /stats tokens"
+                "Usage: /stats | /stats tools | /stats tokens | /stats time"
             )
             return
 
@@ -7284,6 +7288,23 @@ class AmplifierChicApp(App):
         user_w = self._format_count(self._user_words)
         asst_w = self._format_count(self._assistant_words)
 
+        # --- Character counts & code blocks from _search_messages ---
+        user_chars = 0
+        asst_chars = 0
+        code_blocks = 0
+        system_count = 0
+        for role, content, _widget in self._search_messages:
+            r = role.lower()
+            if r == "user":
+                user_chars += len(content or "")
+            elif r == "assistant":
+                asst_chars += len(content or "")
+                if content:
+                    code_blocks += content.count("```") // 2
+            elif r == "system":
+                system_count += 1
+        total_chars = user_chars + asst_chars
+
         # --- Token estimates (words * 1.3) ---
         total_words = self._user_words + self._assistant_words
         est_tokens = int(total_words * 1.3)
@@ -7306,10 +7327,17 @@ class AmplifierChicApp(App):
             f"  Messages:        {total_msgs} total",
             f"    You:           {self._user_message_count} ({user_w} words)",
             f"    AI:            {self._assistant_message_count} ({asst_w} words)",
+            f"    System:        {system_count}",
             f"    Tool calls:    {self._tool_call_count}",
             "",
+            f"  Characters:      {total_chars:,}",
+            f"    You:           {user_chars:,}",
+            f"    AI:            {asst_chars:,}",
             f"  Est. tokens:     ~{fmt(est_tokens)}",
         ]
+
+        if code_blocks:
+            lines.append(f"  Code blocks:     {code_blocks}")
 
         # Real API token data from session manager
         sm = self.session_manager
@@ -7325,6 +7353,11 @@ class AmplifierChicApp(App):
                 if window > 0:
                     pct = min(100.0, inp_tok / window * 100)
                     lines.append(f"  Context:         {pct:.1f}% of {fmt(window)}")
+                # Cost estimate summary (Claude Sonnet pricing)
+                cost_in = inp_tok * 3.0 / 1_000_000
+                cost_out = out_tok * 15.0 / 1_000_000
+                cost_total = cost_in + cost_out
+                lines.append(f"  Est. cost:       ${cost_total:.4f}")
 
         # --- Response times ---
         if self._response_times:
@@ -7352,8 +7385,16 @@ class AmplifierChicApp(App):
                     "(use /stats tools for full list)"
                 )
 
+        # --- Top words ---
+        top = self._top_words(self._search_messages)
+        if top:
+            lines.append("")
+            lines.append("  Top words:")
+            for word, cnt in top:
+                lines.append(f"    {word:<18s} {cnt}")
+
         lines.append("")
-        lines.append("Tip: /stats tools | /stats tokens for details")
+        lines.append("Tip: /stats tools | /stats tokens | /stats time")
 
         self._add_system_message("\n".join(lines))
 
@@ -7453,6 +7494,207 @@ class AmplifierChicApp(App):
         ]
 
         self._add_system_message("\n".join(lines))
+
+    def _cmd_stats_time(self) -> None:
+        """Show detailed timing metrics."""
+        elapsed = time.monotonic() - self._session_start_time
+
+        # Format duration nicely
+        if elapsed < 60:
+            duration = f"{elapsed:.0f}s"
+        elif elapsed < 3600:
+            m, s = divmod(int(elapsed), 60)
+            duration = f"{m}m {s}s"
+        else:
+            h, rem = divmod(int(elapsed), 3600)
+            m, s = divmod(rem, 60)
+            duration = f"{h}h {m}m {s}s"
+
+        lines: list[str] = [
+            "Timing Metrics",
+            "\u2500" * 40,
+            f"  Session duration:  {duration}",
+        ]
+
+        total_msgs = self._user_message_count + self._assistant_message_count
+        if total_msgs > 0:
+            avg_interval = elapsed / total_msgs
+            if avg_interval < 60:
+                interval_str = f"{avg_interval:.1f}s"
+            else:
+                interval_str = f"{avg_interval / 60:.1f}m"
+            lines.append(f"  Avg msg interval: {interval_str}")
+
+        if self._response_times:
+            times = self._response_times
+            avg_t = sum(times) / len(times)
+            min_t = min(times)
+            max_t = max(times)
+            total_wait = sum(times)
+            median_t = sorted(times)[len(times) // 2]
+
+            lines += [
+                "",
+                f"  Responses:         {len(times)} requests",
+                f"  Total wait:        {total_wait:.1f}s",
+                "",
+                "  Response Time Distribution",
+                "  " + "\u2500" * 28,
+                f"    Min:             {min_t:.1f}s",
+                f"    Median:          {median_t:.1f}s",
+                f"    Avg:             {avg_t:.1f}s",
+                f"    Max:             {max_t:.1f}s",
+            ]
+
+            # Standard deviation
+            if len(times) > 1:
+                mean = avg_t
+                variance = sum((t - mean) ** 2 for t in times) / (len(times) - 1)
+                std_dev = variance**0.5
+                lines.append(f"    Std dev:         {std_dev:.1f}s")
+
+            # Histogram buckets
+            if len(times) >= 3:
+                buckets = [
+                    ("< 2s", 0, 2),
+                    ("2-5s", 2, 5),
+                    ("5-10s", 5, 10),
+                    ("10-30s", 10, 30),
+                    ("> 30s", 30, float("inf")),
+                ]
+                lines.append("")
+                lines.append("  Response Histogram")
+                lines.append("  " + "\u2500" * 28)
+                for label, lo, hi in buckets:
+                    n = sum(1 for t in times if lo <= t < hi)
+                    if n > 0:
+                        bar_w = 12
+                        filled = max(1, int(n / len(times) * bar_w))
+                        bar = "\u2588" * filled + "\u2591" * (bar_w - filled)
+                        lines.append(f"    {label:<8s} {n:3d}  {bar}")
+
+            # Time trend (first half vs second half)
+            if len(times) >= 4:
+                mid = len(times) // 2
+                first_avg = sum(times[:mid]) / mid
+                second_avg = sum(times[mid:]) / (len(times) - mid)
+                if second_avg < first_avg * 0.9:
+                    trend = "\u2193 getting faster"
+                elif second_avg > first_avg * 1.1:
+                    trend = "\u2191 getting slower"
+                else:
+                    trend = "\u2192 stable"
+                lines += [
+                    "",
+                    f"  Trend:             {trend}",
+                    f"    First half avg:  {first_avg:.1f}s",
+                    f"    Second half avg: {second_avg:.1f}s",
+                ]
+        else:
+            lines += [
+                "",
+                "  (no response times recorded yet)",
+            ]
+
+        self._add_system_message("\n".join(lines))
+
+    @staticmethod
+    def _top_words(
+        messages: list[tuple[str, str, object]], n: int = 10
+    ) -> list[tuple[str, int]]:
+        """Get top N most frequent meaningful words from messages."""
+        stop_words = {
+            "the",
+            "a",
+            "an",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
+            "to",
+            "of",
+            "in",
+            "for",
+            "on",
+            "with",
+            "at",
+            "by",
+            "from",
+            "it",
+            "this",
+            "that",
+            "and",
+            "or",
+            "but",
+            "not",
+            "no",
+            "i",
+            "you",
+            "we",
+            "they",
+            "he",
+            "she",
+            "my",
+            "your",
+            "do",
+            "does",
+            "did",
+            "have",
+            "has",
+            "had",
+            "will",
+            "would",
+            "can",
+            "could",
+            "should",
+            "if",
+            "as",
+            "so",
+            "up",
+            "out",
+            "just",
+            "also",
+            "very",
+            "all",
+            "any",
+            "some",
+            "me",
+            "its",
+            "than",
+            "then",
+            "into",
+            "about",
+            "more",
+            "when",
+            "what",
+            "how",
+            "which",
+            "there",
+            "their",
+            "them",
+            "these",
+            "those",
+            "other",
+            "each",
+            "here",
+            "where",
+            "been",
+            "being",
+            "both",
+            "same",
+            "own",
+            "such",
+        }
+        words: list[str] = []
+        for role, content, _ in messages:
+            if role.lower() in ("user", "assistant") and content:
+                for word in content.lower().split():
+                    word = word.strip(".,!?:;\"'()[]{}#`*_-/\\")
+                    if len(word) > 2 and word not in stop_words and word.isalpha():
+                        words.append(word)
+        return Counter(words).most_common(n)
 
     @staticmethod
     def _format_count(n: int) -> str:
