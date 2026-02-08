@@ -117,6 +117,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/history",
     "/grep",
     "/redo",
+    "/undo",
     "/snippet",
     "/snippets",
     "/title",
@@ -630,6 +631,7 @@ SHORTCUTS_TEXT = """\
   /compact    Toggle compact view mode
   /fold       Fold/unfold long messages
   /history    Browse/clear input history
+  /undo [N]   Remove last (or last N) exchange(s)
   /redo [N]   Re-send last (or Nth-to-last) message
   /snippet    Prompt templates (save/use/remove/clear)
   /quit       Quit
@@ -785,6 +787,9 @@ class AmplifierChicApp(App):
 
         # Pending delete confirmation (two-step delete)
         self._pending_delete: str | None = None
+
+        # Pending undo confirmation (two-step for N>1)
+        self._pending_undo: int | None = None
 
         # Auto-scroll state
         self._auto_scroll = True
@@ -2263,6 +2268,7 @@ class AmplifierChicApp(App):
             "/history": lambda: self._cmd_history(args),
             "/grep": lambda: self._cmd_grep(text),
             "/redo": lambda: self._cmd_redo(args),
+            "/undo": lambda: self._cmd_undo(args),
             "/snippet": lambda: self._cmd_snippet(args),
             "/snippets": lambda: self._cmd_snippet(""),
             "/title": lambda: self._cmd_title(args),
@@ -2321,6 +2327,7 @@ class AmplifierChicApp(App):
             "  /alias        List/create/remove custom shortcuts\n"
             "  /compact      Toggle compact view mode (/compact on, /compact off)\n"
             "  /history      Browse input history (/history clear, /history <N>)\n"
+            "  /undo         Remove last exchange (/undo <N> for last N exchanges)\n"
             "  /redo         Re-send last user message (/redo <N> for Nth-to-last)\n"
             "  /keys         Keyboard shortcut overlay\n"
             "  /quit         Quit\n"
@@ -3424,6 +3431,195 @@ class AmplifierChicApp(App):
         )
         self._start_processing("Starting session" if not has_session else "Thinking")
         self._send_message_worker(message)
+
+    def _cmd_undo(self, text: str) -> None:
+        """Remove the last N user+assistant exchange(s) from the chat.
+
+        This removes messages from the display and internal tracking
+        (_search_messages, word counts).  Note: messages already sent to the
+        Amplifier session's LLM context cannot be retracted — this is a
+        UI-level undo only.
+        """
+        text = text.strip()
+
+        # Handle two-step confirmation for multi-exchange undo
+        if text == "confirm" and self._pending_undo is not None:
+            count = self._pending_undo
+            self._pending_undo = None
+            self._execute_undo(count)
+            return
+
+        if text == "cancel":
+            if self._pending_undo is not None:
+                self._pending_undo = None
+                self._add_system_message("Undo cancelled.")
+            else:
+                self._add_system_message("Nothing to cancel.")
+            return
+
+        # Parse optional count argument
+        count = 1
+        if text:
+            if text.isdigit():
+                count = int(text)
+                if count < 1:
+                    self._add_system_message(
+                        "Usage: /undo [N]  (remove last N exchanges, default: 1)"
+                    )
+                    return
+            else:
+                self._add_system_message(
+                    "Usage: /undo [N]  (remove last N exchanges, default: 1)"
+                )
+                return
+
+        # Guard: don't undo while processing
+        if self.is_processing:
+            self._add_system_message("Please wait for the current response to finish.")
+            return
+
+        # Check there are undoable messages
+        has_undoable = any(
+            role in ("user", "assistant") for role, _, _ in self._search_messages
+        )
+        if not has_undoable:
+            self._add_system_message("Nothing to undo.")
+            return
+
+        # For count > 1, require confirmation
+        if count > 1:
+            self._pending_undo = count
+            self._add_system_message(
+                f"Remove the last {count} exchange(s)?\n"
+                "Type /undo confirm to proceed or /undo cancel to abort."
+            )
+            return
+
+        self._execute_undo(count)
+
+    def _execute_undo(self, count: int) -> None:
+        """Remove the last *count* user+assistant exchanges from chat."""
+        # Walk backward through _search_messages collecting entries to remove.
+        # An "exchange" is an assistant message together with its preceding
+        # user message.  An orphan user message (no response yet) also counts
+        # as one exchange.
+        to_remove: list[tuple[str, str, Static | None]] = []
+        remaining = count
+        i = len(self._search_messages) - 1
+
+        while i >= 0 and remaining > 0:
+            role, _content, _widget = self._search_messages[i]
+
+            if role == "system":
+                # Skip system messages — never undo them
+                i -= 1
+                continue
+
+            if role == "assistant":
+                # Found an assistant message — include it
+                to_remove.append(self._search_messages[i])
+                # Look backward for the paired user message
+                j = i - 1
+                while j >= 0:
+                    r2 = self._search_messages[j][0]
+                    if r2 == "user":
+                        to_remove.append(self._search_messages[j])
+                        i = j - 1
+                        break
+                    elif r2 == "system":
+                        j -= 1
+                        continue
+                    else:
+                        # Adjacent assistant without a user — unusual but stop
+                        i = j - 1
+                        break
+                else:
+                    # Reached the beginning without finding a user message
+                    i = -1
+                remaining -= 1
+
+            elif role == "user":
+                # Orphan user message (no assistant response yet)
+                to_remove.append(self._search_messages[i])
+                remaining -= 1
+                i -= 1
+            else:
+                i -= 1
+
+        if not to_remove:
+            self._add_system_message("Nothing to undo.")
+            return
+
+        # Build a set of indices for fast removal from _search_messages
+        indices_to_remove: set[int] = set()
+        for entry in to_remove:
+            try:
+                idx = self._search_messages.index(entry)
+                indices_to_remove.add(idx)
+            except ValueError:
+                pass
+
+        # Remove widgets from the DOM (message + adjacent timestamp / fold toggle)
+        for _role, _content, widget in to_remove:
+            if widget is None:
+                continue
+
+            # Remove a FoldToggle that immediately follows the message
+            try:
+                next_sib = widget.next_sibling  # type: ignore[attr-defined]
+                if isinstance(next_sib, FoldToggle):
+                    next_sib.remove()
+            except Exception:
+                pass
+
+            # Remove a timestamp widget that immediately precedes the message
+            try:
+                prev_sib = widget.previous_sibling  # type: ignore[attr-defined]
+                if prev_sib is not None and prev_sib.has_class("msg-timestamp"):
+                    prev_sib.remove()
+            except Exception:
+                pass
+
+            # Remove the message widget itself
+            widget.remove()
+
+        # Adjust stats counters
+        for role, content, _widget in to_remove:
+            words = self._count_words(content)
+            self._total_words = max(0, self._total_words - words)
+            if role == "user":
+                self._user_message_count = max(0, self._user_message_count - 1)
+                self._user_words = max(0, self._user_words - words)
+            elif role == "assistant":
+                self._assistant_message_count = max(
+                    0, self._assistant_message_count - 1
+                )
+                self._assistant_words = max(0, self._assistant_words - words)
+
+        # Remove entries from _search_messages (in reverse index order)
+        for idx in sorted(indices_to_remove, reverse=True):
+            del self._search_messages[idx]
+
+        # If the last assistant widget was among those removed, update the ref
+        for _role, _content, widget in to_remove:
+            if widget is self._last_assistant_widget:
+                self._last_assistant_widget = None
+                self._last_assistant_text = ""
+                break
+
+        self._update_word_count_display()
+
+        # Feedback
+        exchanges = count - remaining
+        preview = to_remove[0][1][:60].replace("\n", " ")
+        if len(to_remove[0][1]) > 60:
+            preview += "\u2026"
+        self._add_system_message(
+            f"Undid {exchanges} exchange(s) "
+            f"({len(to_remove)} message{'s' if len(to_remove) != 1 else ''} removed)\n"
+            f"Last removed: {preview}\n"
+            "Note: messages remain in the LLM context for this session."
+        )
 
     def _cmd_keys(self) -> None:
         """Show the keyboard shortcut overlay."""
