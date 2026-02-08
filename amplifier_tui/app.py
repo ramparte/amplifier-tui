@@ -21,7 +21,7 @@ from textual.widgets import Collapsible, Input, Markdown, Static, TextArea, Tree
 from textual import work
 
 from .history import PromptHistory
-from .preferences import THEMES, load_preferences
+from .preferences import THEMES, load_preferences, save_preferred_model
 from .theme import CHIC_THEME
 
 # Tool name -> human-friendly status label (without trailing "...")
@@ -230,7 +230,7 @@ SHORTCUTS_TEXT = """\
   /new        New session
   /sessions   Toggle sidebar
   /prefs      Show preferences
-  /model      Show model info
+  /model      Model info / list / set
   /theme      Switch theme
   /export     Export to markdown
   /rename     Rename session
@@ -948,7 +948,7 @@ class AmplifierChicApp(App):
             "/sessions": self._cmd_sessions,
             "/preferences": self._cmd_prefs,
             "/prefs": self._cmd_prefs,
-            "/model": self._cmd_model,
+            "/model": lambda: self._cmd_model(text),
             "/quit": self._cmd_quit,
             "/exit": self._cmd_quit,
             "/focus": self._cmd_focus,
@@ -982,7 +982,7 @@ class AmplifierChicApp(App):
             "  /new          New session\n"
             "  /sessions     Toggle session sidebar\n"
             "  /prefs        Show preferences\n"
-            "  /model        Show model info\n"
+            "  /model        Show model info | /model list | /model <name>\n"
             "  /stats        Show session statistics\n"
             "  /copy         Copy last response to clipboard\n"
             "  /rename       Rename current session (e.g. /rename My Project)\n"
@@ -1051,43 +1051,111 @@ class AmplifierChicApp(App):
         ]
         self._add_system_message("\n".join(lines))
 
-    def _cmd_model(self) -> None:
-        if not self.session_manager:
-            self._add_system_message("No session manager available.")
+    def _cmd_model(self, text: str) -> None:
+        """Show model info, list available models, or set preferred model.
+
+        /model          Show current model and session token usage
+        /model list     Show common models
+        /model <name>   Set preferred model for new sessions
+        """
+        parts = text.strip().split(None, 1)
+        arg = parts[1].strip() if len(parts) > 1 else ""
+
+        if arg == "list":
+            self._cmd_model_list()
             return
 
+        if arg:
+            self._cmd_model_set(arg)
+            return
+
+        # No argument — show current model info
+        self._cmd_model_show()
+
+    def _cmd_model_show(self) -> None:
+        """Display current model, preferred model, and token usage."""
         sm = self.session_manager
         lines = ["Model Info\n"]
 
-        if sm.model_name:
-            lines.append(f"  Model:    {sm.model_name}")
+        current = sm.model_name if sm else ""
+        preferred = self._prefs.preferred_model
+
+        if current:
+            lines.append(f"  Model:      {current}")
         else:
-            lines.append("  Model:    (not set)")
+            lines.append("  Model:      (not set)")
 
-        total_in = getattr(sm, "total_input_tokens", 0)
-        total_out = getattr(sm, "total_output_tokens", 0)
-        ctx = getattr(sm, "context_window", 0)
+        if preferred:
+            if preferred != current:
+                lines.append(f"  Preferred:  {preferred}  (used on /new)")
+            else:
+                lines.append(f"  Preferred:  {preferred}  (active)")
 
-        if total_in or total_out:
-            lines.append(f"  Input:    {self._format_token_count(total_in)} tokens")
-            lines.append(f"  Output:   {self._format_token_count(total_out)} tokens")
-            lines.append(
-                f"  Total:    {self._format_token_count(total_in + total_out)} tokens"
-            )
-        else:
-            lines.append("  Tokens:   (no usage yet)")
+        if sm:
+            total_in = getattr(sm, "total_input_tokens", 0)
+            total_out = getattr(sm, "total_output_tokens", 0)
+            ctx = getattr(sm, "context_window", 0)
 
-        if ctx > 0:
-            pct = int((total_in + total_out) / ctx * 100) if ctx else 0
-            lines.append(
-                f"  Context:  {self._format_token_count(ctx)} window ({pct}% used)"
-            )
+            if total_in or total_out:
+                lines.append(
+                    f"  Input:      {self._format_token_count(total_in)} tokens"
+                )
+                lines.append(
+                    f"  Output:     {self._format_token_count(total_out)} tokens"
+                )
+                lines.append(
+                    f"  Total:      {self._format_token_count(total_in + total_out)} tokens"
+                )
+            else:
+                lines.append("  Tokens:     (no usage yet)")
 
-        sid = getattr(sm, "session_id", None)
-        if sid:
-            lines.append(f"  Session:  {sid[:12]}...")
+            if ctx > 0:
+                pct = int((total_in + total_out) / ctx * 100) if ctx else 0
+                lines.append(
+                    f"  Context:    {self._format_token_count(ctx)} window ({pct}% used)"
+                )
+
+            sid = getattr(sm, "session_id", None)
+            if sid:
+                lines.append(f"  Session:    {sid[:12]}...")
 
         self._add_system_message("\n".join(lines))
+
+    def _cmd_model_list(self) -> None:
+        """Show available models the user can select."""
+        models = [
+            ("claude-sonnet-4-20250514", "Anthropic"),
+            ("claude-haiku-35-20241022", "Anthropic"),
+            ("gpt-4o", "OpenAI"),
+            ("gpt-4o-mini", "OpenAI"),
+            ("o3", "OpenAI"),
+            ("o3-mini", "OpenAI"),
+        ]
+        current = self.session_manager.model_name if self.session_manager else ""
+        preferred = self._prefs.preferred_model
+
+        lines = ["Available Models\n"]
+        for name, provider in models:
+            marker = ""
+            if name == current:
+                marker = "  (current)"
+            elif name == preferred:
+                marker = "  (preferred)"
+            lines.append(f"  {provider:10s}  {name}{marker}")
+
+        lines.append("")
+        lines.append("Use /model <name> to set preferred model for new sessions.")
+        lines.append("The change takes effect on /new (next session).")
+        self._add_system_message("\n".join(lines))
+
+    def _cmd_model_set(self, name: str) -> None:
+        """Set the preferred model for new sessions."""
+        self._prefs.preferred_model = name
+        save_preferred_model(name)
+        self._update_token_display()
+        self._add_system_message(
+            f"Preferred model set to: {name}\nWill be used for new sessions (/new)."
+        )
 
     def _cmd_quit(self) -> None:
         # Use call_later so the current handler finishes before quit runs
@@ -1853,26 +1921,34 @@ class AmplifierChicApp(App):
 
     def _update_token_display(self) -> None:
         """Update the status bar with current token usage and model info."""
-        if not self.session_manager:
-            return
         try:
             sm = self.session_manager
             parts: list[str] = []
 
-            if sm.model_name:
-                name = sm.model_name
+            current_name = sm.model_name if sm else ""
+            preferred = self._prefs.preferred_model
+
+            if current_name:
+                name = current_name
                 if name.startswith("claude-"):
                     name = name[7:]
                 parts.append(name)
+            elif preferred:
+                # No active session — show the preferred model as a hint
+                pname = preferred
+                if pname.startswith("claude-"):
+                    pname = pname[7:]
+                parts.append(f"[{pname}]")
 
-            total = sm.total_input_tokens + sm.total_output_tokens
-            if total > 0 and sm.context_window > 0:
-                used = self._format_token_count(total)
-                cap = self._format_token_count(sm.context_window)
-                pct = int(total / sm.context_window * 100)
-                parts.append(f"{used}/{cap} ({pct}%)")
-            elif total > 0:
-                parts.append(f"{self._format_token_count(total)} tokens")
+            if sm:
+                total = sm.total_input_tokens + sm.total_output_tokens
+                if total > 0 and sm.context_window > 0:
+                    used = self._format_token_count(total)
+                    cap = self._format_token_count(sm.context_window)
+                    pct = int(total / sm.context_window * 100)
+                    parts.append(f"{used}/{cap} ({pct}%)")
+                elif total > 0:
+                    parts.append(f"{self._format_token_count(total)} tokens")
 
             self.query_one("#status-model", Static).update(
                 " | ".join(parts) if parts else ""

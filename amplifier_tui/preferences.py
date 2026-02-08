@@ -90,6 +90,9 @@ notifications:
 
 display:
   show_timestamps: true          # show HH:MM timestamps on messages
+
+model:
+  preferred: ""                   # preferred model for new sessions (empty = use default)
 """
 
 
@@ -136,6 +139,7 @@ class Preferences:
         default_factory=NotificationPreferences
     )
     display: DisplayPreferences = field(default_factory=DisplayPreferences)
+    preferred_model: str = ""  # Empty means use default from bundle config
 
     def apply_theme(self, name: str) -> bool:
         """Apply a built-in theme by name. Returns False if unknown."""
@@ -174,6 +178,10 @@ def load_preferences(path: Path | None = None) -> Preferences:
                 ddata = data["display"]
                 if "show_timestamps" in ddata:
                     prefs.display.show_timestamps = bool(ddata["show_timestamps"])
+            if isinstance(data.get("model"), dict):
+                mdata = data["model"]
+                if "preferred" in mdata:
+                    prefs.preferred_model = str(mdata["preferred"] or "")
         except Exception:
             pass  # Fall back to defaults on any parse error
     else:
@@ -185,3 +193,47 @@ def load_preferences(path: Path | None = None) -> Preferences:
             pass  # Don't fail if we can't write
 
     return prefs
+
+
+def save_preferred_model(model: str, path: Path | None = None) -> None:
+    """Persist the preferred model to the preferences file.
+
+    Surgically updates only the model section, preserving the rest of the
+    file (including user comments) as-is.
+    """
+    path = path or PREFS_PATH
+    try:
+        if path.exists():
+            text = path.read_text()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = _DEFAULT_YAML
+
+        # Try to find and replace existing model/preferred line
+        import re
+
+        value = f'"{model}"' if model else '""'
+        if re.search(r"^\s+preferred:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(\s+preferred:).*$",
+                f"\\1 {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        elif re.search(r"^model:", text, re.MULTILINE):
+            # model: section exists but no preferred key
+            text = re.sub(
+                r"^(model:.*)$",
+                f"\\1\n  preferred: {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            # No model section at all — append it
+            text = text.rstrip() + f"\n\nmodel:\n  preferred: {value}\n"
+
+        path.write_text(text)
+    except Exception:
+        pass  # Best-effort persistence
