@@ -2345,7 +2345,7 @@ class AmplifierChicApp(App):
             "  /wrap         Toggle word wrap on/off (/wrap on, /wrap off)\n"
             "  /fold         Fold/unfold long messages (/fold all, /fold none, /fold <n>)\n"
             "  /theme        Switch color theme (dark, light, solarized, monokai, nord, dracula)\n"
-            "  /colors       View/set colors (/colors reset, /colors <key> <#hex>)\n"
+            "  /colors       View/set colors (/colors <role> <#hex>, /colors reset)\n"
             "  /focus        Toggle focus mode (hide chrome)\n"
             "  /search       Search chat messages (e.g. /search my query)\n"
             "  /grep         Search with options (/grep <pattern>, /grep -c <pattern> for case-sensitive)\n"
@@ -4066,10 +4066,14 @@ class AmplifierChicApp(App):
         except Exception:
             return
 
+        ts_color = self._prefs.colors.timestamp
         for widget in chat_view.children:
             classes = widget.classes if hasattr(widget, "classes") else set()
 
-            if "user-message" in classes:
+            if "msg-timestamp" in classes:
+                widget.styles.color = ts_color
+
+            elif "user-message" in classes:
                 self._style_user(widget)
 
             elif "assistant-message" in classes:
@@ -4092,6 +4096,16 @@ class AmplifierChicApp(App):
                 if inner is not None:
                     self._style_tool(widget, inner)
 
+    # Role shortcuts: simple names map to the primary _text key.
+    _COLOR_ROLE_ALIASES: dict[str, str] = {
+        "user": "user_text",
+        "assistant": "assistant_text",
+        "system": "system_text",
+        "tool": "tool_text",
+        "thinking": "thinking_text",
+        "timestamp": "timestamp",
+    }
+
     def _cmd_colors(self, text: str) -> None:
         """View, change, or reset individual color preferences."""
         import re
@@ -4101,26 +4115,39 @@ class AmplifierChicApp(App):
         arg = parts[1].strip() if len(parts) > 1 else ""
 
         if not arg:
-            # Show current color settings
+            # Show current color settings grouped by role
             c = self._prefs.colors
             lines = [
-                "Current colors:",
-                f"  user_text:           {c.user_text}",
-                f"  user_border:         {c.user_border}",
-                f"  assistant_text:      {c.assistant_text}",
-                f"  assistant_border:    {c.assistant_border}",
-                f"  thinking_text:       {c.thinking_text}",
-                f"  thinking_border:     {c.thinking_border}",
-                f"  thinking_background: {c.thinking_background}",
-                f"  tool_text:           {c.tool_text}",
-                f"  tool_border:         {c.tool_border}",
-                f"  tool_background:     {c.tool_background}",
-                f"  system_text:         {c.system_text}",
-                f"  system_border:       {c.system_border}",
-                f"  status_bar:          {c.status_bar}",
+                "Message colors:",
                 "",
-                "Usage: /colors <key> <#hex>  e.g. /colors assistant_text #888888",
-                "       /colors reset         Restore defaults",
+                "  Role shortcuts         Color",
+                f"  user              {c.user_text}",
+                f"  assistant         {c.assistant_text}",
+                f"  system            {c.system_text}",
+                f"  tool              {c.tool_text}",
+                f"  thinking          {c.thinking_text}",
+                f"  timestamp         {c.timestamp}",
+                "",
+                "  All keys:",
+                f"    user_text           {c.user_text}",
+                f"    user_border         {c.user_border}",
+                f"    assistant_text      {c.assistant_text}",
+                f"    assistant_border    {c.assistant_border}",
+                f"    thinking_text       {c.thinking_text}",
+                f"    thinking_border     {c.thinking_border}",
+                f"    thinking_background {c.thinking_background}",
+                f"    tool_text           {c.tool_text}",
+                f"    tool_border         {c.tool_border}",
+                f"    tool_background     {c.tool_background}",
+                f"    system_text         {c.system_text}",
+                f"    system_border       {c.system_border}",
+                f"    timestamp           {c.timestamp}",
+                f"    status_bar          {c.status_bar}",
+                "",
+                "Change: /colors <role> <#hex>   e.g. /colors user #00ff00",
+                "        /colors <key> <#hex>    e.g. /colors user_border #ff8800",
+                "Reset:  /colors reset",
+                "Roles:  user, assistant, system, tool, thinking, timestamp",
             ]
             self._add_system_message("\n".join(lines))
             return
@@ -4136,15 +4163,25 @@ class AmplifierChicApp(App):
         tokens = arg.split(None, 1)
         if len(tokens) != 2:
             self._add_system_message(
-                "Usage: /colors <key> <#hex>  e.g. /colors assistant_text #888888\n"
-                "       /colors reset         Restore defaults"
+                "Usage: /colors <role> <#hex>  e.g. /colors user #00ff00\n"
+                "       /colors <key> <#hex>   e.g. /colors user_border #ff8800\n"
+                "       /colors reset          Restore defaults\n"
+                "Roles: user, assistant, system, tool, thinking, timestamp"
             )
             return
 
         key, value = tokens
+        # Resolve role shortcuts (e.g. "user" -> "user_text")
+        key = self._COLOR_ROLE_ALIASES.get(key, key)
+
         if not hasattr(self._prefs.colors, key):
+            aliases = ", ".join(sorted(self._COLOR_ROLE_ALIASES.keys()))
             valid = ", ".join(f.name for f in fields(ColorPreferences))
-            self._add_system_message(f"Unknown color key '{key}'.\nValid keys: {valid}")
+            self._add_system_message(
+                f"Unknown color key '{key}'.\n"
+                f"Role shortcuts: {aliases}\n"
+                f"All keys: {valid}"
+            )
             return
 
         # Validate hex color
@@ -4759,7 +4796,9 @@ class AmplifierChicApp(App):
             if not fallback_now:
                 return None
             dt = datetime.now()
-        return Static(self._format_timestamp(dt), classes="msg-timestamp")
+        widget = Static(self._format_timestamp(dt), classes="msg-timestamp")
+        widget.styles.color = self._prefs.colors.timestamp
+        return widget
 
     @staticmethod
     def _extract_transcript_timestamp(msg: dict) -> datetime | None:

@@ -29,6 +29,7 @@ THEMES: dict[str, dict[str, str]] = {
         "tool_background": "#0a0a0a",
         "system_text": "#88bbcc",
         "system_border": "#448899",
+        "timestamp": "#444444",
         "status_bar": "#888888",
     },
     "light": {
@@ -44,6 +45,7 @@ THEMES: dict[str, dict[str, str]] = {
         "tool_background": "#f5f5f5",
         "system_text": "#337788",
         "system_border": "#66aabb",
+        "timestamp": "#999999",
         "status_bar": "#555555",
     },
     "solarized": {
@@ -59,6 +61,7 @@ THEMES: dict[str, dict[str, str]] = {
         "tool_background": "#002b36",
         "system_text": "#2aa198",
         "system_border": "#2aa198",
+        "timestamp": "#586e75",
         "status_bar": "#839496",
     },
     "monokai": {
@@ -74,6 +77,7 @@ THEMES: dict[str, dict[str, str]] = {
         "tool_background": "#1e1f1c",
         "system_text": "#66d9ef",
         "system_border": "#66d9ef",
+        "timestamp": "#75715e",
         "status_bar": "#a6a6a6",
     },
     "high-contrast": {
@@ -89,6 +93,7 @@ THEMES: dict[str, dict[str, str]] = {
         "tool_background": "#0a0a0a",
         "system_text": "#00ff00",
         "system_border": "#00ff00",
+        "timestamp": "#808080",
         "status_bar": "#ffffff",
     },
     "nord": {
@@ -104,6 +109,7 @@ THEMES: dict[str, dict[str, str]] = {
         "tool_background": "#242933",
         "system_text": "#88c0d0",
         "system_border": "#88c0d0",
+        "timestamp": "#4c566a",
         "status_bar": "#9aa5b4",
     },
     "dracula": {
@@ -119,6 +125,7 @@ THEMES: dict[str, dict[str, str]] = {
         "tool_background": "#21222c",
         "system_text": "#8be9fd",
         "system_border": "#8be9fd",
+        "timestamp": "#6272a4",
         "status_bar": "#9999bb",
     },
 }
@@ -153,6 +160,7 @@ colors:
   tool_background: "#0a0a0a"     # near-black tint
   system_text: "#88bbcc"         # teal - slash command output
   system_border: "#448899"       # teal left bar
+  timestamp: "#444444"           # dim timestamp labels
   status_bar: "#888888"          # bottom status text
 
 notifications:
@@ -201,6 +209,7 @@ class ColorPreferences:
     tool_background: str = "#0a0a0a"
     system_text: str = "#88bbcc"
     system_border: str = "#448899"
+    timestamp: str = "#444444"
     status_bar: str = "#888888"
 
 
@@ -325,6 +334,7 @@ def save_colors(colors: ColorPreferences, path: Path | None = None) -> None:
             "tool_background",
             "system_text",
             "system_border",
+            "timestamp",
             "status_bar",
         ]
         for key in color_keys:
