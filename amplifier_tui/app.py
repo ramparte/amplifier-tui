@@ -378,6 +378,18 @@ class ChatInput(TextArea):
                 event.stop()
             else:
                 await super()._on_key(event)
+        elif event.key == "home" and not self.text.strip():
+            # When input is empty, Home jumps to top of chat
+            self._reset_tab_state()
+            self.app.action_scroll_chat_top()
+            event.prevent_default()
+            event.stop()
+        elif event.key == "end" and not self.text.strip():
+            # When input is empty, End jumps to bottom of chat
+            self._reset_tab_state()
+            self.app.action_scroll_chat_bottom()
+            event.prevent_default()
+            event.stop()
         else:
             self._reset_tab_state()
             await super()._on_key(event)
@@ -420,6 +432,11 @@ SHORTCUTS_TEXT = """\
   Ctrl+A      Toggle auto-scroll
   Ctrl+F      Search chat messages
   Ctrl+R      Search prompt history
+  Ctrl+Home   Jump to top of chat
+  Ctrl+End    Jump to bottom of chat
+  Ctrl+Up     Scroll chat up
+  Ctrl+Down   Scroll chat down
+  Home/End    Top/bottom (empty input)
   Up/Down     Browse prompt history
   F1          This help
   F11         Focus mode
@@ -563,6 +580,10 @@ class AmplifierChicApp(App):
         Binding("ctrl+m", "bookmark_last", "Bookmark", show=False),
         Binding("ctrl+r", "search_history", "History", show=False),
         Binding("ctrl+f", "search_chat", "Search", show=False),
+        Binding("ctrl+home", "scroll_chat_top", "Top of chat", show=False),
+        Binding("ctrl+end", "scroll_chat_bottom", "Bottom of chat", show=False),
+        Binding("ctrl+up", "scroll_chat_up", "Scroll up", show=False),
+        Binding("ctrl+down", "scroll_chat_down", "Scroll down", show=False),
         Binding("ctrl+q", "quit", "Quit", show=True),
     ]
 
@@ -1216,6 +1237,38 @@ class AmplifierChicApp(App):
         except Exception:
             pass
 
+    def action_scroll_chat_top(self) -> None:
+        """Scroll chat to the very top (Ctrl+Home)."""
+        try:
+            chat = self.query_one("#chat-view", ScrollableContainer)
+            chat.scroll_home(animate=False)
+        except Exception:
+            pass
+
+    def action_scroll_chat_bottom(self) -> None:
+        """Scroll chat to the very bottom (Ctrl+End)."""
+        try:
+            chat = self.query_one("#chat-view", ScrollableContainer)
+            chat.scroll_end(animate=False)
+        except Exception:
+            pass
+
+    def action_scroll_chat_up(self) -> None:
+        """Scroll chat up by a small amount (Ctrl+Up)."""
+        try:
+            chat = self.query_one("#chat-view", ScrollableContainer)
+            chat.scroll_up(animate=False)
+        except Exception:
+            pass
+
+    def action_scroll_chat_down(self) -> None:
+        """Scroll chat down by a small amount (Ctrl+Down)."""
+        try:
+            chat = self.query_one("#chat-view", ScrollableContainer)
+            chat.scroll_down(animate=False)
+        except Exception:
+            pass
+
     async def action_quit(self) -> None:
         """Clean up the Amplifier session before quitting.
 
@@ -1614,6 +1667,10 @@ class AmplifierChicApp(App):
             "  Ctrl+B        Toggle sidebar\n"
             "  Ctrl+N        New session\n"
             "  Ctrl+L        Clear chat\n"
+            "  Ctrl+Home     Jump to top of chat\n"
+            "  Ctrl+End      Jump to bottom of chat\n"
+            "  Ctrl+Up/Down  Scroll chat up/down\n"
+            "  Home/End      Top/bottom of chat (when input empty)\n"
             "  Ctrl+Q        Quit"
         )
         self._add_system_message(help_text)
