@@ -234,6 +234,7 @@ SHORTCUTS_TEXT = """\
   /theme      Switch theme
   /export     Export to markdown
   /rename     Rename session
+  /delete     Delete session
   /copy       Copy last response
   /scroll     Toggle auto-scroll
   /focus      Focus mode
@@ -311,6 +312,9 @@ class AmplifierChicApp(App):
         self._stash_stack: list[str] = []
         self._last_assistant_text: str = ""
         self._processing_start_time: float | None = None
+
+        # Pending delete confirmation (two-step delete)
+        self._pending_delete: str | None = None
 
         # Auto-scroll state
         self._auto_scroll = True
@@ -905,6 +909,7 @@ class AmplifierChicApp(App):
             "/theme": lambda: self._cmd_theme(text),
             "/export": lambda: self._cmd_export(text),
             "/rename": lambda: self._cmd_rename(text),
+            "/delete": lambda: self._cmd_delete(text),
         }
 
         handler = handlers.get(cmd)
@@ -927,6 +932,7 @@ class AmplifierChicApp(App):
             "  /model        Show model info\n"
             "  /copy         Copy last response to clipboard\n"
             "  /rename       Rename current session (e.g. /rename My Project)\n"
+            "  /delete       Delete session (with confirmation)\n"
             "  /export       Export session to markdown file\n"
             "  /notify       Toggle completion notifications\n"
             "  /scroll       Toggle auto-scroll on/off\n"
@@ -1279,6 +1285,112 @@ class AmplifierChicApp(App):
             self._populate_session_list(self._session_list_data)
 
         self._add_system_message(f'Session renamed to "{new_name}"')
+
+    def _cmd_delete(self, text: str) -> None:
+        """Delete a session with two-step confirmation."""
+        parts = text.strip().split(None, 1)
+        arg = parts[1].strip() if len(parts) > 1 else ""
+
+        # Handle confirmation
+        if arg == "confirm" and self._pending_delete:
+            session_id = self._pending_delete
+            self._pending_delete = None
+            self._execute_session_delete(session_id)
+            return
+
+        # Handle cancellation
+        if arg == "cancel":
+            self._pending_delete = None
+            self._add_system_message("Delete cancelled.")
+            return
+
+        # Determine which session to delete
+        if arg and arg not in ("confirm", "cancel"):
+            session_id = arg
+        elif self.session_manager and getattr(self.session_manager, "session_id", None):
+            session_id = self.session_manager.session_id
+        else:
+            self._add_system_message("No active session to delete.")
+            return
+
+        # Set up confirmation
+        self._pending_delete = session_id
+        short_id = session_id[:12] if session_id else "unknown"
+        self._add_system_message(
+            f"Delete session {short_id}...?\n"
+            "Type /delete confirm to proceed or /delete cancel to abort."
+        )
+
+    def _execute_session_delete(self, session_id: str) -> None:
+        """Delete session files from disk and update UI."""
+        short_id = session_id[:12]
+
+        # Find the session directory on disk
+        session_dir = self._find_session_dir(session_id)
+
+        # If this is the currently loaded session, clear it first
+        is_current = (
+            self.session_manager
+            and getattr(self.session_manager, "session_id", None) == session_id
+        )
+        if is_current and self.session_manager:
+            self.session_manager.session = None
+            self.session_manager.session_id = None
+            self.session_manager.reset_usage()
+
+        # Delete session files from disk
+        if session_dir and session_dir.exists():
+            try:
+                shutil.rmtree(session_dir)
+            except OSError as e:
+                self._add_system_message(f"Failed to delete session files: {e}")
+                return
+        else:
+            self._add_system_message(
+                f"Session {short_id}... files not found on disk (already deleted?)."
+            )
+
+        # Remove from cached session list
+        self._session_list_data = [
+            s for s in self._session_list_data if s["session_id"] != session_id
+        ]
+
+        # Remove custom name if any
+        self._remove_session_name(session_id)
+
+        # Refresh sidebar
+        if self._session_list_data:
+            self._populate_session_list(self._session_list_data)
+
+        # Reset UI to a fresh state
+        self._reset_for_new_session()
+
+        self._add_system_message(f"Session {short_id}... deleted.")
+
+    def _find_session_dir(self, session_id: str) -> Path | None:
+        """Find the directory for a session by searching all projects."""
+        sessions_dir = Path.home() / ".amplifier" / "projects"
+        if not sessions_dir.exists():
+            return None
+
+        for project_dir in sessions_dir.iterdir():
+            if not project_dir.is_dir():
+                continue
+            candidate = project_dir / "sessions" / session_id
+            if candidate.is_dir():
+                return candidate
+
+        return None
+
+    def _remove_session_name(self, session_id: str) -> None:
+        """Remove a custom session name from the JSON file."""
+        try:
+            names = self._load_session_names()
+            if session_id in names:
+                del names[session_id]
+                self.SESSION_NAMES_FILE.write_text(json.dumps(names, indent=2))
+        except Exception:
+            pass
 
     # ── Message Display ─────────────────────────────────────────
 
