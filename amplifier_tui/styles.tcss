@@ -497,3 +497,67 @@ HistorySearchScreen {
     height: auto;
     max-height: 20;
 }
+
+/* -- Compact mode (toggled by /compact command) ------- */
+/* Maximizes content density: tighter spacing, hidden    */
+/* timestamps, reduced indentation, collapsed tool info. */
+
+.compact-mode #chat-view {
+    padding: 0 0;
+}
+
+.compact-mode .chat-message {
+    padding: 0 1;
+    margin: 0;
+}
+
+.compact-mode .user-message {
+    margin: 1 0 0 0;
+    padding: 0 1;
+}
+
+.compact-mode .assistant-message {
+    margin: 0;
+    padding: 0 1;
+}
+
+.compact-mode .msg-timestamp {
+    display: none;
+}
+
+.compact-mode .thinking-block {
+    margin: 0 0 0 1;
+}
+
+.compact-mode .thinking-static {
+    margin: 0 0 0 1;
+    padding: 0 1;
+}
+
+.compact-mode .tool-use {
+    margin: 0 0 0 1;
+}
+
+.compact-mode .tool-detail {
+    max-height: 3;
+    overflow-y: hidden;
+}
+
+.compact-mode .fold-toggle {
+    display: none;
+}
+
+.compact-mode .processing-indicator {
+    margin: 0;
+    padding: 0 1;
+}
+
+.compact-mode .error-message {
+    margin: 0;
+    padding: 0 1;
+}
+
+.compact-mode .welcome-screen {
+    margin: 1 0;
+    padding: 1 2;
+}

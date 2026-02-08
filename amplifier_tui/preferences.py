@@ -137,6 +137,7 @@ notifications:
 display:
   show_timestamps: true          # show HH:MM timestamps on messages
   word_wrap: true                # wrap long lines (off = horizontal scroll)
+  compact_mode: false            # dense layout with reduced spacing
 
 model:
   preferred: ""                   # preferred model for new sessions (empty = use default)
@@ -180,6 +181,7 @@ class DisplayPreferences:
 
     show_timestamps: bool = True
     word_wrap: bool = True
+    compact_mode: bool = False
 
 
 @dataclass
@@ -236,6 +238,8 @@ def load_preferences(path: Path | None = None) -> Preferences:
                     prefs.display.show_timestamps = bool(ddata["show_timestamps"])
                 if "word_wrap" in ddata:
                     prefs.display.word_wrap = bool(ddata["word_wrap"])
+                if "compact_mode" in ddata:
+                    prefs.display.compact_mode = bool(ddata["compact_mode"])
             if isinstance(data.get("model"), dict):
                 mdata = data["model"]
                 if "preferred" in mdata:
@@ -489,6 +493,49 @@ def save_word_wrap(enabled: bool, path: Path | None = None) -> None:
         else:
             # No display section at all — append it
             text = text.rstrip() + f"\n\ndisplay:\n  word_wrap: {value}\n"
+
+        path.write_text(text)
+    except Exception:
+        pass  # Best-effort persistence
+
+
+def save_compact_mode(enabled: bool, path: Path | None = None) -> None:
+    """Persist the compact_mode display preference to the preferences file.
+
+    Surgically updates only the compact_mode value, preserving the rest of the
+    file (including user comments) as-is.
+    """
+    import re
+
+    path = path or PREFS_PATH
+    try:
+        if path.exists():
+            text = path.read_text()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = _DEFAULT_YAML
+
+        value = "true" if enabled else "false"
+        if re.search(r"^\s+compact_mode:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(\s+compact_mode:).*$",
+                f"\\1 {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        elif re.search(r"^display:", text, re.MULTILINE):
+            # display section exists but no compact_mode key
+            text = re.sub(
+                r"^(display:.*)$",
+                f"\\1\n  compact_mode: {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            # No display section at all — append it
+            text = text.rstrip() + f"\n\ndisplay:\n  compact_mode: {value}\n"
 
         path.write_text(text)
     except Exception:

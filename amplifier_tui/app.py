@@ -37,6 +37,7 @@ from .preferences import (
     THEMES,
     load_preferences,
     save_colors,
+    save_compact_mode,
     save_notification_enabled,
     save_notification_min_seconds,
     save_notification_sound,
@@ -610,7 +611,7 @@ SHORTCUTS_TEXT = """\
   /edit       Open $EDITOR for longer prompts
   /alias      List/create/remove shortcuts
   /draft      Show/save/clear/load input draft
-  /compact    Clear chat, keep session
+  /compact    Toggle compact view mode
   /fold       Fold/unfold long messages
   /history    Browse/clear input history
   /redo [N]   Re-send last (or Nth-to-last) message
@@ -859,6 +860,10 @@ class AmplifierChicApp(App):
         # Apply word-wrap preference (default: on; off adds no-wrap CSS class)
         if not self._prefs.display.word_wrap:
             self.query_one("#chat-view", ScrollableContainer).add_class("no-wrap")
+
+        # Apply compact-mode preference (default: off; on adds compact-mode CSS class)
+        if self._prefs.display.compact_mode:
+            self.add_class("compact-mode")
 
         # Show UI immediately, defer Amplifier import to background
         self._show_welcome()
@@ -2039,7 +2044,7 @@ class AmplifierChicApp(App):
             "/quit": self._cmd_quit,
             "/exit": self._cmd_quit,
             "/focus": self._cmd_focus,
-            "/compact": self._cmd_compact,
+            "/compact": lambda: self._cmd_compact(text),
             "/copy": lambda: self._cmd_copy(text),
             "/notify": lambda: self._cmd_notify(text),
             "/sound": lambda: self._cmd_sound(text),
@@ -2115,7 +2120,7 @@ class AmplifierChicApp(App):
             "  /draft        Show/save/clear/load input draft (/draft save, /draft clear, /draft load)\n"
             "  /snippet      Save/use reusable prompt templates\n"
             "  /alias        List/create/remove custom shortcuts\n"
-            "  /compact      Clear chat, keep session\n"
+            "  /compact      Toggle compact view mode (/compact on, /compact off)\n"
             "  /history      Browse input history (/history clear, /history <N>)\n"
             "  /redo         Re-send last user message (/redo <N> for Nth-to-last)\n"
             "  /keys         Keyboard shortcut overlay\n"
@@ -2599,13 +2604,37 @@ class AmplifierChicApp(App):
         # Use call_later so the current handler finishes before quit runs
         self.call_later(self.action_quit)
 
-    def _cmd_compact(self) -> None:
-        """Clear chat visually but keep the session alive."""
-        chat_view = self.query_one("#chat-view", ScrollableContainer)
-        for child in list(chat_view.children):
-            child.remove()
-        self._search_messages = []
-        self._add_system_message("Chat cleared. Session continues.")
+    def _cmd_compact(self, text: str) -> None:
+        """Toggle compact view mode on/off for denser chat display."""
+        parts = text.strip().split(None, 1)
+        arg = parts[1].strip().lower() if len(parts) > 1 else ""
+
+        if arg in ("on", "true", "1"):
+            compact = True
+        elif arg in ("off", "false", "0"):
+            compact = False
+        elif not arg:
+            compact = not self._prefs.display.compact_mode
+        else:
+            self._add_system_message("Usage: /compact [on|off]")
+            return
+
+        self._prefs.display.compact_mode = compact
+        save_compact_mode(compact)
+
+        # Toggle CSS class on the app for cascading style changes
+        if compact:
+            self.add_class("compact-mode")
+            # Collapse tool and thinking blocks for maximum density
+            for widget in self.query(".tool-use, .thinking-block"):
+                if hasattr(widget, "collapsed"):
+                    widget.collapsed = True
+        else:
+            self.remove_class("compact-mode")
+
+        state = "ON" if compact else "OFF"
+        self._update_status()
+        self._add_system_message(f"Compact mode: {state}")
 
     def _cmd_search(self, text: str) -> None:
         """Search all chat messages for a query string."""
@@ -4311,6 +4340,8 @@ class AmplifierChicApp(App):
 
     def _update_status(self, state: str = "Ready") -> None:
         try:
+            if self._prefs.display.compact_mode:
+                state = f"{state} [compact]"
             self.query_one("#status-state", Static).update(state)
         except Exception:
             pass
