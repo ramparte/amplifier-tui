@@ -218,6 +218,7 @@ class AmplifierChicApp(App):
         Binding("ctrl+s", "stash_prompt", "Stash", show=True),
         Binding("ctrl+y", "copy_response", "Copy", show=True),
         Binding("ctrl+n", "new_session", "New", show=True),
+        Binding("ctrl+a", "toggle_auto_scroll", "Scroll", show=False),
         Binding("ctrl+l", "clear_chat", "Clear", show=False),
         Binding("ctrl+q", "quit", "Quit", show=True),
     ]
@@ -245,6 +246,9 @@ class AmplifierChicApp(App):
         self._stash_stack: list[str] = []
         self._last_assistant_text: str = ""
         self._processing_start_time: float | None = None
+
+        # Auto-scroll state
+        self._auto_scroll = True
 
         # Streaming display state
         self._stream_widget: Static | None = None
@@ -276,6 +280,7 @@ class AmplifierChicApp(App):
                     yield Static("No session", id="status-session")
                     yield Static("Ready", id="status-state")
                     yield Static("", id="status-stash")
+                    yield Static("\u2195 ON", id="status-scroll")
                     yield Static("", id="status-model")
 
     async def on_mount(self) -> None:
@@ -583,6 +588,20 @@ class AmplifierChicApp(App):
         for child in list(chat_view.children):
             child.remove()
 
+    def action_toggle_auto_scroll(self) -> None:
+        """Toggle auto-scroll on/off (Ctrl+A)."""
+        self._auto_scroll = not self._auto_scroll
+        state = "ON" if self._auto_scroll else "OFF"
+        self._update_scroll_indicator()
+        self._add_system_message(f"Auto-scroll {state}")
+        # If re-enabled, immediately scroll to bottom
+        if self._auto_scroll:
+            try:
+                chat_view = self.query_one("#chat-view", ScrollableContainer)
+                chat_view.scroll_end(animate=False)
+            except Exception:
+                pass
+
     def action_open_editor(self) -> None:
         """Open $EDITOR for composing a longer prompt (Ctrl+G)."""
         editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "nano"
@@ -684,6 +703,11 @@ class AmplifierChicApp(App):
         if self.is_processing:
             return
 
+        # Re-enable auto-scroll when user sends a new message
+        if not self._auto_scroll:
+            self._auto_scroll = True
+            self._update_scroll_indicator()
+
         # Record in history (add() skips slash commands internally)
         self._history.add(text)
 
@@ -732,6 +756,7 @@ class AmplifierChicApp(App):
             "/compact": self._cmd_compact,
             "/copy": self._cmd_copy,
             "/notify": self._cmd_notify,
+            "/scroll": self._cmd_scroll,
             "/theme": lambda: self._cmd_theme(text),
             "/export": lambda: self._cmd_export(text),
         }
@@ -757,6 +782,7 @@ class AmplifierChicApp(App):
             "  /copy         Copy last response to clipboard\n"
             "  /export       Export session to markdown file\n"
             "  /notify       Toggle completion notifications\n"
+            "  /scroll       Toggle auto-scroll on/off\n"
             "  /theme        Switch color theme (dark, light, solarized)\n"
             "  /compact      Clear chat, keep session\n"
             "  /quit         Quit\n"
@@ -766,6 +792,7 @@ class AmplifierChicApp(App):
             "  Enter         Send message\n"
             "  Ctrl+J        Insert newline\n"
             "  Up/Down       Browse prompt history\n"
+            "  Ctrl+A        Toggle auto-scroll\n"
             "  Ctrl+G        Open $EDITOR for longer prompts\n"
             "  Ctrl+Y        Copy last response to clipboard\n"
             "  Ctrl+S        Stash/restore prompt (stack of 5)\n"
@@ -863,6 +890,10 @@ class AmplifierChicApp(App):
 
     def _cmd_copy(self) -> None:
         self.action_copy_response()
+
+    def _cmd_scroll(self) -> None:
+        """Toggle auto-scroll on/off."""
+        self.action_toggle_auto_scroll()
 
     def _cmd_notify(self) -> None:
         """Toggle completion notifications on/off."""
@@ -1080,14 +1111,14 @@ class AmplifierChicApp(App):
         msg = UserMessage(text)
         chat_view.mount(msg)
         self._style_user(msg)
-        msg.scroll_visible()
+        self._scroll_if_auto(msg)
 
     def _add_assistant_message(self, text: str) -> None:
         chat_view = self.query_one("#chat-view", ScrollableContainer)
         msg = AssistantMessage(text)
         chat_view.mount(msg)
         self._style_assistant(msg)
-        msg.scroll_visible()
+        self._scroll_if_auto(msg)
         self._last_assistant_text = text
 
     def _add_system_message(self, text: str) -> None:
@@ -1096,7 +1127,7 @@ class AmplifierChicApp(App):
         msg = SystemMessage(text)
         chat_view.mount(msg)
         self._style_system(msg)
-        msg.scroll_visible()
+        self._scroll_if_auto(msg)
 
     def _add_thinking_block(self, text: str) -> None:
         chat_view = self.query_one("#chat-view", ScrollableContainer)
@@ -1148,13 +1179,13 @@ class AmplifierChicApp(App):
         collapsible.add_class("tool-use")
         chat_view.mount(collapsible)
         self._style_tool(collapsible, inner)
-        collapsible.scroll_visible()
+        self._scroll_if_auto(collapsible)
 
     def _show_error(self, error_text: str) -> None:
         chat_view = self.query_one("#chat-view", ScrollableContainer)
         msg = ErrorMessage(f"Error: {error_text}", classes="error-message")
         chat_view.mount(msg)
-        msg.scroll_visible()
+        self._scroll_if_auto(msg)
 
     # ── Processing State ────────────────────────────────────────
 
@@ -1190,7 +1221,7 @@ class AmplifierChicApp(App):
             id="processing-indicator",
         )
         chat_view.mount(indicator)
-        indicator.scroll_visible()
+        self._scroll_if_auto(indicator)
         self._update_status(f"{label}...")
 
     def _finish_processing(self) -> None:
@@ -1249,6 +1280,36 @@ class AmplifierChicApp(App):
     def _remove_processing_indicator(self) -> None:
         try:
             self.query_one("#processing-indicator").remove()
+        except Exception:
+            pass
+
+    # ── Auto-scroll ──────────────────────────────────────────────────────────────
+
+    def _scroll_if_auto(self, widget: Static | Collapsible) -> None:
+        """Scroll widget into view only if auto-scroll is enabled."""
+        if not self._auto_scroll:
+            return
+        widget.scroll_visible()
+
+    def _update_scroll_indicator(self) -> None:
+        """Update the status bar auto-scroll indicator."""
+        label = "\u2195 ON" if self._auto_scroll else "\u2195 OFF"
+        try:
+            self.query_one("#status-scroll", Static).update(label)
+        except Exception:
+            pass
+
+    def _check_smart_scroll_pause(self) -> None:
+        """During streaming, auto-pause if user has scrolled up."""
+        if not self._auto_scroll or not self.is_processing:
+            return
+        try:
+            chat_view = self.query_one("#chat-view", ScrollableContainer)
+            if chat_view.max_scroll_y > 0:
+                distance_from_bottom = chat_view.max_scroll_y - chat_view.scroll_y
+                if distance_from_bottom > 5:
+                    self._auto_scroll = False
+                    self._update_scroll_indicator()
         except Exception:
             pass
 
@@ -1406,7 +1467,7 @@ class AmplifierChicApp(App):
             c = self._prefs.colors
             widget.styles.color = c.assistant_text
             widget.styles.border_left = ("wide", c.assistant_border)
-            widget.scroll_visible()
+            self._scroll_if_auto(widget)
             self._stream_widget = widget
             self._stream_container = None
 
@@ -1422,7 +1483,8 @@ class AmplifierChicApp(App):
         if not self._stream_widget:
             return
         self._stream_widget.update(text + " \u258d")
-        self._stream_widget.scroll_visible()
+        self._check_smart_scroll_pause()
+        self._scroll_if_auto(self._stream_widget)
 
     def _finalize_streaming_block(self, block_type: str, text: str) -> None:
         """Replace the streaming Static with the final rendered widget.
@@ -1451,7 +1513,7 @@ class AmplifierChicApp(App):
                 chat_view.mount(msg, before=old)
                 self._style_assistant(msg)
                 old.remove()
-                msg.scroll_visible()
+                self._scroll_if_auto(msg)
             else:
                 self._add_assistant_message(text)
 
