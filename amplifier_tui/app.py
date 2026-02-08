@@ -14,6 +14,7 @@ import sys
 import tempfile
 import time
 from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -134,7 +135,45 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/watch",
     "/split",
     "/stream",
+    "/tab",
+    "/tabs",
 )
+
+
+MAX_TABS = 10  # Maximum number of concurrent tabs
+
+
+@dataclass
+class TabState:
+    """State for a single conversation tab."""
+
+    name: str
+    tab_id: str
+    container_id: str  # ScrollableContainer widget ID for this tab
+    # Session state (saved/restored when switching tabs)
+    sm_session: object | None = None
+    sm_session_id: str | None = None
+    session_title: str = ""
+    # Search index
+    search_messages: list = field(default_factory=list)
+    # Statistics
+    total_words: int = 0
+    user_message_count: int = 0
+    assistant_message_count: int = 0
+    tool_call_count: int = 0
+    user_words: int = 0
+    assistant_words: int = 0
+    response_times: list = field(default_factory=list)
+    tool_usage: dict = field(default_factory=dict)
+    assistant_msg_index: int = 0
+    last_assistant_widget: object | None = None
+    last_assistant_text: str = ""
+    # Per-session data
+    session_bookmarks: list = field(default_factory=list)
+    session_refs: list = field(default_factory=list)
+    message_pins: list = field(default_factory=list)
+    created_at: str = ""
+
 
 # Known context window sizes (tokens) for popular models.
 # Used as fallback when the provider doesn't report context_window.
@@ -800,6 +839,9 @@ SHORTCUTS_TEXT = """\
 
  SESSIONS ───────────────────────────────
   Ctrl+N           New session
+  Ctrl+T           New tab
+  Ctrl+W           Close tab
+  Ctrl+PgUp/Dn    Switch tabs
   F1 / Ctrl+/      This help
   Ctrl+Q           Quit
 
@@ -815,6 +857,8 @@ SHORTCUTS_TEXT = """\
   /delete          Delete current session
   /pin-session     Pin/unpin in sidebar
   /sort            Sort sessions
+  /tab             Tab management
+  /tabs            List open tabs
   /info            Session details
   /stats           Session statistics (tools, tokens)
 
@@ -955,6 +999,35 @@ class HistorySearchScreen(ModalScreen[str]):
         self.dismiss("")
 
 
+class TabButton(Static):
+    """A clickable tab label in the tab bar."""
+
+    def __init__(self, label: str, tab_index: int, **kwargs) -> None:
+        super().__init__(label, **kwargs)
+        self.tab_index = tab_index
+
+    def on_click(self) -> None:
+        self.app._switch_to_tab(self.tab_index)
+
+
+class TabBar(Horizontal):
+    """Horizontal tab bar showing conversation tabs."""
+
+    def update_tabs(self, tabs: list, active_index: int) -> None:
+        """Rebuild the tab bar buttons."""
+        self.remove_children()
+        for i, tab in enumerate(tabs):
+            label = tab.name
+            cls = "tab-btn tab-active" if i == active_index else "tab-btn tab-inactive"
+            btn = TabButton(f" {label} ", tab_index=i, classes=cls)
+            self.mount(btn)
+        # Hide tab bar when there's only one tab
+        if len(tabs) <= 1:
+            self.add_class("single-tab")
+        else:
+            self.remove_class("single-tab")
+
+
 # ── Main Application ────────────────────────────────────────────────
 
 
@@ -1043,7 +1116,10 @@ class AmplifierChicApp(App):
         Binding("ctrl+end", "scroll_chat_bottom", "Bottom of chat", show=False),
         Binding("ctrl+up", "scroll_chat_up", "Scroll up", show=False),
         Binding("ctrl+down", "scroll_chat_down", "Scroll down", show=False),
-        Binding("ctrl+t", "toggle_split_focus", "Split", show=False),
+        Binding("ctrl+t", "new_tab", "New Tab", show=False),
+        Binding("ctrl+w", "close_tab", "Close Tab", show=False),
+        Binding("ctrl+pageup", "prev_tab", "Prev Tab", show=False),
+        Binding("ctrl+pagedown", "next_tab", "Next Tab", show=False),
         Binding("ctrl+q", "quit", "Quit", show=True),
     ]
 
@@ -1146,6 +1222,18 @@ class AmplifierChicApp(App):
         self._watched_files: dict[str, dict] = {}
         self._watch_timer: object | None = None
 
+        # Tab management state
+        self._tabs: list[TabState] = [
+            TabState(
+                name="Main",
+                tab_id="tab-0",
+                container_id="chat-view",
+                created_at=datetime.now().isoformat(),
+            )
+        ]
+        self._active_tab_index: int = 0
+        self._tab_counter: int = 1
+
         # Reverse search state (Ctrl+R inline)
         self._rsearch_active: bool = False
         self._rsearch_query: str = ""
@@ -1154,6 +1242,11 @@ class AmplifierChicApp(App):
         self._rsearch_original: str = ""
 
     # ── Layout ──────────────────────────────────────────────────
+
+    def _active_chat_view(self) -> ScrollableContainer:
+        """Return the chat container for the currently active tab."""
+        tab = self._tabs[self._active_tab_index]
+        return self.query_one(f"#{tab.container_id}", ScrollableContainer)
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="main-container"):
@@ -1166,8 +1259,9 @@ class AmplifierChicApp(App):
                 yield Tree("Sessions", id="session-tree")
             with Vertical(id="chat-area"):
                 yield Static("", id="breadcrumb-bar")
+                yield TabBar(id="tab-bar")
                 with Horizontal(id="chat-split-container"):
-                    yield ScrollableContainer(id="chat-view")
+                    yield ScrollableContainer(id="chat-view", classes="tab-chat-view")
                     yield ScrollableContainer(id="split-panel")
                 yield ChatInput(
                     "",
@@ -1200,7 +1294,7 @@ class AmplifierChicApp(App):
 
         # Apply word-wrap preference (default: on; off adds no-wrap CSS class)
         if not self._prefs.display.word_wrap:
-            self.query_one("#chat-view", ScrollableContainer).add_class("no-wrap")
+            self._active_chat_view().add_class("no-wrap")
 
         # Apply compact-mode preference (default: off; on adds compact-mode CSS class)
         if self._prefs.display.compact_mode:
@@ -1213,6 +1307,9 @@ class AmplifierChicApp(App):
             input_w._vim_state = "normal"
             input_w._update_vim_border()
             self._update_vim_status()
+
+        # Initialize tab bar
+        self._update_tab_bar()
 
         # Show UI immediately, defer Amplifier import to background
         self._show_welcome()
@@ -1294,10 +1391,304 @@ class AmplifierChicApp(App):
         self.call_from_thread(self._update_breadcrumb)
         self.call_from_thread(self._load_session_list)
 
+    # ── Tab Management ──────────────────────────────────────────
+
+    def _update_tab_bar(self) -> None:
+        """Refresh the tab bar UI."""
+        try:
+            tab_bar = self.query_one("#tab-bar", TabBar)
+            tab_bar.update_tabs(self._tabs, self._active_tab_index)
+        except Exception:
+            pass
+
+    def _save_current_tab_state(self) -> None:
+        """Save current app state into the active tab's TabState."""
+        tab = self._tabs[self._active_tab_index]
+        if self.session_manager:
+            tab.sm_session = getattr(self.session_manager, "session", None)
+            tab.sm_session_id = getattr(self.session_manager, "session_id", None)
+        tab.session_title = self._session_title
+        tab.search_messages = self._search_messages
+        tab.total_words = self._total_words
+        tab.user_message_count = self._user_message_count
+        tab.assistant_message_count = self._assistant_message_count
+        tab.tool_call_count = self._tool_call_count
+        tab.user_words = self._user_words
+        tab.assistant_words = self._assistant_words
+        tab.response_times = self._response_times
+        tab.tool_usage = self._tool_usage
+        tab.assistant_msg_index = self._assistant_msg_index
+        tab.last_assistant_widget = self._last_assistant_widget
+        tab.last_assistant_text = self._last_assistant_text
+        tab.session_bookmarks = self._session_bookmarks
+        tab.session_refs = self._session_refs
+        tab.message_pins = self._message_pins
+
+    def _load_tab_state(self, tab: TabState) -> None:
+        """Load a TabState's data into current app state."""
+        if self.session_manager:
+            self.session_manager.session = tab.sm_session
+            self.session_manager.session_id = tab.sm_session_id
+        self._session_title = tab.session_title
+        self._search_messages = tab.search_messages
+        self._total_words = tab.total_words
+        self._user_message_count = tab.user_message_count
+        self._assistant_message_count = tab.assistant_message_count
+        self._tool_call_count = tab.tool_call_count
+        self._user_words = tab.user_words
+        self._assistant_words = tab.assistant_words
+        self._response_times = tab.response_times
+        self._tool_usage = tab.tool_usage
+        self._assistant_msg_index = tab.assistant_msg_index
+        self._last_assistant_widget = tab.last_assistant_widget
+        self._last_assistant_text = tab.last_assistant_text
+        self._session_bookmarks = tab.session_bookmarks
+        self._session_refs = tab.session_refs
+        self._message_pins = tab.message_pins
+
+    def _switch_to_tab(self, index: int) -> None:
+        """Switch to the tab at the given index."""
+        if index == self._active_tab_index:
+            return
+        if index < 0 or index >= len(self._tabs):
+            return
+        if self.is_processing:
+            self._add_system_message("Cannot switch tabs while processing.")
+            return
+
+        # Save current tab state
+        self._save_current_tab_state()
+
+        # Hide current tab's container
+        old_tab = self._tabs[self._active_tab_index]
+        try:
+            old_container = self.query_one(
+                f"#{old_tab.container_id}", ScrollableContainer
+            )
+            old_container.add_class("tab-chat-hidden")
+        except Exception:
+            pass
+
+        # Switch index
+        self._active_tab_index = index
+
+        # Show new tab's container
+        new_tab = self._tabs[index]
+        try:
+            new_container = self.query_one(
+                f"#{new_tab.container_id}", ScrollableContainer
+            )
+            new_container.remove_class("tab-chat-hidden")
+        except Exception:
+            pass
+
+        # Load new tab state
+        self._load_tab_state(new_tab)
+
+        # Update UI
+        self._update_tab_bar()
+        self._update_session_display()
+        self._update_word_count_display()
+        self._update_breadcrumb()
+        self.sub_title = self._session_title or ""
+        self.query_one("#chat-input", ChatInput).focus()
+
+    def _create_new_tab(self, name: str | None = None) -> None:
+        """Create a new conversation tab."""
+        if len(self._tabs) >= MAX_TABS:
+            self._add_system_message(
+                f"Maximum {MAX_TABS} tabs allowed. Close a tab first."
+            )
+            return
+        if self.is_processing:
+            self._add_system_message("Cannot create tab while processing.")
+            return
+
+        tab_id = f"tab-{self._tab_counter}"
+        container_id = f"chat-view-{self._tab_counter}"
+        self._tab_counter += 1
+
+        if not name:
+            name = f"Tab {len(self._tabs) + 1}"
+
+        tab = TabState(
+            name=name,
+            tab_id=tab_id,
+            container_id=container_id,
+            created_at=datetime.now().isoformat(),
+        )
+
+        # Save current tab state before switching
+        self._save_current_tab_state()
+
+        # Hide current tab's container
+        old_tab = self._tabs[self._active_tab_index]
+        try:
+            old_container = self.query_one(
+                f"#{old_tab.container_id}", ScrollableContainer
+            )
+            old_container.add_class("tab-chat-hidden")
+        except Exception:
+            pass
+
+        # Create new container and mount it
+        new_container = ScrollableContainer(id=container_id, classes="tab-chat-view")
+        try:
+            split_container = self.query_one("#chat-split-container", Horizontal)
+            # Mount before split-panel
+            split_panel = self.query_one("#split-panel", ScrollableContainer)
+            split_container.mount(new_container, before=split_panel)
+        except Exception:
+            pass
+
+        # Add tab and switch to it
+        self._tabs.append(tab)
+        self._active_tab_index = len(self._tabs) - 1
+
+        # Reset app state for new tab
+        if self.session_manager:
+            self.session_manager.session = None
+            self.session_manager.session_id = None
+        self._session_title = ""
+        self._search_messages = []
+        self._total_words = 0
+        self._user_message_count = 0
+        self._assistant_message_count = 0
+        self._tool_call_count = 0
+        self._user_words = 0
+        self._assistant_words = 0
+        self._response_times = []
+        self._tool_usage = {}
+        self._assistant_msg_index = 0
+        self._last_assistant_widget = None
+        self._last_assistant_text = ""
+        self._session_bookmarks = []
+        self._session_refs = []
+        self._message_pins = []
+
+        # Update UI
+        self._update_tab_bar()
+        self._update_session_display()
+        self._update_word_count_display()
+        self._update_breadcrumb()
+        self.sub_title = ""
+        self._show_welcome(f"New tab: {name}")
+        self.query_one("#chat-input", ChatInput).focus()
+
+    def _close_tab(self, index: int | None = None) -> None:
+        """Close a tab by index (default: current tab)."""
+        if index is None:
+            index = self._active_tab_index
+        if index < 0 or index >= len(self._tabs):
+            self._add_system_message("Invalid tab index.")
+            return
+        if len(self._tabs) <= 1:
+            self._add_system_message("Cannot close the last tab.")
+            return
+        if self.is_processing and index == self._active_tab_index:
+            self._add_system_message("Cannot close tab while processing.")
+            return
+
+        closing_tab = self._tabs[index]
+
+        # Remove the container widget
+        try:
+            container = self.query_one(
+                f"#{closing_tab.container_id}", ScrollableContainer
+            )
+            container.remove()
+        except Exception:
+            pass
+
+        # Remove from tabs list
+        self._tabs.pop(index)
+
+        # Adjust active index
+        if index == self._active_tab_index:
+            # Was viewing this tab - switch to nearest
+            self._active_tab_index = min(index, len(self._tabs) - 1)
+            new_tab = self._tabs[self._active_tab_index]
+            # Show new active container
+            try:
+                new_container = self.query_one(
+                    f"#{new_tab.container_id}", ScrollableContainer
+                )
+                new_container.remove_class("tab-chat-hidden")
+            except Exception:
+                pass
+            self._load_tab_state(new_tab)
+        elif index < self._active_tab_index:
+            self._active_tab_index -= 1
+
+        # Update UI
+        self._update_tab_bar()
+        self._update_session_display()
+        self._update_word_count_display()
+        self._update_breadcrumb()
+        self.sub_title = self._session_title or ""
+
+    def _rename_tab(self, new_name: str) -> None:
+        """Rename the current tab."""
+        self._tabs[self._active_tab_index].name = new_name.strip()
+        self._update_tab_bar()
+
+    def _find_tab_by_name_or_index(self, query: str) -> int | None:
+        """Find a tab by name or 1-based index number."""
+        # Try as number first (1-based)
+        try:
+            idx = int(query) - 1
+            if 0 <= idx < len(self._tabs):
+                return idx
+        except ValueError:
+            pass
+        # Try by name (case-insensitive)
+        query_lower = query.lower().strip()
+        for i, tab in enumerate(self._tabs):
+            if tab.name.lower() == query_lower:
+                return i
+        return None
+
+    # ── Tab Action Methods (keyboard shortcuts) ─────────────────
+
+    def action_new_tab(self) -> None:
+        """Create a new tab (Ctrl+T)."""
+        self._create_new_tab()
+
+    def action_close_tab(self) -> None:
+        """Close current tab (Ctrl+W)."""
+        if len(self._tabs) <= 1:
+            self._add_system_message("Cannot close the last tab.")
+            return
+        # Check if current tab has content
+        tab = self._tabs[self._active_tab_index]
+        try:
+            container = self.query_one(f"#{tab.container_id}", ScrollableContainer)
+            has_content = len(list(container.children)) > 0
+        except Exception:
+            has_content = False
+        if has_content:
+            self._close_tab()
+        else:
+            self._close_tab()
+
+    def action_prev_tab(self) -> None:
+        """Switch to previous tab (Ctrl+PageUp)."""
+        if len(self._tabs) <= 1:
+            return
+        new_index = (self._active_tab_index - 1) % len(self._tabs)
+        self._switch_to_tab(new_index)
+
+    def action_next_tab(self) -> None:
+        """Switch to next tab (Ctrl+PageDown)."""
+        if len(self._tabs) <= 1:
+            return
+        new_index = (self._active_tab_index + 1) % len(self._tabs)
+        self._switch_to_tab(new_index)
+
     # ── Welcome Screen ──────────────────────────────────────────
 
     def _show_welcome(self, subtitle: str = "") -> None:
-        chat_view = self.query_one("#chat-view", ScrollableContainer)
+        chat_view = self._active_chat_view()
         # Remove any existing welcome first
         for w in self.query(".welcome-screen"):
             w.remove()
@@ -2407,7 +2798,7 @@ class AmplifierChicApp(App):
     def action_scroll_chat_top(self) -> None:
         """Scroll chat to the very top (Ctrl+Home)."""
         try:
-            chat = self.query_one("#chat-view", ScrollableContainer)
+            chat = self._active_chat_view()
             chat.scroll_home(animate=False)
         except Exception:
             pass
@@ -2415,7 +2806,7 @@ class AmplifierChicApp(App):
     def action_scroll_chat_bottom(self) -> None:
         """Scroll chat to the very bottom (Ctrl+End)."""
         try:
-            chat = self.query_one("#chat-view", ScrollableContainer)
+            chat = self._active_chat_view()
             chat.scroll_end(animate=False)
         except Exception:
             pass
@@ -2423,7 +2814,7 @@ class AmplifierChicApp(App):
     def action_scroll_chat_up(self) -> None:
         """Scroll chat up by a small amount (Ctrl+Up)."""
         try:
-            chat = self.query_one("#chat-view", ScrollableContainer)
+            chat = self._active_chat_view()
             chat.scroll_up(animate=False)
         except Exception:
             pass
@@ -2431,7 +2822,7 @@ class AmplifierChicApp(App):
     def action_scroll_chat_down(self) -> None:
         """Scroll chat down by a small amount (Ctrl+Down)."""
         try:
-            chat = self.query_one("#chat-view", ScrollableContainer)
+            chat = self._active_chat_view()
             chat.scroll_down(animate=False)
         except Exception:
             pass
@@ -2492,7 +2883,7 @@ class AmplifierChicApp(App):
             self.session_manager.session_id = None
             self.session_manager.reset_usage()
         # Clear chat
-        chat_view = self.query_one("#chat-view", ScrollableContainer)
+        chat_view = self._active_chat_view()
         for child in list(chat_view.children):
             child.remove()
         self._show_welcome("New session will start when you send a message.")
@@ -2520,7 +2911,7 @@ class AmplifierChicApp(App):
         self.query_one("#chat-input", ChatInput).focus()
 
     def action_clear_chat(self) -> None:
-        chat_view = self.query_one("#chat-view", ScrollableContainer)
+        chat_view = self._active_chat_view()
         for child in list(chat_view.children):
             child.remove()
         self._total_words = 0
@@ -2543,7 +2934,7 @@ class AmplifierChicApp(App):
         # If re-enabled, immediately scroll to bottom
         if self._auto_scroll:
             try:
-                chat_view = self.query_one("#chat-view", ScrollableContainer)
+                chat_view = self._active_chat_view()
                 chat_view.scroll_end(animate=False)
             except Exception:
                 pass
@@ -2584,7 +2975,7 @@ class AmplifierChicApp(App):
         try:
             chat_input = self.query_one("#chat-input", ChatInput)
             split_panel = self.query_one("#split-panel", ScrollableContainer)
-            chat_view = self.query_one("#chat-view", ScrollableContainer)
+            chat_view = self._active_chat_view()
         except Exception:
             return
 
@@ -2860,6 +3251,8 @@ class AmplifierChicApp(App):
             "/watch": lambda: self._cmd_watch(args),
             "/split": lambda: self._cmd_split(args),
             "/stream": lambda: self._cmd_stream(args),
+            "/tab": lambda: self._cmd_tab(args),
+            "/tabs": lambda: self._cmd_tab(""),
         }
 
         handler = handlers.get(cmd)
@@ -2923,6 +3316,8 @@ class AmplifierChicApp(App):
             "  /split        Toggle split view (/split pins|chat|file <path>|on|off)\n"
             "  /stream       Toggle streaming display (/stream on, /stream off)\n"
             "  /vim          Toggle vim keybindings (/vim on, /vim off)\n"
+            "  /tab          Tab management (/tab new|switch|close|rename|list)\n"
+            "  /tabs         List all open tabs\n"
             "  /keys         Keyboard shortcut overlay\n"
             "  /quit         Quit\n"
             "\n"
@@ -2945,6 +3340,9 @@ class AmplifierChicApp(App):
             "  Ctrl+N        New session\n"
             "  Ctrl+L        Clear chat\n"
             "  Escape        Cancel streaming generation\n"
+            "  Ctrl+T        New conversation tab\n"
+            "  Ctrl+W        Close current tab\n"
+            "  Ctrl+PgUp/Dn  Switch between tabs\n"
             "  Ctrl+Home     Jump to top of chat\n"
             "  Ctrl+End      Jump to bottom of chat\n"
             "  Ctrl+Up/Down  Scroll chat up/down\n"
@@ -3582,6 +3980,79 @@ class AmplifierChicApp(App):
                 lines.append("No draft or unsaved input")
 
         self._add_system_message("\n".join(lines))
+
+    def _cmd_tab(self, args: str) -> None:
+        """Handle /tab subcommands."""
+        args = args.strip()
+        if not args:
+            # List tabs (same as /tabs)
+            lines = ["Tabs:"]
+            for i, tab in enumerate(self._tabs):
+                marker = " ▶" if i == self._active_tab_index else "  "
+                sid = ""
+                if tab.sm_session_id or (
+                    i == self._active_tab_index
+                    and self.session_manager
+                    and getattr(self.session_manager, "session_id", None)
+                ):
+                    s = (
+                        tab.sm_session_id
+                        if i != self._active_tab_index
+                        else getattr(self.session_manager, "session_id", "")
+                    )
+                    if s:
+                        sid = f" [{s[:8]}]"
+                lines.append(f"{marker} {i + 1}. {tab.name}{sid}")
+            lines.append("")
+            lines.append(
+                "Usage: /tab new [name] | switch <n> | close [n] | rename <name>"
+            )
+            self._add_system_message("\n".join(lines))
+            return
+
+        parts = args.split(None, 1)
+        subcmd = parts[0].lower()
+        subargs = parts[1].strip() if len(parts) > 1 else ""
+
+        if subcmd == "new":
+            self._create_new_tab(subargs or None)
+        elif subcmd == "switch":
+            if not subargs:
+                self._add_system_message("Usage: /tab switch <name|number>")
+                return
+            idx = self._find_tab_by_name_or_index(subargs)
+            if idx is None:
+                self._add_system_message(f"Tab not found: {subargs}")
+                return
+            self._switch_to_tab(idx)
+        elif subcmd == "close":
+            if not subargs:
+                self._close_tab()
+            else:
+                idx = self._find_tab_by_name_or_index(subargs)
+                if idx is None:
+                    self._add_system_message(f"Tab not found: {subargs}")
+                    return
+                self._close_tab(idx)
+        elif subcmd == "rename":
+            if not subargs:
+                self._add_system_message("Usage: /tab rename <new-name>")
+                return
+            self._rename_tab(subargs)
+            self._add_system_message(f"Tab renamed to: {subargs}")
+        elif subcmd == "list":
+            # Recurse with empty args to show list
+            self._cmd_tab("")
+        else:
+            # Maybe a number or name for quick switch
+            idx = self._find_tab_by_name_or_index(subcmd)
+            if idx is not None:
+                self._switch_to_tab(idx)
+            else:
+                self._add_system_message(
+                    "Unknown /tab subcommand. "
+                    "Usage: /tab new [name] | switch <n> | close [n] | rename <name>"
+                )
 
     def _cmd_clear(self) -> None:
         self.action_clear_chat()
@@ -4784,7 +5255,7 @@ class AmplifierChicApp(App):
         save_word_wrap(wrap)
 
         # Toggle CSS class on chat view
-        chat = self.query_one("#chat-view", ScrollableContainer)
+        chat = self._active_chat_view()
         if wrap:
             chat.remove_class("no-wrap")
         else:
@@ -5685,7 +6156,7 @@ class AmplifierChicApp(App):
     def _apply_theme_to_all_widgets(self) -> None:
         """Re-style every visible chat widget with the current theme colors."""
         try:
-            chat_view = self.query_one("#chat-view", ScrollableContainer)
+            chat_view = self._active_chat_view()
         except Exception:
             return
 
@@ -6524,13 +6995,13 @@ class AmplifierChicApp(App):
         line_count = content.count("\n") + 1
         if line_count <= self._fold_threshold:
             return
-        chat_view = self.query_one("#chat-view", ScrollableContainer)
+        chat_view = self._active_chat_view()
         widget.add_class("folded")
         toggle = FoldToggle(widget, line_count, folded=True)
         chat_view.mount(toggle, after=widget)
 
     def _add_user_message(self, text: str, ts: datetime | None = None) -> None:
-        chat_view = self.query_one("#chat-view", ScrollableContainer)
+        chat_view = self._active_chat_view()
         ts_widget = self._make_timestamp(ts)
         if ts_widget:
             chat_view.mount(ts_widget)
@@ -6547,7 +7018,7 @@ class AmplifierChicApp(App):
         self._update_word_count_display()
 
     def _add_assistant_message(self, text: str, ts: datetime | None = None) -> None:
-        chat_view = self.query_one("#chat-view", ScrollableContainer)
+        chat_view = self._active_chat_view()
         ts_widget = self._make_timestamp(ts)
         if ts_widget:
             chat_view.mount(ts_widget)
@@ -6569,7 +7040,7 @@ class AmplifierChicApp(App):
 
     def _add_system_message(self, text: str, ts: datetime | None = None) -> None:
         """Display a system message (slash command output)."""
-        chat_view = self.query_one("#chat-view", ScrollableContainer)
+        chat_view = self._active_chat_view()
         ts_widget = self._make_timestamp(ts)
         if ts_widget:
             chat_view.mount(ts_widget)
@@ -6580,7 +7051,7 @@ class AmplifierChicApp(App):
         self._search_messages.append(("system", text, msg))
 
     def _add_thinking_block(self, text: str) -> None:
-        chat_view = self.query_one("#chat-view", ScrollableContainer)
+        chat_view = self._active_chat_view()
         # Show abbreviated preview, full text on expand
         preview = text.split("\n")[0][:55]
         if len(text) > 55:
@@ -6604,7 +7075,7 @@ class AmplifierChicApp(App):
     ) -> None:
         self._tool_call_count += 1
         self._tool_usage[tool_name] = self._tool_usage.get(tool_name, 0) + 1
-        chat_view = self.query_one("#chat-view", ScrollableContainer)
+        chat_view = self._active_chat_view()
 
         detail_parts: list[str] = []
         if tool_input:
@@ -6635,7 +7106,7 @@ class AmplifierChicApp(App):
         self._scroll_if_auto(collapsible)
 
     def _show_error(self, error_text: str) -> None:
-        chat_view = self.query_one("#chat-view", ScrollableContainer)
+        chat_view = self._active_chat_view()
         msg = ErrorMessage(f"Error: {error_text}", classes="error-message")
         chat_view.mount(msg)
         self._scroll_if_auto(msg)
@@ -6669,7 +7140,7 @@ class AmplifierChicApp(App):
         inp.disabled = True
         inp.add_class("disabled")
 
-        chat_view = self.query_one("#chat-view", ScrollableContainer)
+        chat_view = self._active_chat_view()
         frame = self._SPINNER[0]
         indicator = ProcessingIndicator(
             f" {frame} {label}...",
@@ -6836,7 +7307,7 @@ class AmplifierChicApp(App):
         except Exception:
             if not self.is_processing:
                 return
-            chat_view = self.query_one("#chat-view", ScrollableContainer)
+            chat_view = self._active_chat_view()
             indicator = ProcessingIndicator(
                 text,
                 classes="processing-indicator",
@@ -6874,7 +7345,7 @@ class AmplifierChicApp(App):
         if not self._auto_scroll or not self.is_processing:
             return
         try:
-            chat_view = self.query_one("#chat-view", ScrollableContainer)
+            chat_view = self._active_chat_view()
             if chat_view.max_scroll_y > 0:
                 distance_from_bottom = chat_view.max_scroll_y - chat_view.scroll_y
                 if distance_from_bottom > 5:
@@ -7172,7 +7643,7 @@ class AmplifierChicApp(App):
         so the user knows content is arriving.
         """
         self._remove_processing_indicator()
-        chat_view = self.query_one("#chat-view", ScrollableContainer)
+        chat_view = self._active_chat_view()
 
         if block_type in ("thinking", "reasoning"):
             inner = Static("\u258d", classes="thinking-text")
@@ -7237,7 +7708,7 @@ class AmplifierChicApp(App):
         Static with a proper Markdown widget for rich rendering.
         For thinking blocks, collapses and sets the preview title.
         """
-        chat_view = self.query_one("#chat-view", ScrollableContainer)
+        chat_view = self._active_chat_view()
 
         if block_type in ("thinking", "reasoning"):
             full_text = text[:800] + "\u2026" if len(text) > 800 else text
@@ -7378,7 +7849,7 @@ class AmplifierChicApp(App):
         """Render a session transcript in the chat view."""
         from .transcript_loader import load_transcript, parse_message_blocks
 
-        chat_view = self.query_one("#chat-view", ScrollableContainer)
+        chat_view = self._active_chat_view()
 
         # Clear existing content
         for child in list(chat_view.children):
