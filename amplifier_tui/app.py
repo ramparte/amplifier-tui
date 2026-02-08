@@ -117,6 +117,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/context",
     "/sort",
     "/edit",
+    "/editor",
     "/wrap",
     "/alias",
     "/info",
@@ -912,6 +913,7 @@ SHORTCUTS_TEXT = """\
 
  INPUT & SETTINGS ──────────────────────
   /edit            Open $EDITOR for input
+  /editor          Alias for /edit
   /draft           Save/load input drafts
   /snippet         Prompt snippets
   /template        Prompt templates with {{variables}}
@@ -3002,12 +3004,12 @@ class AmplifierChicApp(App):
             chat_input.focus()
 
     def _resolve_editor(self) -> str | None:
-        """Return the first available editor from $EDITOR, $VISUAL, or common defaults."""
+        """Return the first available editor ($VISUAL > $EDITOR > nano > vim > vi)."""
         for candidate in (
-            os.environ.get("EDITOR"),
             os.environ.get("VISUAL"),
-            "vim",
+            os.environ.get("EDITOR"),
             "nano",
+            "vim",
             "vi",
         ):
             if candidate and shutil.which(candidate):
@@ -3055,6 +3057,10 @@ class AmplifierChicApp(App):
             inp.clear()
             inp.insert(new_text)
             inp.focus()
+
+            # Auto-send if preference is enabled
+            if self._prefs.display.editor_auto_send:
+                self._submit_message()
         except Exception as e:
             self._add_system_message(f"Could not open editor: {e}")
         finally:
@@ -3241,6 +3247,7 @@ class AmplifierChicApp(App):
             "/draft": lambda: self._cmd_draft(text),
             "/sort": lambda: self._cmd_sort(text),
             "/edit": self.action_open_editor,
+            "/editor": self.action_open_editor,
             "/wrap": lambda: self._cmd_wrap(text),
             "/fold": lambda: self._cmd_fold(text),
             "/alias": lambda: self._cmd_alias(args),
@@ -3314,6 +3321,7 @@ class AmplifierChicApp(App):
             "  /watch        Watch files for changes (/watch <path>, stop, diff)\n"
             "  /sort         Sort sessions: date, name, project (/sort <mode>)\n"
             "  /edit         Open $EDITOR for longer prompts (same as Ctrl+G)\n"
+            "  /editor       Alias for /edit\n"
             "  /draft        Show/save/clear/load input draft (/draft save, /draft clear, /draft load)\n"
             "  /snippet      Prompt snippets (/snippet save|use|remove|search|cat|tag|export|import|<name>)\n"
             "  /template     Prompt templates with {{variables}} (/template save|use|remove|clear|<name>)\n"

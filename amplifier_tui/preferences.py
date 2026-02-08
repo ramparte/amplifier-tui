@@ -287,6 +287,7 @@ class DisplayPreferences:
     compact_mode: bool = False
     vim_mode: bool = False
     streaming_enabled: bool = True  # Progressive token streaming display
+    editor_auto_send: bool = False  # Auto-send message after external editor closes
 
 
 @dataclass
