@@ -318,6 +318,9 @@ class AmplifierChicApp(App):
         # Focus mode state (zen mode - hides chrome)
         self._focus_mode = False
 
+        # Word count tracking
+        self._total_words: int = 0
+
         # Streaming display state
         self._stream_widget: Static | None = None
         self._stream_container: Collapsible | None = None
@@ -349,6 +352,7 @@ class AmplifierChicApp(App):
                     yield Static("Ready", id="status-state")
                     yield Static("", id="status-stash")
                     yield Static("\u2195 ON", id="status-scroll")
+                    yield Static("0 words", id="status-wordcount")
                     yield Static("", id="status-model")
 
     async def on_mount(self) -> None:
@@ -690,12 +694,16 @@ class AmplifierChicApp(App):
         self._update_session_display()
         self._update_token_display()
         self._update_status("Ready")
+        self._total_words = 0
+        self._update_word_count_display()
         self.query_one("#chat-input", ChatInput).focus()
 
     def action_clear_chat(self) -> None:
         chat_view = self.query_one("#chat-view", ScrollableContainer)
         for child in list(chat_view.children):
             child.remove()
+        self._total_words = 0
+        self._update_word_count_display()
 
     def action_toggle_auto_scroll(self) -> None:
         """Toggle auto-scroll on/off (Ctrl+A)."""
@@ -1335,6 +1343,8 @@ class AmplifierChicApp(App):
         chat_view.mount(msg)
         self._style_user(msg)
         self._scroll_if_auto(msg)
+        self._total_words += self._count_words(text)
+        self._update_word_count_display()
 
     def _add_assistant_message(self, text: str, ts: str | None = None) -> None:
         chat_view = self.query_one("#chat-view", ScrollableContainer)
@@ -1346,6 +1356,8 @@ class AmplifierChicApp(App):
         self._style_assistant(msg)
         self._scroll_if_auto(msg)
         self._last_assistant_text = text
+        self._total_words += self._count_words(text)
+        self._update_word_count_display()
 
     def _add_system_message(self, text: str, ts: str | None = None) -> None:
         """Display a system message (slash command output)."""
@@ -1598,6 +1610,32 @@ class AmplifierChicApp(App):
         else:
             self.query_one("#status-session", Static).update("No session")
 
+    # ── Word Count ──────────────────────────────────────────────
+
+    @staticmethod
+    def _count_words(text: str) -> int:
+        """Count words in a text string."""
+        return len(text.split())
+
+    def _update_word_count_display(self) -> None:
+        """Update the status bar word count and reading time."""
+        total = self._total_words
+        if total >= 1000:
+            word_str = f"{total / 1000:.1f}k words"
+        else:
+            word_str = f"{total} words"
+
+        if total == 0:
+            display = "0 words"
+        else:
+            minutes = max(1, total // 200)
+            display = f"{word_str} · ~{minutes} min read"
+
+        try:
+            self.query_one("#status-wordcount", Static).update(display)
+        except Exception:
+            pass
+
     # ── Streaming Callbacks ─────────────────────────────────────
 
     def _setup_streaming_callbacks(self) -> None:
@@ -1746,6 +1784,8 @@ class AmplifierChicApp(App):
                 self._style_assistant(msg)
                 old.remove()
                 self._scroll_if_auto(msg)
+                self._total_words += self._count_words(text)
+                self._update_word_count_display()
             else:
                 self._add_assistant_message(text)
 
@@ -1832,6 +1872,7 @@ class AmplifierChicApp(App):
         for child in list(chat_view.children):
             child.remove()
 
+        self._total_words = 0
         tool_results: dict[str, str] = {}
 
         for msg in load_transcript(transcript_path):
@@ -1848,6 +1889,7 @@ class AmplifierChicApp(App):
                     widget = UserMessage(block.content)
                     chat_view.mount(widget)
                     self._style_user(widget)
+                    self._total_words += self._count_words(block.content)
 
                 elif block.kind == "text":
                     if not ts_shown:
@@ -1859,6 +1901,7 @@ class AmplifierChicApp(App):
                     widget = AssistantMessage(block.content)
                     chat_view.mount(widget)
                     self._style_assistant(widget)
+                    self._total_words += self._count_words(block.content)
 
                 elif block.kind == "thinking":
                     preview = block.content.split("\n")[0][:55]
@@ -1904,6 +1947,7 @@ class AmplifierChicApp(App):
                 elif block.kind == "tool_result":
                     tool_results[block.tool_id] = block.content
 
+        self._update_word_count_display()
         chat_view.scroll_end(animate=False)
 
 
