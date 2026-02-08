@@ -379,6 +379,12 @@ class ThinkingBlock(Static):
     pass
 
 
+class MessageMeta(Static):
+    """Subtle metadata line below messages (timestamp, tokens, response time)."""
+
+    pass
+
+
 class ChatInput(TextArea):
     """TextArea where Enter submits, Shift+Enter/Ctrl+J inserts a newline."""
 
@@ -5641,20 +5647,25 @@ class AmplifierChicApp(App):
             except ValueError:
                 pass
 
-        # Remove widgets from the DOM (message + adjacent timestamp / fold toggle)
+        # Remove widgets from the DOM (message + adjacent meta / fold toggle)
         for _role, _content, widget in to_remove:
             if widget is None:
                 continue
 
-            # Remove a FoldToggle that immediately follows the message
+            # Remove adjacent meta and fold-toggle widgets after the message.
+            # DOM order: [message] [meta?] [fold_toggle?]
             try:
-                next_sib = widget.next_sibling  # type: ignore[attr-defined]
-                if isinstance(next_sib, FoldToggle):
-                    next_sib.remove()
+                nxt = widget.next_sibling  # type: ignore[attr-defined]
+                if nxt is not None and nxt.has_class("msg-timestamp"):
+                    after_meta = nxt.next_sibling  # type: ignore[attr-defined]
+                    nxt.remove()
+                    nxt = after_meta
+                if isinstance(nxt, FoldToggle):
+                    nxt.remove()
             except Exception:
                 pass
 
-            # Remove a timestamp widget that immediately precedes the message
+            # Legacy: also check for old-style timestamp before the message
             try:
                 prev_sib = widget.previous_sibling  # type: ignore[attr-defined]
                 if prev_sib is not None and prev_sib.has_class("msg-timestamp"):
@@ -6978,25 +6989,40 @@ class AmplifierChicApp(App):
     def _format_timestamp(dt: datetime) -> str:
         """Format a datetime for display.
 
-        Returns ``"HH:MM"`` for today's messages or ``"Feb 5 14:32"`` for
-        older ones so users can orient themselves in long conversations.
+        Uses relative time for recent messages (``"just now"``, ``"3m ago"``),
+        ``"HH:MM"`` for older messages today, and ``"Feb 5 14:32"`` for
+        previous days.
         """
-        today = datetime.now(tz=dt.tzinfo).date()
+        now = datetime.now(tz=dt.tzinfo)
+        delta_secs = max(0, int((now - dt).total_seconds()))
+        if delta_secs < 60:
+            return "just now"
+        if delta_secs < 3600:
+            return f"{delta_secs // 60}m ago"
+        today = now.date()
         if dt.date() == today:
             return dt.strftime("%H:%M")
         # Non-zero-padded day: "Feb 5 14:32"
         return f"{dt.strftime('%b')} {dt.day} {dt.strftime('%H:%M')}"
 
-    def _make_timestamp(
+    def _make_message_meta(
         self,
+        content: str = "",
         dt: datetime | None = None,
         *,
         fallback_now: bool = True,
-    ) -> Static | None:
-        """Create a dim right-aligned timestamp label, or *None* if disabled.
+        response_time: float | None = None,
+    ) -> "MessageMeta | None":
+        """Create a dim metadata label below a message, or *None* if disabled.
+
+        The label shows timestamp, approximate token count, and (for assistant
+        messages) response time.  Example: ``"14:32 · ~450 tokens · ⏱ 3.2s"``
 
         Parameters
         ----------
+        content:
+            The message text, used to estimate token count.  Pass ``""`` to
+            suppress the token portion (e.g. for system messages).
         dt:
             The datetime to display.  When *None* and *fallback_now* is True
             (the default for live messages), ``datetime.now()`` is used.
@@ -7004,6 +7030,8 @@ class AmplifierChicApp(App):
             If *False* and *dt* is None (e.g. a replayed transcript with no
             stored timestamp), skip the widget entirely rather than showing an
             incorrect "now" time.
+        response_time:
+            Elapsed seconds for the AI response (shown as ``"⏱ 3.2s"``).
         """
         if not self._prefs.display.show_timestamps:
             return None
@@ -7011,7 +7039,15 @@ class AmplifierChicApp(App):
             if not fallback_now:
                 return None
             dt = datetime.now()
-        widget = Static(self._format_timestamp(dt), classes="msg-timestamp")
+        parts: list[str] = [self._format_timestamp(dt)]
+        # Rough token estimate (~4 chars per token)
+        if content:
+            tokens = len(content) // 4
+            if tokens > 0:
+                parts.append(f"~{tokens} tokens")
+        if response_time is not None:
+            parts.append(f"⏱ {response_time:.1f}s")
+        widget = MessageMeta(" · ".join(parts), classes="msg-timestamp")
         widget.styles.color = self._prefs.colors.timestamp
         return widget
 
@@ -7129,11 +7165,11 @@ class AmplifierChicApp(App):
 
     def _add_user_message(self, text: str, ts: datetime | None = None) -> None:
         chat_view = self._active_chat_view()
-        ts_widget = self._make_timestamp(ts)
-        if ts_widget:
-            chat_view.mount(ts_widget)
         msg = UserMessage(text)
         chat_view.mount(msg)
+        meta = self._make_message_meta(text, ts)
+        if meta:
+            chat_view.mount(meta)
         self._style_user(msg)
         self._scroll_if_auto(msg)
         self._search_messages.append(("user", text, msg))
@@ -7147,13 +7183,17 @@ class AmplifierChicApp(App):
 
     def _add_assistant_message(self, text: str, ts: datetime | None = None) -> None:
         chat_view = self._active_chat_view()
-        ts_widget = self._make_timestamp(ts)
-        if ts_widget:
-            chat_view.mount(ts_widget)
         msg = AssistantMessage(text)
         msg.msg_index = self._assistant_msg_index  # type: ignore[attr-defined]
         self._assistant_msg_index += 1
         chat_view.mount(msg)
+        # Peek at processing time for display (not consumed; _finish_processing handles that)
+        response_time: float | None = None
+        if self._processing_start_time is not None:
+            response_time = time.monotonic() - self._processing_start_time
+        meta = self._make_message_meta(text, ts, response_time=response_time)
+        if meta:
+            chat_view.mount(meta)
         self._style_assistant(msg)
         self._scroll_if_auto(msg)
         self._last_assistant_text = text
@@ -7170,11 +7210,11 @@ class AmplifierChicApp(App):
     def _add_system_message(self, text: str, ts: datetime | None = None) -> None:
         """Display a system message (slash command output)."""
         chat_view = self._active_chat_view()
-        ts_widget = self._make_timestamp(ts)
-        if ts_widget:
-            chat_view.mount(ts_widget)
         msg = SystemMessage(text)
         chat_view.mount(msg)
+        meta = self._make_message_meta(dt=ts)
+        if meta:
+            chat_view.mount(meta)
         self._style_system(msg)
         self._scroll_if_auto(msg)
         self._search_messages.append(("system", text, msg))
@@ -7855,10 +7895,14 @@ class AmplifierChicApp(App):
                 msg = AssistantMessage(text)
                 msg.msg_index = self._assistant_msg_index  # type: ignore[attr-defined]
                 self._assistant_msg_index += 1
-                ts_widget = self._make_timestamp()
-                if ts_widget:
-                    chat_view.mount(ts_widget, before=old)
                 chat_view.mount(msg, before=old)
+                # Peek at processing time for the meta label
+                response_time: float | None = None
+                if self._processing_start_time is not None:
+                    response_time = time.monotonic() - self._processing_start_time
+                meta = self._make_message_meta(text, response_time=response_time)
+                if meta:
+                    chat_view.mount(meta, before=old)
                 self._style_assistant(msg)
                 old.remove()
                 self._scroll_if_auto(msg)

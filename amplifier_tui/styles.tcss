@@ -178,7 +178,7 @@ Screen {
 
 .msg-timestamp {
     width: 100%;
-    text-align: right;
+    text-align: left;
     color: #444444;
     text-style: dim;
     height: 1;
