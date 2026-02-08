@@ -61,6 +61,7 @@ from .preferences import (
     save_streaming_enabled,
     save_theme_name,
     save_multiline_default,
+    save_show_suggestions,
     save_vim_mode,
     save_word_wrap,
 )
@@ -189,6 +190,26 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/cat",
     "/multiline",
     "/ml",
+    "/suggest",
+)
+
+# -- Prompt templates for smart suggestions ------------------------------------
+PROMPT_TEMPLATES: tuple[str, ...] = (
+    "Explain this code: ",
+    "Fix the bug in ",
+    "Refactor this to be more ",
+    "Write tests for ",
+    "Review this code for ",
+    "What does this error mean: ",
+    "Summarize the conversation so far",
+    "Create a plan for ",
+    "Debug why ",
+    "How do I ",
+    "What is the best way to ",
+    "Compare the approaches for ",
+    "Optimize the performance of ",
+    "Add error handling to ",
+    "Document the ",
 )
 
 # -- System prompt presets -----------------------------------------------------
@@ -618,6 +639,11 @@ class ChatInput(TextArea):
         self._vim_key_buffer: str = ""  # for multi-char combos like dd, gg
         # Multiline mode: Enter = newline, Ctrl+Enter = send
         self._multiline_mode: bool = False
+        # Smart suggestion state
+        self._suggestions_enabled: bool = True
+        self._suggestion_accepted: bool = (
+            False  # Track if last Tab accepted a suggestion
+        )
 
     # -- Slash command tab-completion ----------------------------------------
 
@@ -1150,6 +1176,26 @@ class ChatInput(TextArea):
                     event.prevent_default()
                     event.stop()
                     return
+            # Smart suggestion acceptance / cycling
+            if self._suggestions_enabled:
+                try:
+                    bar = self.app.query_one("#suggestion-bar", SuggestionBar)
+                except Exception:
+                    bar = None
+                if bar and bar.has_suggestions:
+                    if self._suggestion_accepted:
+                        # Repeated Tab → cycle to next suggestion
+                        accepted = bar.cycle_next()
+                    else:
+                        # First Tab → accept current suggestion
+                        accepted = bar.accept_current()
+                    if accepted is not None:
+                        self.clear()
+                        self.insert(accepted)
+                        self._suggestion_accepted = True
+                        event.prevent_default()
+                        event.stop()
+                        return
             # Not a slash prefix – let default tab_behavior ("focus") happen
             self._reset_tab_state()
             await super()._on_key(event)
@@ -1204,7 +1250,59 @@ class ChatInput(TextArea):
             event.stop()
         else:
             self._reset_tab_state()
+            self._suggestion_accepted = False
             await super()._on_key(event)
+
+
+class SuggestionBar(Static):
+    """Thin bar below input showing the current smart prompt suggestion."""
+
+    def __init__(self) -> None:
+        super().__init__("", id="suggestion-bar")
+        self._suggestions: list[str] = []
+        self._index: int = 0
+
+    @property
+    def has_suggestions(self) -> bool:
+        return len(self._suggestions) > 0
+
+    def set_suggestions(self, suggestions: list[str]) -> None:
+        """Replace the suggestion list and reset the cycle index."""
+        self._suggestions = suggestions
+        self._index = 0
+        self._render_bar()
+
+    def accept_current(self) -> str | None:
+        """Return the currently highlighted suggestion (Tab press)."""
+        if not self._suggestions:
+            return None
+        return self._suggestions[self._index]
+
+    def cycle_next(self) -> str | None:
+        """Advance to the next suggestion and return it."""
+        if not self._suggestions:
+            return None
+        self._index = (self._index + 1) % len(self._suggestions)
+        self._render_bar()
+        return self._suggestions[self._index]
+
+    def dismiss(self) -> None:
+        """Hide the suggestion bar."""
+        self._suggestions = []
+        self._index = 0
+        self._render_bar()
+
+    def _render_bar(self) -> None:
+        if not self._suggestions:
+            self.display = False
+            return
+        self.display = True
+        current = self._suggestions[self._index]
+        total = len(self._suggestions)
+        if total == 1:
+            self.update(f"[dim]Tab \u2192 {current}[/dim]")
+        else:
+            self.update(f"[dim]Tab \u2192 {current}  ({self._index + 1}/{total})[/dim]")
 
 
 class ProcessingIndicator(Static):
@@ -1429,6 +1527,7 @@ SHORTCUTS_TEXT = """\
   /system          Set/view system prompt (presets, use, clear)
   /alias           Custom command shortcuts
   /vim             Toggle vim keybindings
+  /suggest         Toggle smart prompt suggestions
   /prefs           Preferences
   /notify          Toggle notifications
   /sound           Toggle notification sound (on|off|test)
@@ -1697,6 +1796,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
         "/multiline",
     ),
     ("/ml", "Toggle multiline mode (alias for /multiline)", "/ml"),
+    ("/suggest", "Toggle smart prompt suggestions (on/off)", "/suggest"),
     ("/vim", "Toggle vim keybindings", "/vim"),
     ("/tab", "Tab management (new, switch, close, rename, list)", "/tab"),
     ("/tab new", "Open a new conversation tab", "/tab new"),
@@ -2161,6 +2261,7 @@ class AmplifierChicApp(App):
                     tab_behavior="focus",
                     compact=True,
                 )
+                yield SuggestionBar()
                 yield Static("", id="attachment-indicator")
                 yield Static("", id="input-counter")
                 with Horizontal(id="status-bar"):
@@ -2215,6 +2316,11 @@ class AmplifierChicApp(App):
             ml_input = self.query_one("#chat-input", ChatInput)
             ml_input._multiline_mode = True
             self._update_multiline_status()
+
+        # Apply show-suggestions preference (default: on)
+        if not self._prefs.display.show_suggestions:
+            sg_input = self.query_one("#chat-input", ChatInput)
+            sg_input._suggestions_enabled = False
 
         # Initialize tab bar
         self._update_tab_bar()
@@ -4020,6 +4126,9 @@ class AmplifierChicApp(App):
             if self._crash_draft_timer is not None:
                 self._crash_draft_timer.stop()
             self._crash_draft_timer = self.set_timer(5.0, self._save_crash_draft)
+            # Refresh smart prompt suggestions (skip on submission)
+            if not isinstance(event, ChatInput.Submitted):
+                self._refresh_suggestions()
 
     def on_text_area_selection_changed(self, event: TextArea.SelectionChanged) -> None:
         """Update cursor position in border title when selection/cursor moves."""
@@ -4843,7 +4952,74 @@ class AmplifierChicApp(App):
 
     def on_chat_input_submitted(self, event: ChatInput.Submitted) -> None:
         """Handle Enter in the chat input."""
+        # Dismiss suggestions on submit
+        try:
+            self.query_one("#suggestion-bar", SuggestionBar).dismiss()
+        except Exception:
+            pass
         self._submit_message()
+
+    def _refresh_suggestions(self) -> None:
+        """Compute and display smart prompt suggestions based on current input."""
+        try:
+            bar = self.query_one("#suggestion-bar", SuggestionBar)
+        except Exception:
+            return
+
+        if not self._prefs.display.show_suggestions:
+            bar.dismiss()
+            return
+
+        try:
+            input_w = self.query_one("#chat-input", ChatInput)
+        except Exception:
+            bar.dismiss()
+            return
+
+        if not input_w._suggestions_enabled:
+            bar.dismiss()
+            return
+
+        prefix = input_w.text.strip()
+
+        # Only suggest after 2+ characters (avoid noise on every keystroke)
+        if len(prefix) < 2:
+            bar.dismiss()
+            return
+
+        suggestions = self._get_suggestions(prefix)
+        if suggestions:
+            bar.set_suggestions(suggestions)
+        else:
+            bar.dismiss()
+
+    def _get_suggestions(self, prefix: str) -> list[str]:
+        """Get suggestions based on current input prefix."""
+        suggestions: list[str] = []
+        prefix_lower = prefix.lower()
+
+        # 1. Slash commands (if starts with /)
+        if prefix.startswith("/"):
+            for cmd in SLASH_COMMANDS:
+                if cmd.startswith(prefix) and cmd != prefix:
+                    suggestions.append(cmd)
+            return suggestions[:10]
+
+        # 2. History matches (most recent first)
+        history = getattr(self, "_history", None)
+        if history:
+            for entry in reversed(history.entries):
+                if entry.lower().startswith(prefix_lower) and entry != prefix:
+                    if entry not in suggestions:
+                        suggestions.append(entry)
+
+        # 3. Template matches
+        for template in PROMPT_TEMPLATES:
+            if template.lower().startswith(prefix_lower) and template != prefix:
+                if template not in suggestions:
+                    suggestions.append(template)
+
+        return suggestions[:10]
 
     def _submit_message(self) -> None:
         """Extract text from input and send it."""
@@ -5024,6 +5200,7 @@ class AmplifierChicApp(App):
             "/cat": lambda: self._cmd_cat(args),
             "/multiline": lambda: self._cmd_multiline(args),
             "/ml": lambda: self._cmd_multiline(args),
+            "/suggest": lambda: self._cmd_suggest(args),
         }
 
         handler = handlers.get(cmd)
@@ -5101,6 +5278,7 @@ class AmplifierChicApp(App):
             "  /split        Toggle split view (/split [N|swap|off|pins|chat|file <path>])\n"
             "  /stream       Toggle streaming display (/stream on, /stream off)\n"
             "  /multiline    Toggle multiline mode (/multiline on, /multiline off, /ml)\n"
+            "  /suggest      Toggle smart prompt suggestions (/suggest on, /suggest off)\n"
             "  /vim          Toggle vim keybindings (/vim on, /vim off)\n"
             "  /tab          Tab management (/tab new|switch|close|rename|list)\n"
             "  /tabs         List all open tabs\n"
@@ -7147,6 +7325,45 @@ class AmplifierChicApp(App):
     def action_toggle_multiline(self) -> None:
         """Alt+M action: toggle multiline mode."""
         self._cmd_multiline("")
+
+    # ── /suggest – smart prompt suggestions ──────────────────────────────────
+
+    def _cmd_suggest(self, text: str) -> None:
+        """Toggle smart prompt suggestions on/off.
+
+        /suggest       Toggle suggestions
+        /suggest on    Enable suggestions
+        /suggest off   Disable suggestions
+        """
+        text = text.strip().lower()
+
+        if text in ("on", "true", "1"):
+            enabled = True
+        elif text in ("off", "false", "0"):
+            enabled = False
+        elif not text:
+            enabled = not self._prefs.display.show_suggestions
+        else:
+            self._add_system_message("Usage: /suggest [on|off]")
+            return
+
+        self._prefs.display.show_suggestions = enabled
+        save_show_suggestions(enabled)
+
+        input_widget = self.query_one("#chat-input", ChatInput)
+        input_widget._suggestions_enabled = enabled
+
+        if enabled:
+            self._add_system_message(
+                "Smart suggestions ON — type 2+ chars to see suggestions, Tab to accept"
+            )
+        else:
+            self._add_system_message("Smart suggestions OFF")
+            # Dismiss any visible suggestions
+            try:
+                self.query_one("#suggestion-bar", SuggestionBar).dismiss()
+            except Exception:
+                pass
 
     # ── /split – side-by-side reference panel ────────────────────────────
 

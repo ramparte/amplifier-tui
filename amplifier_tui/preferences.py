@@ -420,6 +420,7 @@ class DisplayPreferences:
     show_token_usage: bool = True  # Show token/context gauge in status bar
     context_window_size: int = 0  # Override context window (0 = auto-detect from model)
     fold_threshold: int = 20  # Auto-fold messages longer than this (0 = disabled)
+    show_suggestions: bool = True  # Show smart prompt suggestions as you type
 
 
 @dataclass
@@ -1416,6 +1417,49 @@ def save_fold_threshold(threshold: int, path: Path | None = None) -> None:
             )
         else:
             text = text.rstrip() + f"\n\ndisplay:\n  fold_threshold: {value}\n"
+
+        path.write_text(text)
+    except Exception:
+        pass  # Best-effort persistence
+
+
+def save_show_suggestions(enabled: bool, path: Path | None = None) -> None:
+    """Persist the show_suggestions display preference to the preferences file.
+
+    Surgically updates only the show_suggestions value, preserving the rest of the
+    file (including user comments) as-is.
+    """
+    import re
+
+    path = path or PREFS_PATH
+    try:
+        if path.exists():
+            text = path.read_text()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = _DEFAULT_YAML
+
+        value = "true" if enabled else "false"
+        if re.search(r"^\s+show_suggestions:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(\s+show_suggestions:).*$",
+                f"\\1 {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        elif re.search(r"^display:", text, re.MULTILINE):
+            # display section exists but no show_suggestions key
+            text = re.sub(
+                r"^(display:.*)$",
+                f"\\1\n  show_suggestions: {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            # No display section at all — append it
+            text = text.rstrip() + f"\n\ndisplay:\n  show_suggestions: {value}\n"
 
         path.write_text(text)
     except Exception:
