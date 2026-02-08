@@ -841,7 +841,7 @@ SHORTCUTS_TEXT = """\
 
  SEARCH & EDIT ──────────────────────────
   Ctrl+F           Search chat messages
-  Ctrl+R           Reverse history search
+  Ctrl+R           Reverse history search (Ctrl+S fwd)
   Ctrl+G           Open external editor
   Ctrl+Y           Copy last AI response
   Ctrl+M           Bookmark last response
@@ -879,7 +879,7 @@ SHORTCUTS_TEXT = """\
   /redo [N]        Resend last message
   /fold            Fold/unfold long messages
   /compact         Toggle compact mode
-  /history         Browse/clear input history
+  /history         Browse/search/clear input history
 
  SEARCH ─────────────────────────────────
   /search          Search chat messages
@@ -2707,6 +2707,10 @@ class AmplifierChicApp(App):
             self._rsearch_cycle_next()
             return True
 
+        if key == "ctrl+s":
+            self._rsearch_cycle_prev()
+            return True
+
         character = getattr(event, "character", None)
         is_printable = getattr(event, "is_printable", False)
         if character and is_printable:
@@ -2727,6 +2731,19 @@ class AmplifierChicApp(App):
             self._update_rsearch_display()
             return
         self._rsearch_match_idx += 1
+        entry = self._history.get_entry(self._rsearch_matches[self._rsearch_match_idx])
+        if entry is not None:
+            input_widget = self.query_one("#chat-input", ChatInput)
+            input_widget.clear()
+            input_widget.insert(entry)
+        self._update_rsearch_display()
+
+    def _rsearch_cycle_prev(self) -> None:
+        """Cycle to the previous (newer) match in the current result set."""
+        if not self._rsearch_matches or self._rsearch_match_idx <= 0:
+            self._update_rsearch_display()
+            return
+        self._rsearch_match_idx -= 1
         entry = self._history.get_entry(self._rsearch_matches[self._rsearch_match_idx])
         if entry is not None:
             input_widget = self.query_one("#chat-input", ChatInput)
@@ -3327,7 +3344,7 @@ class AmplifierChicApp(App):
             "  /template     Prompt templates with {{variables}} (/template save|use|remove|clear|<name>)\n"
             "  /alias        List/create/remove custom shortcuts\n"
             "  /compact      Toggle compact view mode (/compact on, /compact off)\n"
-            "  /history      Browse input history (/history clear, /history <N>)\n"
+            "  /history      Browse input history (/history <N>, /history search <query>, /history clear)\n"
             "  /undo         Remove last exchange (/undo <N> for last N exchanges)\n"
             "  /redo         Re-send last user message (/redo <N> for Nth-to-last)\n"
             "  /split        Toggle split view (/split pins|chat|file <path>|on|off)\n"
@@ -3348,7 +3365,7 @@ class AmplifierChicApp(App):
             "  F11           Toggle focus mode (hide chrome)\n"
             "  Ctrl+A        Toggle auto-scroll\n"
             "  Ctrl+F        Search chat messages\n"
-            "  Ctrl+R        Reverse search prompt history\n"
+            "  Ctrl+R        Reverse search prompt history (Ctrl+S for forward)\n"
             "  Ctrl+G        Open $EDITOR for longer prompts\n"
             "  Ctrl+Y        Copy last response to clipboard\n"
             "  Ctrl+M        Bookmark last response\n"
@@ -5383,6 +5400,28 @@ class AmplifierChicApp(App):
             self._add_system_message("Input history cleared.")
             return
 
+        if text.startswith("search ") or text == "search":
+            query = text[7:].strip() if text.startswith("search ") else ""
+            if not query:
+                self._add_system_message(
+                    "Usage: /history search <query>\n"
+                    "  Searches input history for entries containing <query>."
+                )
+                return
+            matches = self._history.search(query)
+            if not matches:
+                self._add_system_message(f"No history matching: {query}")
+                return
+            noun = "result" if len(matches) == 1 else "results"
+            lines = [f"History matching '{query}' ({len(matches)} {noun}):"]
+            for i, entry in enumerate(matches, 1):
+                preview = entry[:80].replace("\n", " ")
+                if len(entry) > 80:
+                    preview += "\u2026"
+                lines.append(f"  {i}. {preview}")
+            self._add_system_message("\n".join(lines))
+            return
+
         n = 20
         if text.isdigit():
             n = int(text)
@@ -5401,7 +5440,8 @@ class AmplifierChicApp(App):
             lines.append(f"  {i}. {preview}")
         lines.append("")
         lines.append(
-            "Up/Down arrows to recall, Ctrl+R to search, /history clear to reset"
+            "Up/Down arrows to recall, Ctrl+R to search, /history clear to reset\n"
+            "  /history search <query> to find specific entries"
         )
         self._add_system_message("\n".join(lines))
 
