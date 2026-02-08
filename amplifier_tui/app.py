@@ -17,7 +17,16 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Collapsible, Input, Markdown, Static, TextArea, Tree
+from textual.widgets import (
+    Collapsible,
+    Input,
+    Markdown,
+    OptionList,
+    Static,
+    TextArea,
+    Tree,
+)
+from textual.widgets.option_list import Option
 from textual import work
 
 from .history import PromptHistory
@@ -218,6 +227,7 @@ SHORTCUTS_TEXT = """\
   Ctrl+Y      Copy last response
   Ctrl+M      Bookmark last response
   Ctrl+A      Toggle auto-scroll
+  Ctrl+R      Search prompt history
   Up/Down     Browse prompt history
   F1          This help
   F11         Focus mode
@@ -268,6 +278,63 @@ class ShortcutOverlay(ModalScreen):
         self.app.pop_screen()
 
 
+class HistorySearchScreen(ModalScreen[str]):
+    """Modal for searching prompt history with fuzzy filtering."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", show=False),
+    ]
+
+    def __init__(self, history: PromptHistory) -> None:
+        super().__init__()
+        self._history = history
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="history-search-modal"):
+            yield Static(
+                "Search History  [dim](type to filter, Enter selects)[/]",
+                id="history-search-title",
+            )
+            yield Input(placeholder="Type to filter…", id="history-search-input")
+            yield OptionList(id="history-search-results")
+
+    def on_mount(self) -> None:
+        self._update_results("")
+        self.query_one("#history-search-input", Input).focus()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "history-search-input":
+            self._update_results(event.value)
+
+    def _update_results(self, query: str) -> None:
+        option_list = self.query_one("#history-search-results", OptionList)
+        option_list.clear_options()
+        matches = self._history.search(query)
+        for item in matches:
+            display = item[:120] + "…" if len(item) > 120 else item
+            option_list.add_option(Option(display, id=item))
+        if matches:
+            option_list.highlighted = 0
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        # Option id stores the full original text
+        if event.option.id is not None:
+            self.dismiss(event.option.id)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "history-search-input":
+            option_list = self.query_one("#history-search-results", OptionList)
+            if option_list.option_count > 0 and option_list.highlighted is not None:
+                opt = option_list.get_option_at_index(option_list.highlighted)
+                if opt.id is not None:
+                    self.dismiss(opt.id)
+            else:
+                self.dismiss("")
+
+    def action_cancel(self) -> None:
+        self.dismiss("")
+
+
 # ── Main Application ────────────────────────────────────────────────
 
 
@@ -292,6 +359,7 @@ class AmplifierChicApp(App):
         Binding("ctrl+a", "toggle_auto_scroll", "Scroll", show=False),
         Binding("ctrl+l", "clear_chat", "Clear", show=False),
         Binding("ctrl+m", "bookmark_last", "Bookmark", show=False),
+        Binding("ctrl+r", "search_history", "History", show=False),
         Binding("ctrl+q", "quit", "Quit", show=True),
     ]
 
@@ -734,6 +802,21 @@ class AmplifierChicApp(App):
             self.pop_screen()
         else:
             self.push_screen(ShortcutOverlay())
+
+    def action_search_history(self) -> None:
+        """Open the prompt history search modal (Ctrl+R)."""
+        if self._history.entry_count == 0:
+            self._add_system_message("No prompt history yet.")
+            return
+
+        def _on_result(result: str) -> None:
+            if result:
+                input_widget = self.query_one("#chat-input", ChatInput)
+                input_widget.clear()
+                input_widget.insert(result)
+                input_widget.focus()
+
+        self.push_screen(HistorySearchScreen(self._history), _on_result)
 
     async def action_quit(self) -> None:
         """Clean up the Amplifier session before quitting.
