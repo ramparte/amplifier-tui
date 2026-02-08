@@ -18,8 +18,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from functools import partial
+
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.command import DiscoveryHit, Hit, Hits, Provider
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import (
@@ -140,6 +143,8 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/stream",
     "/tab",
     "/tabs",
+    "/palette",
+    "/commands",
 )
 
 
@@ -858,6 +863,7 @@ SHORTCUTS_TEXT = """\
   Ctrl+T           New tab
   Ctrl+W           Close tab
   Ctrl+PgUp/Dn    Switch tabs
+  Ctrl+P           Command palette (fuzzy search)
   F1 / Ctrl+/      This help
   Ctrl+Q           Quit
 
@@ -928,6 +934,7 @@ SHORTCUTS_TEXT = """\
   /prefs           Preferences
   /notify          Toggle notifications
   /sound           Toggle notification sound (on|off|test)
+  /palette         Command palette (same as Ctrl+P)
   /keys            Show this overlay
   /quit            Quit
 
@@ -1048,8 +1055,178 @@ class TabBar(Horizontal):
 # ── Main Application ────────────────────────────────────────────────
 
 
+# ── Command Palette Provider ─────────────────────────────────────────────────
+
+# (display_name, description, command_key)
+# command_key: "/cmd" delegates to _handle_slash_command; "action:name" calls action_name
+_PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
+    # ── Slash commands ──────────────────────────────────────────────────────
+    ("/help", "Show help reference", "/help"),
+    ("/clear", "Clear chat display", "/clear"),
+    ("/new", "Start a new session", "/new"),
+    ("/sessions", "Toggle session sidebar", "/sessions"),
+    ("/prefs", "Open preferences", "/preferences"),
+    ("/model", "Show or switch AI model", "/model"),
+    ("/stats", "Session statistics (tools, tokens)", "/stats"),
+    ("/tokens", "Detailed token and context usage breakdown", "/tokens"),
+    ("/context", "Visual context window usage bar", "/context"),
+    ("/info", "Session details (ID, model, project, counts)", "/info"),
+    ("/copy", "Copy last response (N, all, code)", "/copy"),
+    ("/bookmark", "Bookmark last AI response", "/bookmark"),
+    ("/bookmarks", "List or jump to bookmarks", "/bookmarks"),
+    ("/ref", "Save a URL or reference", "/ref"),
+    ("/refs", "List saved references", "/refs"),
+    ("/title", "View or set session title", "/title"),
+    ("/rename", "Rename current session", "/rename"),
+    ("/pin", "Pin last AI message", "/pin"),
+    ("/pins", "List pinned messages", "/pins"),
+    ("/unpin", "Remove a pin by number", "/unpin"),
+    ("/pin-session", "Pin or unpin session in sidebar", "/pin-session"),
+    ("/delete", "Delete session (with confirmation)", "/delete"),
+    ("/export", "Export chat (md, html, json, txt)", "/export"),
+    ("/notify", "Toggle notifications (on, off, sound, silent)", "/notify"),
+    ("/sound", "Toggle notification sound (on, off, test)", "/sound"),
+    ("/scroll", "Toggle auto-scroll on/off", "/scroll"),
+    ("/timestamps", "Toggle message timestamps", "/timestamps"),
+    ("/wrap", "Toggle word wrap (on, off)", "/wrap"),
+    ("/fold", "Fold or unfold long messages", "/fold"),
+    ("/theme", "Switch color theme", "/theme"),
+    ("/theme preview", "Preview all themes with swatches", "/theme preview"),
+    ("/colors", "View or set custom colors", "/colors"),
+    ("/focus", "Toggle focus mode", "/focus"),
+    ("/search", "Search chat messages", "/search"),
+    ("/grep", "Search chat with regex", "/grep"),
+    ("/diff", "Show git diff (staged, all, file)", "/diff"),
+    ("/watch", "Watch files for changes", "/watch"),
+    ("/sort", "Sort sessions (date, name, project)", "/sort"),
+    ("/edit", "Open $EDITOR for input", "/edit"),
+    ("/draft", "Save, load, or clear input draft", "/draft"),
+    ("/snippet", "Manage prompt snippets", "/snippet"),
+    ("/snippets", "List all prompt snippets", "/snippets"),
+    ("/template", "Manage prompt templates", "/template"),
+    ("/templates", "List all prompt templates", "/templates"),
+    ("/alias", "List, create, or remove command aliases", "/alias"),
+    ("/compact", "Toggle compact view mode", "/compact"),
+    ("/history", "Browse or search input history", "/history"),
+    ("/undo", "Remove last exchange", "/undo"),
+    ("/redo", "Re-send last user message", "/redo"),
+    ("/split", "Toggle split view (pins, chat, file)", "/split"),
+    ("/stream", "Toggle streaming display", "/stream"),
+    ("/vim", "Toggle vim keybindings", "/vim"),
+    ("/tab", "Tab management (new, switch, close, rename, list)", "/tab"),
+    ("/tab new", "Open a new conversation tab", "/tab new"),
+    ("/tab list", "List all open tabs", "/tab list"),
+    ("/tabs", "List all open tabs", "/tabs"),
+    ("/keys", "Keyboard shortcuts overlay", "/keys"),
+    ("/quit", "Quit the application", "/quit"),
+    # ── Keyboard-shortcut actions ───────────────────────────────────────────
+    ("New Session  Ctrl+N", "Start a new conversation", "action:new_session"),
+    ("New Tab  Ctrl+T", "Open a new conversation tab", "action:new_tab"),
+    ("Close Tab  Ctrl+W", "Close the current tab", "action:close_tab"),
+    ("Previous Tab  Ctrl+PgUp", "Switch to previous tab", "action:prev_tab"),
+    ("Next Tab  Ctrl+PgDn", "Switch to next tab", "action:next_tab"),
+    (
+        "Toggle Sidebar  Ctrl+B",
+        "Show or hide session sidebar",
+        "action:toggle_sidebar",
+    ),
+    (
+        "Open Editor  Ctrl+G",
+        "Open external editor for input",
+        "action:open_editor",
+    ),
+    (
+        "Copy Response  Ctrl+Y",
+        "Copy last AI response to clipboard",
+        "action:copy_response",
+    ),
+    (
+        "Stash Prompt  Ctrl+S",
+        "Stash or restore draft prompt",
+        "action:stash_prompt",
+    ),
+    (
+        "Bookmark Last  Ctrl+M",
+        "Bookmark the last AI response",
+        "action:bookmark_last",
+    ),
+    (
+        "Search History  Ctrl+R",
+        "Reverse search prompt history",
+        "action:search_history",
+    ),
+    ("Search Chat  Ctrl+F", "Search chat messages", "action:search_chat"),
+    (
+        "Toggle Auto-scroll  Ctrl+A",
+        "Toggle auto-scroll on/off",
+        "action:toggle_auto_scroll",
+    ),
+    ("Clear Chat  Ctrl+L", "Clear the chat display", "action:clear_chat"),
+    (
+        "Focus Mode  F11",
+        "Toggle focus mode (hide chrome)",
+        "action:toggle_focus_mode",
+    ),
+    (
+        "Keyboard Shortcuts  F1",
+        "Show keyboard shortcuts overlay",
+        "action:show_shortcuts",
+    ),
+    (
+        "Scroll to Top  Ctrl+Home",
+        "Jump to top of chat",
+        "action:scroll_chat_top",
+    ),
+    (
+        "Scroll to Bottom  Ctrl+End",
+        "Jump to bottom of chat",
+        "action:scroll_chat_bottom",
+    ),
+)
+
+
+class AmplifierCommandProvider(Provider):
+    """Provide all TUI slash commands and actions to the command palette."""
+
+    async def search(self, query: str) -> Hits:
+        """Yield commands that fuzzy-match *query*."""
+        matcher = self.matcher(query)
+        for name, description, command_key in _PALETTE_COMMANDS:
+            score = matcher.match(f"{name} {description}")
+            if score > 0:
+                yield Hit(
+                    score,
+                    matcher.highlight(name),
+                    partial(self._run_command, command_key),
+                    help=description,
+                )
+
+    async def discover(self) -> Hits:
+        """Show every command when the palette first opens (no query yet)."""
+        for name, description, command_key in _PALETTE_COMMANDS:
+            yield DiscoveryHit(
+                name,
+                partial(self._run_command, command_key),
+                help=description,
+            )
+
+    def _run_command(self, key: str) -> None:
+        """Execute a palette command by dispatching to the app."""
+        app = self.app
+        if key.startswith("action:"):
+            action_name = key[7:]
+            method = getattr(app, f"action_{action_name}", None)
+            if method is not None:
+                method()
+        else:
+            # Delegate to the existing slash-command router
+            app._handle_slash_command(key)  # type: ignore[attr-defined]
+
+
 class AmplifierChicApp(App):
     """Amplifier TUI - a clean TUI for Amplifier."""
+
+    COMMANDS = {AmplifierCommandProvider}
 
     CSS_PATH = "styles.tcss"
     TITLE = "Amplifier TUI"
@@ -3292,6 +3469,8 @@ class AmplifierChicApp(App):
             "/stream": lambda: self._cmd_stream(args),
             "/tab": lambda: self._cmd_tab(args),
             "/tabs": lambda: self._cmd_tab(""),
+            "/palette": self.action_command_palette,
+            "/commands": self.action_command_palette,
         }
 
         handler = handlers.get(cmd)
@@ -3359,6 +3538,7 @@ class AmplifierChicApp(App):
             "  /tab          Tab management (/tab new|switch|close|rename|list)\n"
             "  /tabs         List all open tabs\n"
             "  /keys         Keyboard shortcut overlay\n"
+            "  /palette      Command palette (Ctrl+P) – fuzzy search all commands\n"
             "  /quit         Quit\n"
             "\n"
             "Key Bindings  (press F1 for full overlay)\n"
@@ -3380,6 +3560,7 @@ class AmplifierChicApp(App):
             "  Ctrl+N        New session\n"
             "  Ctrl+L        Clear chat\n"
             "  Escape        Cancel streaming generation\n"
+            "  Ctrl+P        Command palette (fuzzy search all commands)\n"
             "  Ctrl+T        New conversation tab\n"
             "  Ctrl+W        Close current tab\n"
             "  Ctrl+PgUp/Dn  Switch between tabs\n"
