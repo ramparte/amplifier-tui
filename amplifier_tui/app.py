@@ -309,6 +309,7 @@ SHORTCUTS_TEXT = """\
   /colors     View/set colors
   /export     Export to markdown
   /rename     Rename session
+  /pin        Pin/unpin session
   /delete     Delete session
   /stats      Session statistics
   /copy [N]   Copy last response (or msg N)
@@ -413,6 +414,7 @@ class AmplifierChicApp(App):
     MAX_STASHES = 5
     SESSION_NAMES_FILE = Path.home() / ".amplifier" / "tui-session-names.json"
     BOOKMARKS_FILE = Path.home() / ".amplifier" / "tui-bookmarks.json"
+    PINNED_SESSIONS_FILE = Path.home() / ".amplifier" / "tui-pinned-sessions.json"
 
     BINDINGS = [
         Binding("f1", "show_shortcuts", "Help", show=True),
@@ -487,6 +489,9 @@ class AmplifierChicApp(App):
         # Search index: parallel list of (role, text, widget) for /search
         self._search_messages: list[tuple[str, str, Static | None]] = []
 
+        # Pinned sessions (appear at top of sidebar)
+        self._pinned_sessions: set[str] = set()
+
     # ── Layout ──────────────────────────────────────────────────
 
     def compose(self) -> ComposeResult:
@@ -529,6 +534,9 @@ class AmplifierChicApp(App):
         # Start the spinner timer
         self._spinner_frame = 0
         self._spinner_timer = self.set_interval(0.3, self._animate_spinner)
+
+        # Load pinned sessions
+        self._pinned_sessions = self._load_pinned_sessions()
 
         # Heavy import in background
         self._init_amplifier_worker()
@@ -608,6 +616,34 @@ class AmplifierChicApp(App):
         self.SESSION_NAMES_FILE.parent.mkdir(parents=True, exist_ok=True)
         self.SESSION_NAMES_FILE.write_text(json.dumps(names, indent=2))
 
+    # ── Pinned Sessions ─────────────────────────────────────────
+
+    def _load_pinned_sessions(self) -> set[str]:
+        """Load pinned session IDs from the JSON file."""
+        try:
+            if self.PINNED_SESSIONS_FILE.exists():
+                data = json.loads(self.PINNED_SESSIONS_FILE.read_text())
+                return set(data)
+        except Exception:
+            pass
+        return set()
+
+    def _save_pinned_sessions(self) -> None:
+        """Persist the current set of pinned session IDs."""
+        try:
+            self.PINNED_SESSIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self.PINNED_SESSIONS_FILE.write_text(
+                json.dumps(sorted(self._pinned_sessions), indent=2)
+            )
+        except Exception:
+            pass
+
+    def _remove_pinned_session(self, session_id: str) -> None:
+        """Remove a session from pinned set (e.g. on delete)."""
+        if session_id in self._pinned_sessions:
+            self._pinned_sessions.discard(session_id)
+            self._save_pinned_sessions()
+
     # ── Bookmarks ─────────────────────────────────────────────
 
     def _get_session_id(self) -> str | None:
@@ -667,12 +703,40 @@ class AmplifierChicApp(App):
         sessions = SessionManager.list_all_sessions(limit=50)
         self.call_from_thread(self._populate_session_list, sessions)
 
+    def _session_display_label(
+        self,
+        s: dict,
+        custom_names: dict[str, str],
+    ) -> str:
+        """Build the display string for a session tree node.
+
+        Returns e.g. ``"01/15 14:02  My Project"`` or ``"▪ 01/15 14:02  My Project"``
+        with a pin marker when the session is pinned.
+        """
+        sid = s["session_id"]
+        custom = custom_names.get(sid)
+        name = s.get("name", "")
+        desc = s.get("description", "")
+
+        if custom:
+            label = custom[:28] if len(custom) > 28 else custom
+        elif name:
+            label = name[:28] if len(name) > 28 else name
+        elif desc:
+            label = desc[:28] if len(desc) > 28 else desc
+        else:
+            label = sid[:8]
+
+        date = s["date_str"]
+        pin = "▪ " if sid in self._pinned_sessions else ""
+        return f"{pin}{date}  {label}"
+
     def _populate_session_list(self, sessions: list[dict]) -> None:
         """Populate sidebar tree with sessions grouped by project folder.
 
-        Each project folder is an expandable node. Sessions show as single-line
-        summaries (date + name/description). Session ID is stored as node data
-        for selection handling without cluttering the display.
+        Pinned sessions are rendered first under a dedicated group, then the
+        remaining sessions are grouped by project in recency order.  Session ID
+        is stored as node ``data`` for selection handling.
         """
         self._session_list_data = []
         tree = self.query_one("#session-tree", Tree)
@@ -685,35 +749,34 @@ class AmplifierChicApp(App):
 
         custom_names = self._load_session_names()
 
-        # Group by project, maintaining recency order
+        # Partition into pinned / unpinned, preserving recency order
+        pinned = [s for s in sessions if s["session_id"] in self._pinned_sessions]
+        unpinned = [s for s in sessions if s["session_id"] not in self._pinned_sessions]
+
+        # ── Pinned group ──
+        if pinned:
+            pin_group = tree.root.add("▪ Pinned", expand=True)
+            for s in pinned:
+                sid = s["session_id"]
+                display = self._session_display_label(s, custom_names)
+                node = pin_group.add(display, data=sid)
+                node.add_leaf(f"id: {sid[:12]}...")
+                node.collapse()
+                self._session_list_data.append(s)
+
+        # ── Unpinned, grouped by project ──
         current_group: str | None = None
         group_node = tree.root
-        for s in sessions:
+        for s in unpinned:
             project = s["project"]
             if project != current_group:
                 current_group = project
-                # Shorten long paths: show last 2 components
                 parts = project.split("/")
                 short = "/".join(parts[-2:]) if len(parts) > 2 else project
                 group_node = tree.root.add(short, expand=True)
 
-            date = s["date_str"]
             sid = s["session_id"]
-            custom = custom_names.get(sid)
-            name = s.get("name", "")
-            desc = s.get("description", "")
-
-            if custom:
-                label = custom[:28] if len(custom) > 28 else custom
-            elif name:
-                label = name[:28] if len(name) > 28 else name
-            elif desc:
-                label = desc[:28] if len(desc) > 28 else desc
-            else:
-                label = sid[:8]
-
-            # Session is an expandable node: summary on collapse, ID on expand
-            display = f"{date}  {label}"
+            display = self._session_display_label(s, custom_names)
             session_node = group_node.add(display, data=sid)
             session_node.add_leaf(f"id: {sid[:12]}...")
             session_node.collapse()
@@ -777,6 +840,7 @@ class AmplifierChicApp(App):
         """Rebuild the session tree showing only sessions matching *query*.
 
         Matches against session name/description, session ID, and project path.
+        Pinned sessions appear first under a dedicated group.
         When the query is empty, all sessions are shown.
         """
         tree = self.query_one("#session-tree", Tree)
@@ -790,46 +854,54 @@ class AmplifierChicApp(App):
         q = query.lower().strip()
         custom_names = self._load_session_names()
 
-        # Group by project, maintaining recency order (same as _populate_session_list)
+        def _matches(s: dict) -> bool:
+            """Return True if the session matches the current filter query."""
+            if not q:
+                return True
+            sid = s["session_id"]
+            display = self._session_display_label(s, custom_names)
+            project = s["project"]
+            return q in display.lower() or q in sid.lower() or q in project.lower()
+
+        # Partition into pinned / unpinned, preserving recency order
+        pinned = [
+            s
+            for s in sessions
+            if s["session_id"] in self._pinned_sessions and _matches(s)
+        ]
+        unpinned = [
+            s
+            for s in sessions
+            if s["session_id"] not in self._pinned_sessions and _matches(s)
+        ]
+        matched = len(pinned) + len(unpinned)
+
+        # ── Pinned group ──
+        if pinned:
+            pin_group = tree.root.add("▪ Pinned", expand=True)
+            for s in pinned:
+                sid = s["session_id"]
+                display = self._session_display_label(s, custom_names)
+                node = pin_group.add(display, data=sid)
+                node.add_leaf(f"id: {sid[:12]}...")
+                node.collapse()
+
+        # ── Unpinned, grouped by project ──
         current_group: str | None = None
         group_node = tree.root
-        matched = 0
-        for s in sessions:
+        for s in unpinned:
             project = s["project"]
-            date = s["date_str"]
-            sid = s["session_id"]
-            custom = custom_names.get(sid)
-            name = s.get("name", "")
-            desc = s.get("description", "")
-
-            if custom:
-                label = custom[:28] if len(custom) > 28 else custom
-            elif name:
-                label = name[:28] if len(name) > 28 else name
-            elif desc:
-                label = desc[:28] if len(desc) > 28 else desc
-            else:
-                label = sid[:8]
-
-            display = f"{date}  {label}"
-
-            # Apply filter: match on display label, session ID, or project path
-            if q and not (
-                q in display.lower() or q in sid.lower() or q in project.lower()
-            ):
-                continue
-
-            # Start a new project group if needed
             if project != current_group:
                 current_group = project
                 parts = project.split("/")
                 short = "/".join(parts[-2:]) if len(parts) > 2 else project
                 group_node = tree.root.add(short, expand=True)
 
+            sid = s["session_id"]
+            display = self._session_display_label(s, custom_names)
             session_node = group_node.add(display, data=sid)
             session_node.add_leaf(f"id: {sid[:12]}...")
             session_node.collapse()
-            matched += 1
 
         if q and matched == 0:
             tree.root.add_leaf("No matching sessions")
@@ -1204,6 +1276,7 @@ class AmplifierChicApp(App):
             "/bookmarks": lambda: self._cmd_bookmarks(text),
             "/search": lambda: self._cmd_search(text),
             "/colors": lambda: self._cmd_colors(text),
+            "/pin": lambda: self._cmd_pin(text),
         }
 
         handler = handlers.get(cmd)
@@ -1229,6 +1302,7 @@ class AmplifierChicApp(App):
             "  /bookmark     Bookmark last response (/bm alias, optional label)\n"
             "  /bookmarks    List bookmarks | /bookmarks <N> to jump\n"
             "  /rename       Rename current session (e.g. /rename My Project)\n"
+            "  /pin          Pin/unpin session (pinned appear at top of sidebar)\n"
             "  /delete       Delete session (with confirmation)\n"
             "  /export       Export session to markdown file\n"
             "  /notify       Toggle completion notifications\n"
@@ -1882,6 +1956,36 @@ class AmplifierChicApp(App):
         self._add_system_message(f'Session renamed to "{new_name}"')
         self._update_breadcrumb()
 
+    def _cmd_pin(self, text: str) -> None:
+        """Pin or unpin a session so it appears at the top of the sidebar."""
+        sm = self.session_manager if hasattr(self, "session_manager") else None
+        sid = getattr(sm, "session_id", None) if sm else None
+        if not sid:
+            self._add_system_message("No active session to pin.")
+            return
+
+        # Toggle pin state
+        if sid in self._pinned_sessions:
+            self._pinned_sessions.discard(sid)
+            self._save_pinned_sessions()
+            verb = "unpinned"
+        else:
+            self._pinned_sessions.add(sid)
+            self._save_pinned_sessions()
+            verb = "pinned"
+
+        # Refresh sidebar if it has data loaded
+        if self._session_list_data:
+            self._populate_session_list(self._session_list_data)
+
+        short = sid[:8]
+        if verb == "pinned":
+            self._add_system_message(
+                f"Session {short} pinned (will appear at top of sidebar)."
+            )
+        else:
+            self._add_system_message(f"Session {short} unpinned.")
+
     def _cmd_delete(self, text: str) -> None:
         """Delete a session with two-step confirmation."""
         parts = text.strip().split(None, 1)
@@ -1951,8 +2055,9 @@ class AmplifierChicApp(App):
             s for s in self._session_list_data if s["session_id"] != session_id
         ]
 
-        # Remove custom name if any
+        # Remove custom name and pin state if any
         self._remove_session_name(session_id)
+        self._remove_pinned_session(session_id)
 
         # Refresh sidebar
         if self._session_list_data:
