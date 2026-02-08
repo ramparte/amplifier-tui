@@ -135,6 +135,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/unpin",
     "/pin-session",
     "/draft",
+    "/drafts",
     "/tokens",
     "/context",
     "/sort",
@@ -330,6 +331,8 @@ class TabState:
     # Custom system prompt for this tab
     system_prompt: str = ""
     system_preset_name: str = ""  # name of active preset (if any)
+    # Unsent input text (preserved across tab switches)
+    input_text: str = ""
 
 
 @dataclass
@@ -1572,6 +1575,8 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/sort", "Sort sessions (date, name, project)", "/sort"),
     ("/edit", "Open $EDITOR for input", "/edit"),
     ("/draft", "Save, load, or clear input draft", "/draft"),
+    ("/drafts", "List all saved drafts across sessions", "/drafts"),
+    ("/drafts clear", "Clear the current session draft", "/drafts clear"),
     ("/snippet", "Manage prompt snippets", "/snippet"),
     ("/snippets", "List all prompt snippets", "/snippets"),
     ("/template", "Manage prompt templates", "/template"),
@@ -1961,6 +1966,9 @@ class AmplifierChicApp(App):
         # Crash-recovery draft timer (debounced save)
         self._crash_draft_timer: object | None = None
 
+        # Draft auto-save change detection
+        self._last_saved_draft: str = ""
+
         # Session auto-title (extracted from first user message)
         self._session_title: str = ""
 
@@ -2093,8 +2101,8 @@ class AmplifierChicApp(App):
         # Load prompt templates with {{variable}} placeholders
         self._templates = self._load_templates()
 
-        # Periodic draft auto-save in case of crash
-        self.set_interval(30, self._auto_save_draft)
+        # Periodic draft auto-save (every 5s, only writes when content changes)
+        self.set_interval(5, self._auto_save_draft)
 
         # Initialize session auto-save system
         self._setup_autosave()
@@ -2204,6 +2212,11 @@ class AmplifierChicApp(App):
         tab.session_notes = self._session_notes
         tab.system_prompt = self._system_prompt
         tab.system_preset_name = self._system_preset_name
+        # Preserve unsent input text across tab switches
+        try:
+            tab.input_text = self.query_one("#chat-input", ChatInput).text
+        except Exception:
+            pass
 
     def _load_tab_state(self, tab: TabState) -> None:
         """Load a TabState's data into current app state."""
@@ -2268,6 +2281,16 @@ class AmplifierChicApp(App):
 
         # Load new tab state
         self._load_tab_state(new_tab)
+
+        # Restore unsent input text for this tab
+        try:
+            input_widget = self.query_one("#chat-input", ChatInput)
+            input_widget.clear()
+            if new_tab.input_text:
+                input_widget.insert(new_tab.input_text)
+            self._last_saved_draft = new_tab.input_text
+        except Exception:
+            pass
 
         # Update UI
         self._update_tab_bar()
@@ -2759,14 +2782,27 @@ class AmplifierChicApp(App):
 
     # ── Drafts ────────────────────────────────────────────────
 
-    def _load_drafts(self) -> dict[str, str]:
-        """Load all drafts from the JSON file."""
+    def _load_drafts(self) -> dict:
+        """Load all drafts from the JSON file.
+
+        Returns a dict of ``{session_id: {text, timestamp, preview}}``
+        (or plain strings for backward-compat with older files).
+        """
         try:
             if self.DRAFTS_FILE.exists():
                 return json.loads(self.DRAFTS_FILE.read_text())
         except Exception:
             pass
         return {}
+
+    @staticmethod
+    def _draft_text(entry: object) -> str:
+        """Extract plain text from a draft entry (handles old str or new dict format)."""
+        if isinstance(entry, dict):
+            return entry.get("text", "")
+        if isinstance(entry, str):
+            return entry
+        return ""
 
     def _save_draft(self) -> None:
         """Save current input as draft for active session."""
@@ -2781,12 +2817,17 @@ class AmplifierChicApp(App):
             drafts = self._load_drafts()
 
             if text:
-                drafts[session_id] = text
+                drafts[session_id] = {
+                    "text": text,
+                    "timestamp": datetime.now().isoformat(),
+                    "preview": text[:100].replace("\n", " "),
+                }
             elif session_id in drafts:
                 del drafts[session_id]
             else:
                 return  # Nothing to save or clear
 
+            self._purge_old_drafts(drafts)
             self.DRAFTS_FILE.parent.mkdir(parents=True, exist_ok=True)
             self.DRAFTS_FILE.write_text(json.dumps(drafts, indent=2))
         except Exception:
@@ -2800,12 +2841,14 @@ class AmplifierChicApp(App):
                 return
 
             drafts = self._load_drafts()
-            draft_text = drafts.get(session_id, "")
+            entry = drafts.get(session_id)
+            draft_text = self._draft_text(entry) if entry else ""
 
             if draft_text:
                 input_widget = self.query_one("#chat-input", ChatInput)
                 input_widget.clear()
                 input_widget.insert(draft_text)
+                self._last_saved_draft = draft_text
                 self._add_system_message(f"Draft restored ({len(draft_text)} chars)")
         except Exception:
             pass
@@ -2821,15 +2864,56 @@ class AmplifierChicApp(App):
                 del drafts[session_id]
                 self.DRAFTS_FILE.parent.mkdir(parents=True, exist_ok=True)
                 self.DRAFTS_FILE.write_text(json.dumps(drafts, indent=2))
+            self._last_saved_draft = ""
         except Exception:
             pass
 
     def _auto_save_draft(self) -> None:
-        """Periodic auto-save of input draft (called by timer)."""
+        """Periodic auto-save of input draft (called every 5s by timer).
+
+        Only writes to disk when the input text has actually changed since
+        the last save, and briefly flashes a 'Draft saved' notification.
+        """
         try:
             input_widget = self.query_one("#chat-input", ChatInput)
-            if input_widget.text.strip():
-                self._save_draft()
+            current = input_widget.text
+            if current != self._last_saved_draft:
+                self._last_saved_draft = current
+                session_id = self._get_session_id()
+                if session_id:
+                    self._save_draft()
+                    if current.strip():
+                        self.notify("Draft saved", timeout=1.5, severity="information")
+        except Exception:
+            pass
+
+    def _purge_old_drafts(self, drafts: dict) -> None:
+        """Remove drafts older than 30 days and cap at 50 entries."""
+        try:
+            now = datetime.now()
+            expired = []
+            for sid, entry in drafts.items():
+                if isinstance(entry, dict):
+                    ts = entry.get("timestamp", "")
+                    if ts:
+                        try:
+                            age = now - datetime.fromisoformat(ts)
+                            if age.days > 30:
+                                expired.append(sid)
+                        except (ValueError, TypeError):
+                            pass
+            for sid in expired:
+                del drafts[sid]
+            # Cap at 50 entries – drop oldest first
+            if len(drafts) > 50:
+                by_ts = sorted(
+                    drafts.items(),
+                    key=lambda kv: (
+                        kv[1].get("timestamp", "") if isinstance(kv[1], dict) else ""
+                    ),
+                )
+                for sid, _ in by_ts[: len(drafts) - 50]:
+                    del drafts[sid]
         except Exception:
             pass
 
@@ -4625,6 +4709,7 @@ class AmplifierChicApp(App):
             "/unpin": lambda: self._cmd_unpin(text),
             "/pin-session": lambda: self._cmd_pin_session(text),
             "/draft": lambda: self._cmd_draft(text),
+            "/drafts": lambda: self._cmd_drafts(text),
             "/sort": lambda: self._cmd_sort(text),
             "/edit": self.action_open_editor,
             "/editor": self.action_open_editor,
@@ -4728,6 +4813,7 @@ class AmplifierChicApp(App):
             "  /edit         Open $EDITOR for longer prompts (same as Ctrl+G)\n"
             "  /editor       Alias for /edit\n"
             "  /draft        Show/save/clear/load input draft (/draft save, /draft clear, /draft load)\n"
+            "  /drafts       List all saved drafts across sessions (/drafts clear to clear current)\n"
             "  /snippet      Prompt snippets (/snippet save|use|remove|search|cat|tag|export|import|<name>)\n"
             "  /template     Prompt templates with {{variables}} (/template save|use|remove|clear|<name>)\n"
             "  /alias        List/create/remove custom shortcuts\n"
@@ -5824,7 +5910,7 @@ class AmplifierChicApp(App):
         session_id = self._get_session_id()
         drafts = self._load_drafts()
         if session_id and session_id in drafts:
-            draft = drafts[session_id]
+            draft = self._draft_text(drafts[session_id])
             preview = draft[:80].replace("\n", " ")
             suffix = "..." if len(draft) > 80 else ""
             lines.append(f"Session draft ({len(draft)} chars): {preview}{suffix}")
@@ -5849,6 +5935,59 @@ class AmplifierChicApp(App):
                 )
             else:
                 lines.append("No draft or unsaved input")
+
+        self._add_system_message("\n".join(lines))
+
+    def _cmd_drafts(self, text: str) -> None:
+        """List all saved drafts across sessions, or clear current draft."""
+        arg = (
+            text.strip().split(None, 1)[1].strip().lower()
+            if " " in text.strip()
+            else ""
+        )
+
+        if arg == "clear":
+            sid = self._get_session_id()
+            if sid:
+                self._clear_draft()
+                self._clear_crash_draft()
+                try:
+                    input_widget = self.query_one("#chat-input", ChatInput)
+                    input_widget.clear()
+                except Exception:
+                    pass
+                self._add_system_message("Draft cleared")
+            else:
+                self._add_system_message("No active session")
+            return
+
+        # List all drafts
+        drafts = self._load_drafts()
+        if not drafts:
+            self._add_system_message("No saved drafts")
+            return
+
+        lines = ["Saved Drafts:", ""]
+        sorted_drafts = sorted(
+            drafts.items(),
+            key=lambda kv: (
+                kv[1].get("timestamp", "") if isinstance(kv[1], dict) else ""
+            ),
+            reverse=True,
+        )
+        for sid, entry in sorted_drafts:
+            if isinstance(entry, dict):
+                ts = entry.get("timestamp", "unknown")[:16]
+                preview = entry.get("preview", "")[:60]
+                text_len = len(entry.get("text", ""))
+            else:
+                ts = "unknown"
+                preview = str(entry)[:60].replace("\n", " ")
+                text_len = len(str(entry))
+            suffix = "..." if len(preview) >= 60 else ""
+            lines.append(
+                f"  {sid[:12]}... [{ts}] ({text_len} chars): {preview}{suffix}"
+            )
 
         self._add_system_message("\n".join(lines))
 
