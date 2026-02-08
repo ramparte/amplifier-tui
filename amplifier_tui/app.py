@@ -420,12 +420,15 @@ class ChatInput(TextArea):
     # -- Key handling --------------------------------------------------------
 
     def _update_line_indicator(self) -> None:
-        """Show line count in border subtitle when input is multi-line."""
-        lines = self.text.count("\n") + 1
-        if lines > 1:
-            self.border_subtitle = f"{lines} lines"
+        """Show line count in border subtitle and cursor position in border title."""
+        total = self.text.count("\n") + 1
+        if total > 1:
+            self.border_subtitle = f"{total} lines"
+            row, col = self.cursor_location
+            self.border_title = f"L{row + 1}/{total} C{col + 1}"
         else:
             self.border_subtitle = ""
+            self.border_title = ""
 
     async def _on_key(self, event) -> None:  # noqa: C901
         # ── Reverse search mode intercepts all keys ──────────────
@@ -1522,6 +1525,13 @@ class AmplifierChicApp(App):
             if self._crash_draft_timer is not None:
                 self._crash_draft_timer.stop()
             self._crash_draft_timer = self.set_timer(5.0, self._save_crash_draft)
+
+    def on_text_area_selection_changed(self, event: TextArea.SelectionChanged) -> None:
+        """Update cursor position in border title when selection/cursor moves."""
+        if event.text_area.id == "chat-input" and isinstance(
+            event.text_area, ChatInput
+        ):
+            event.text_area._update_line_indicator()
 
     def _update_input_counter(self, text: str) -> None:
         """Update the character/line counter below the chat input."""
