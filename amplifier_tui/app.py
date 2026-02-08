@@ -590,7 +590,7 @@ SHORTCUTS_TEXT = """\
   /model      Model info / list / set
   /theme      Switch theme
   /colors     View/set colors
-  /export     Export to markdown
+  /export     Export chat (md/txt/json)
   /title      View/set session title (auto from first msg)
   /rename     Rename session
   /pin        Pin/unpin session
@@ -2196,7 +2196,7 @@ class AmplifierChicApp(App):
             "  /rename       Rename current session (e.g. /rename My Project)\n"
             "  /pin          Pin/unpin session (pinned appear at top of sidebar)\n"
             "  /delete       Delete session (with confirmation)\n"
-            "  /export       Export session to markdown file\n"
+            "  /export       Export chat (md/txt/json) | /export <file> | /export <fmt>\n"
             "  /notify       Toggle notifications (/notify on|off|sound|silent|<secs>)\n"
             "  /sound        Toggle notification sound (/sound on, /sound off)\n"
             "  /scroll       Toggle auto-scroll on/off\n"
@@ -3670,67 +3670,111 @@ class AmplifierChicApp(App):
         self._apply_theme_to_all_widgets()
         self._add_system_message(f"Color '{key}' set to {value}")
 
-    def _cmd_export(self, text: str) -> None:
-        """Export the current chat to a clean markdown file."""
-        sm = self.session_manager if hasattr(self, "session_manager") else None
-        sid = getattr(sm, "session_id", None) if sm else None
+    # ------------------------------------------------------------------
+    # Export formatters
+    # ------------------------------------------------------------------
 
-        # Parse optional filename argument
-        parts = text.strip().split(None, 1)
-        if len(parts) > 1:
-            filename = parts[1].strip()
-        else:
-            filename = ""
-
-        if not filename:
-            timestamp = datetime.now().strftime("%Y-%m-%d-%H%M")
-            filename = f"chat-export-{timestamp}.md"
-
-        # Ensure .md extension
-        if not filename.endswith(".md"):
-            filename += ".md"
-
-        # Check for messages to export
-        exportable = [
-            (role, msg_text)
-            for role, msg_text, _widget in self._search_messages
-            if role != "system"
-        ]
-        if not exportable:
-            self._add_system_message("Nothing to export — chat is empty.")
-            return
-
-        # Resolve session name for the header
-        session_label = "unknown"
-        session_id_short = ""
-        if sid:
-            session_id_short = sid[:12]
-            names = self._load_session_names()
-            session_label = names.get(sid, session_id_short)
-
-        # Build markdown content
-        lines: list[str] = []
-
-        # Header
-        lines.append(f"# Chat Export: {session_label}")
-        lines.append(f"*Exported: {datetime.now().strftime('%Y-%m-%d %H:%M')}*")
-        if session_id_short:
-            lines.append(f"*Session: {session_id_short}*")
+    def _export_markdown(self, messages: list[tuple[str, str, Static | None]]) -> str:
+        """Format messages as markdown."""
+        lines = ["# Amplifier Chat Export", ""]
+        if self._session_title:
+            lines.append(f"**Session:** {self._session_title}")
+        lines.append(f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        lines.append(f"**Messages:** {len(messages)}")
         lines.append("")
         lines.append("---")
         lines.append("")
 
-        # Messages
-        for role, msg_text in exportable:
-            role_display = role.capitalize()
-            lines.append(f"### {role_display}")
+        for role, content, _widget in messages:
+            if role == "user":
+                lines.append("## You")
+            elif role == "assistant":
+                lines.append("## Assistant")
+            elif role == "system":
+                lines.append("## System")
+            else:
+                lines.append(f"## {role.title()}")
             lines.append("")
-            lines.append(msg_text)
-            lines.append("")
-            lines.append("---")
+            lines.append(content)
             lines.append("")
 
+        lines.append("---")
+        lines.append("")
         lines.append("*Exported from Amplifier TUI*")
+        return "\n".join(lines)
+
+    def _export_text(self, messages: list[tuple[str, str, Static | None]]) -> str:
+        """Format messages as plain text."""
+        lines: list[str] = []
+        for role, content, _widget in messages:
+            label = {"user": "You", "assistant": "AI", "system": "System"}.get(
+                role, role
+            )
+            lines.append(f"[{label}]")
+            lines.append(content)
+            lines.append("")
+        return "\n".join(lines)
+
+    def _export_json(self, messages: list[tuple[str, str, Static | None]]) -> str:
+        """Format messages as JSON."""
+        data = {
+            "session_title": self._session_title or "",
+            "exported_at": datetime.now().isoformat(),
+            "message_count": len(messages),
+            "messages": [
+                {"role": role, "content": content}
+                for role, content, _widget in messages
+            ],
+        }
+        return json.dumps(data, indent=2, ensure_ascii=False)
+
+    # ------------------------------------------------------------------
+    # /export command
+    # ------------------------------------------------------------------
+
+    def _cmd_export(self, text: str) -> None:
+        """Export the current chat to markdown, plain text, or JSON."""
+        # text is the full command, e.g. "/export md" or "/export myfile.json"
+        parts = text.strip().split(None, 1)
+        arg = parts[1].strip() if len(parts) > 1 else ""
+
+        if not self._search_messages:
+            self._add_system_message("No messages to export")
+            return
+
+        # Determine format and filename
+        fmt = "md"
+        filename = ""
+
+        if arg in ("md", "markdown"):
+            fmt = "md"
+        elif arg in ("txt", "text"):
+            fmt = "txt"
+        elif arg in ("json",):
+            fmt = "json"
+        elif arg:
+            filename = arg
+            if arg.endswith(".json"):
+                fmt = "json"
+            elif arg.endswith(".txt"):
+                fmt = "txt"
+            else:
+                fmt = "md"
+
+        # Auto-generate filename if not specified
+        if not filename:
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            filename = f"amplifier-chat-{ts}.{fmt}"
+        elif not filename.endswith(f".{fmt}"):
+            filename = f"{filename}.{fmt}"
+
+        # Generate content
+        if fmt == "json":
+            content = self._export_json(self._search_messages)
+        elif fmt == "txt":
+            content = self._export_text(self._search_messages)
+        else:
+            content = self._export_markdown(self._search_messages)
 
         # Write file
         out_path = Path(filename).expanduser()
@@ -3740,8 +3784,13 @@ class AmplifierChicApp(App):
 
         try:
             out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text("\n".join(lines), encoding="utf-8")
-            self._add_system_message(f"Chat exported to: {out_path}")
+            out_path.write_text(content, encoding="utf-8")
+            size = out_path.stat().st_size
+            size_str = f"{size:,} bytes" if size < 1024 else f"{size / 1024:.1f} KB"
+            self._add_system_message(
+                f"Exported {len(self._search_messages)} messages to {out_path}\n"
+                f"Format: {fmt.upper()}, Size: {size_str}"
+            )
         except OSError as e:
             self._add_system_message(f"Export failed: {e}")
 
