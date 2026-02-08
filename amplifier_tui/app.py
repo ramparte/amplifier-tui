@@ -1001,6 +1001,19 @@ class ChatInput(TextArea):
             self.app._toggle_fold_nearest()  # type: ignore[attr-defined]
             return True
 
+        # Bookmark: Ctrl+B toggles bookmark on nearest message
+        if key == "ctrl+b":
+            self.app._toggle_bookmark_nearest()  # type: ignore[attr-defined]
+            return True
+
+        # Bookmark navigation: [ prev, ] next
+        if key == "[":
+            self.app._jump_prev_bookmark()  # type: ignore[attr-defined]
+            return True
+        if key == "]":
+            self.app._jump_next_bookmark()  # type: ignore[attr-defined]
+            return True
+
         # Editing in normal mode
         if key == "x":
             self.action_delete_right()
@@ -1240,6 +1253,11 @@ SHORTCUTS_TEXT = """\
   Ctrl+M           Bookmark last response
   Ctrl+S           Stash/restore draft
 
+ VIM BOOKMARKS (normal mode) ─────────────
+  Ctrl+B           Toggle bookmark on last message
+  [                Jump to previous bookmark
+  ]                Jump to next bookmark
+
  SESSIONS ───────────────────────────────
   Ctrl+N           New session
   Ctrl+T           New tab
@@ -1289,7 +1307,7 @@ SHORTCUTS_TEXT = """\
   /pin             Pin message (N, list, clear, remove N)
   /pins            List pinned messages
   /unpin N         Remove a pin
-  /bookmark        Bookmark last response
+  /bookmark        Bookmark last response (list, N, jump N, remove N, clear)
   /bookmarks       List/jump to bookmarks
   /note            Add a session note (/note list, /note clear)
   /notes           List all notes (alias for /note list)
@@ -1504,6 +1522,10 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/info", "Session details (ID, model, project, counts)", "/info"),
     ("/copy", "Copy last response (last, N, all, code)", "/copy"),
     ("/bookmark", "Bookmark last AI response", "/bookmark"),
+    ("/bookmark list", "List all bookmarks with preview", "/bookmark list"),
+    ("/bookmark jump", "Jump to a bookmark by number", "/bookmark jump "),
+    ("/bookmark remove", "Remove a specific bookmark", "/bookmark remove "),
+    ("/bookmark clear", "Remove all bookmarks", "/bookmark clear"),
     ("/bookmarks", "List or jump to bookmarks", "/bookmarks"),
     ("/ref", "Save a URL or reference", "/ref"),
     ("/refs", "List saved references", "/refs"),
@@ -1902,6 +1924,7 @@ class AmplifierChicApp(App):
         self._assistant_msg_index: int = 0
         self._last_assistant_widget: Static | None = None
         self._session_bookmarks: list[dict] = []
+        self._bookmark_cursor: int = -1  # Navigation cursor for [ / ] cycling
 
         # URL/reference collector (/ref command)
         self._session_refs: list[dict] = []
@@ -4668,7 +4691,8 @@ class AmplifierChicApp(App):
             "  /context      Visual context window usage bar\n"
             "  /info         Show session details (ID, model, project, counts)\n"
             "  /copy         Copy last response | /copy last | /copy N | /copy all | /copy code\n"
-            "  /bookmark     Bookmark last response (/bm alias, optional label)\n"
+            "  /bookmark     Bookmark last response (/bm alias) | /bookmark N (toggle Nth from bottom)\n"
+            "  /bookmark     list | jump N | remove N | clear | <label>\n"
             "  /bookmarks    List bookmarks | /bookmarks <N> to jump\n"
             "  /ref          Save a URL/reference (/ref <url> [label], /ref remove/clear/export)\n"
             "  /refs         List all saved references (same as /ref with no args)\n"
@@ -4746,7 +4770,7 @@ class AmplifierChicApp(App):
             "  Ctrl+Y        Copy last response to clipboard (Ctrl+Shift+C also works)\n"
             "  Ctrl+M        Bookmark last response\n"
             "  Ctrl+S        Stash/restore prompt (stack of 5)\n"
-            "  Ctrl+B        Toggle sidebar\n"
+            "  Ctrl+B        Toggle sidebar (vim normal: toggle bookmark)\n"
             "  Ctrl+N        New session\n"
             "  Ctrl+L        Clear chat\n"
             "  Escape        Cancel streaming generation\n"
@@ -4761,7 +4785,13 @@ class AmplifierChicApp(App):
             "  Ctrl+End      Jump to bottom of chat\n"
             "  Ctrl+Up/Down  Scroll chat up/down\n"
             "  Home/End      Top/bottom of chat (when input empty)\n"
-            "  Ctrl+Q        Quit"
+            "  Ctrl+Q        Quit\n"
+            "\n"
+            "Vim Normal Mode (when /vim is on)\n"
+            "\n"
+            "  Ctrl+B        Toggle bookmark on last message\n"
+            "  [             Jump to previous bookmark\n"
+            "  ]             Jump to next bookmark"
         )
         self._add_system_message(help_text)
 
@@ -10340,13 +10370,62 @@ class AmplifierChicApp(App):
         self._cmd_bookmark("/bookmark")
 
     def _cmd_bookmark(self, text: str) -> None:
+        """Bookmark command with subcommands.
+
+        /bookmark          — bookmark last assistant message
+        /bookmark list     — list all bookmarks
+        /bookmark N        — toggle bookmark on Nth message from bottom
+        /bookmark jump N   — scroll to bookmark N
+        /bookmark clear    — remove all bookmarks
+        /bookmark remove N — remove bookmark N
+        /bookmark <label>  — bookmark last message with a label
+        """
+        parts = text.strip().split(None, 1)
+        args = parts[1].strip() if len(parts) > 1 else ""
+
+        if not args:
+            self._bookmark_last_message()
+            return
+
+        arg_parts = args.split(None, 1)
+        subcmd = arg_parts[0].lower()
+
+        if subcmd == "list":
+            self._list_bookmarks()
+        elif subcmd == "clear":
+            self._clear_bookmarks()
+        elif subcmd == "jump" and len(arg_parts) > 1 and arg_parts[1].strip().isdigit():
+            self._jump_to_bookmark(int(arg_parts[1].strip()))
+        elif (
+            subcmd == "remove" and len(arg_parts) > 1 and arg_parts[1].strip().isdigit()
+        ):
+            self._remove_bookmark(int(arg_parts[1].strip()))
+        elif subcmd.isdigit():
+            self._bookmark_nth_message(int(subcmd))
+        else:
+            # Treat remaining text as a label for the last message
+            self._bookmark_last_message(label=args)
+
+    def _cmd_bookmarks(self, text: str) -> None:
+        """List bookmarks or jump to a specific bookmark by number."""
+        parts = text.strip().split(None, 1)
+        arg = parts[1].strip() if len(parts) > 1 else ""
+
+        if arg.isdigit():
+            self._jump_to_bookmark(int(arg))
+            return
+
+        self._list_bookmarks()
+
+    # ── Bookmark helpers ──────────────────────────────────────────
+
+    def _bookmark_last_message(self, label: str | None = None) -> None:
         """Bookmark the last assistant message with an optional label."""
         sid = self._get_session_id()
         if not sid:
             self._add_system_message("No active session — send a message first.")
             return
 
-        # Find the last assistant message widget
         assistant_widgets = [
             w
             for w in self.query(".assistant-message")
@@ -10362,24 +10441,13 @@ class AmplifierChicApp(App):
             self._add_system_message("Cannot bookmark this message.")
             return
 
-        # Check if already bookmarked
+        # Already bookmarked?
         for bm in self._session_bookmarks:
             if bm["message_index"] == msg_idx:
                 self._add_system_message(f"Already bookmarked: {bm['label']}")
                 return
 
-        # Parse optional label from command text
-        parts = text.strip().split(None, 1)
-        label = parts[1].strip() if len(parts) > 1 else None
-
-        # Build preview from the message content
-        preview = self._last_assistant_text or ""
-        for line in preview.split("\n"):
-            line = line.strip()
-            if line:
-                preview = line
-                break
-        preview = preview[:80]
+        preview = self._get_message_preview(target)
 
         bookmark = {
             "message_index": msg_idx,
@@ -10388,44 +10456,73 @@ class AmplifierChicApp(App):
             "preview": preview,
         }
 
-        # Save and apply visual
         self._save_bookmark(sid, bookmark)
         self._session_bookmarks.append(bookmark)
         target.add_class("bookmarked")
-
+        self._bookmark_cursor = -1
         self._add_system_message(f"Bookmarked: {bookmark['label']}")
 
-    def _cmd_bookmarks(self, text: str) -> None:
-        """List bookmarks or jump to a specific bookmark by number."""
-        parts = text.strip().split(None, 1)
-        arg = parts[1].strip() if len(parts) > 1 else ""
+    def _bookmark_nth_message(self, n: int) -> None:
+        """Toggle bookmark on the Nth assistant message from bottom."""
+        sid = self._get_session_id()
+        if not sid:
+            self._add_system_message("No active session — send a message first.")
+            return
 
+        assistant_widgets = [
+            w
+            for w in self.query(".assistant-message")
+            if isinstance(w, AssistantMessage)
+        ]
+        if not assistant_widgets:
+            self._add_system_message("No assistant messages to bookmark.")
+            return
+
+        if n < 1 or n > len(assistant_widgets):
+            self._add_system_message(
+                f"Message {n} out of range (1-{len(assistant_widgets)})"
+            )
+            return
+
+        target = assistant_widgets[-n]
+        msg_idx = getattr(target, "msg_index", None)
+        if msg_idx is None:
+            self._add_system_message("Cannot bookmark this message.")
+            return
+
+        # Toggle: remove if already bookmarked
+        for i, bm in enumerate(self._session_bookmarks):
+            if bm["message_index"] == msg_idx:
+                self._session_bookmarks.pop(i)
+                self._save_session_bookmarks(sid)
+                target.remove_class("bookmarked")
+                self._bookmark_cursor = -1
+                self._add_system_message(
+                    f"Bookmark removed from message {n} from bottom"
+                )
+                return
+
+        preview = self._get_message_preview(target)
+
+        bookmark = {
+            "message_index": msg_idx,
+            "label": f"Bookmark {len(self._session_bookmarks) + 1}",
+            "timestamp": datetime.now().strftime("%H:%M"),
+            "preview": preview,
+        }
+
+        self._save_bookmark(sid, bookmark)
+        self._session_bookmarks.append(bookmark)
+        target.add_class("bookmarked")
+        self._bookmark_cursor = -1
+        self._add_system_message(f"Bookmarked message {n} from bottom")
+
+    def _list_bookmarks(self) -> None:
+        """Display all bookmarks for the current session."""
         if not self._session_bookmarks:
             self._add_system_message("No bookmarks in this session.")
             return
 
-        # Jump to bookmark by number
-        if arg.isdigit():
-            num = int(arg)
-            if num < 1 or num > len(self._session_bookmarks):
-                self._add_system_message(
-                    f"Bookmark {num} not found. "
-                    f"Valid range: 1-{len(self._session_bookmarks)}"
-                )
-                return
-            bm = self._session_bookmarks[num - 1]
-            target_idx = bm["message_index"]
-            for widget in self.query(".assistant-message"):
-                if getattr(widget, "msg_index", None) == target_idx:
-                    widget.scroll_visible()
-                    self._add_system_message(f"Jumped to bookmark {num}: {bm['label']}")
-                    return
-            self._add_system_message(
-                f"Bookmark {num} widget not found (message may have been cleared)."
-            )
-            return
-
-        # List all bookmarks
         lines = ["Bookmarks:"]
         for i, bm in enumerate(self._session_bookmarks, 1):
             lines.append(f"  {i}. [{bm['timestamp']}] {bm['label']}")
@@ -10435,9 +10532,177 @@ class AmplifierChicApp(App):
                     prev += "..."
                 lines.append(f"     {prev}")
         lines.append("")
-        lines.append("Jump to a bookmark: /bookmarks <number>")
+        lines.append("Jump: /bookmark jump <N>  Remove: /bookmark remove <N>")
+        lines.append("Clear all: /bookmark clear")
 
         self._add_system_message("\n".join(lines))
+
+    def _jump_to_bookmark(self, n: int) -> None:
+        """Scroll to the Nth bookmark (1-based)."""
+        if not self._session_bookmarks:
+            self._add_system_message("No bookmarks in this session.")
+            return
+        if n < 1 or n > len(self._session_bookmarks):
+            self._add_system_message(
+                f"Bookmark {n} not found. Valid range: 1-{len(self._session_bookmarks)}"
+            )
+            return
+
+        bm = self._session_bookmarks[n - 1]
+        self._bookmark_cursor = n - 1
+        self._scroll_to_bookmark_widget(bm, n)
+
+    def _clear_bookmarks(self) -> None:
+        """Remove all bookmarks from the current session."""
+        sid = self._get_session_id()
+        if not sid:
+            self._add_system_message("No active session.")
+            return
+        if not self._session_bookmarks:
+            self._add_system_message("No bookmarks to clear.")
+            return
+
+        count = len(self._session_bookmarks)
+        for widget in self.query(".assistant-message.bookmarked"):
+            widget.remove_class("bookmarked")
+
+        self._session_bookmarks.clear()
+        self._bookmark_cursor = -1
+        self._save_session_bookmarks(sid)
+        self._add_system_message(f"Cleared {count} bookmark(s).")
+
+    def _remove_bookmark(self, n: int) -> None:
+        """Remove bookmark N (1-based)."""
+        if not self._session_bookmarks:
+            self._add_system_message("No bookmarks to remove.")
+            return
+        if n < 1 or n > len(self._session_bookmarks):
+            self._add_system_message(
+                f"Bookmark {n} not found. Valid range: 1-{len(self._session_bookmarks)}"
+            )
+            return
+
+        sid = self._get_session_id()
+        if not sid:
+            return
+
+        bm = self._session_bookmarks.pop(n - 1)
+        target_idx = bm["message_index"]
+        for widget in self.query(".assistant-message"):
+            if getattr(widget, "msg_index", None) == target_idx:
+                widget.remove_class("bookmarked")
+                break
+
+        self._bookmark_cursor = -1
+        self._save_session_bookmarks(sid)
+        self._add_system_message(f"Removed bookmark {n}: {bm['label']}")
+
+    def _save_session_bookmarks(self, session_id: str) -> None:
+        """Overwrite all bookmarks for the given session (used by remove/clear)."""
+        all_bm = self._load_bookmarks()
+        all_bm[session_id] = list(self._session_bookmarks)
+        self.BOOKMARKS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        self.BOOKMARKS_FILE.write_text(json.dumps(all_bm, indent=2))
+
+    def _toggle_bookmark_nearest(self) -> None:
+        """Toggle bookmark on the last assistant message (Ctrl+B in vim normal)."""
+        sid = self._get_session_id()
+        if not sid:
+            self._add_system_message("No active session.")
+            return
+
+        assistant_widgets = [
+            w
+            for w in self.query(".assistant-message")
+            if isinstance(w, AssistantMessage)
+        ]
+        if not assistant_widgets:
+            self._add_system_message("No assistant message to bookmark.")
+            return
+
+        target = assistant_widgets[-1]
+        msg_idx = getattr(target, "msg_index", None)
+        if msg_idx is None:
+            return
+
+        # Toggle: remove if already bookmarked
+        for i, bm in enumerate(self._session_bookmarks):
+            if bm["message_index"] == msg_idx:
+                self._session_bookmarks.pop(i)
+                self._save_session_bookmarks(sid)
+                target.remove_class("bookmarked")
+                self._bookmark_cursor = -1
+                self._add_system_message(f"Bookmark removed: {bm['label']}")
+                return
+
+        preview = self._get_message_preview(target)
+
+        bookmark = {
+            "message_index": msg_idx,
+            "label": f"Bookmark {len(self._session_bookmarks) + 1}",
+            "timestamp": datetime.now().strftime("%H:%M"),
+            "preview": preview,
+        }
+
+        self._save_bookmark(sid, bookmark)
+        self._session_bookmarks.append(bookmark)
+        target.add_class("bookmarked")
+        self._bookmark_cursor = -1
+        self._add_system_message(f"Bookmarked: {bookmark['label']}")
+
+    def _jump_prev_bookmark(self) -> None:
+        """Jump to the previous bookmark ([ in vim normal mode)."""
+        if not self._session_bookmarks:
+            self._add_system_message("No bookmarks in this session.")
+            return
+        total = len(self._session_bookmarks)
+        if self._bookmark_cursor <= 0:
+            self._bookmark_cursor = total
+        self._bookmark_cursor -= 1
+        bm = self._session_bookmarks[self._bookmark_cursor]
+        self._scroll_to_bookmark_widget(bm, self._bookmark_cursor + 1)
+
+    def _jump_next_bookmark(self) -> None:
+        """Jump to the next bookmark (] in vim normal mode)."""
+        if not self._session_bookmarks:
+            self._add_system_message("No bookmarks in this session.")
+            return
+        total = len(self._session_bookmarks)
+        self._bookmark_cursor += 1
+        if self._bookmark_cursor >= total:
+            self._bookmark_cursor = 0
+        bm = self._session_bookmarks[self._bookmark_cursor]
+        self._scroll_to_bookmark_widget(bm, self._bookmark_cursor + 1)
+
+    def _scroll_to_bookmark_widget(self, bm: dict, num: int) -> None:
+        """Scroll to a bookmark's widget and announce it."""
+        target_idx = bm["message_index"]
+        total = len(self._session_bookmarks)
+        for widget in self.query(".assistant-message"):
+            if getattr(widget, "msg_index", None) == target_idx:
+                widget.scroll_visible()
+                self._add_system_message(f"Bookmark {num}/{total}: {bm['label']}")
+                return
+        self._add_system_message(
+            f"Bookmark {num} widget not found (message may have been cleared)."
+        )
+
+    def _get_message_preview(self, widget: Static) -> str:
+        """Get a short preview of a message widget's content."""
+        for _role, text, w in self._search_messages:
+            if w is widget:
+                for line in text.split("\n"):
+                    stripped = line.strip()
+                    if stripped:
+                        return stripped[:80]
+                return text[:80] if text else "..."
+        # Fallback to _last_assistant_text for the most recent message
+        fallback = self._last_assistant_text or ""
+        for line in fallback.split("\n"):
+            stripped = line.strip()
+            if stripped:
+                return stripped[:80]
+        return "..."
 
     # ── Message Display ─────────────────────────────────────────
 

@@ -218,6 +218,11 @@ Screen {
     background: #1a1608;
 }
 
+.user-message.bookmarked {
+    border-left: tall #d4a017;
+    background: #1a1608;
+}
+
 /* -- Note messages: sticky-note yellow appearance ----- */
 
 .note-message {
