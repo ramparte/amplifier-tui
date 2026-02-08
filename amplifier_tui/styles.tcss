@@ -396,6 +396,18 @@ CollapsibleTitle:hover {
     color: $text-muted;
 }
 
+/* -- Attachment indicator ------------------------------ */
+
+#attachment-indicator {
+    height: 1;
+    color: #d4a017;
+    text-style: bold;
+    width: 100%;
+    margin: 0 2 0 2;
+    padding: 0 1;
+    display: none;
+}
+
 /* -- Input character counter --------------------------- */
 
 #input-counter {

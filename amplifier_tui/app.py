@@ -177,6 +177,8 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/fork",
     "/branch",
     "/name",
+    "/attach",
+    "/cat",
 )
 
 # -- System prompt presets -----------------------------------------------------
@@ -328,6 +330,20 @@ class TabState:
     # Custom system prompt for this tab
     system_prompt: str = ""
     system_preset_name: str = ""  # name of active preset (if any)
+
+
+@dataclass
+class Attachment:
+    """A file attached to the next outgoing message."""
+
+    path: Path
+    name: str  # filename
+    content: str  # file text content
+    language: str  # detected language for syntax highlighting
+    size: int  # byte length of content
+
+
+MAX_ATTACHMENT_SIZE = 50_000  # 50 KB warning threshold (total)
 
 
 # Known context window sizes (tokens) for popular models.
@@ -1228,6 +1244,12 @@ SHORTCUTS_TEXT = """\
   /tokens          Token/context usage
   /context         Context window details
 
+ FILES ─────────────────────────────────────
+  /attach <path>   Attach file(s) to next message
+  /attach          Show current attachments
+  /attach clear    Remove all attachments
+  /cat <path>      Display file contents in chat
+
  INPUT & SETTINGS ──────────────────────
   /edit            Open $EDITOR for input
   /editor          Alias for /edit
@@ -1516,6 +1538,10 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/fork N", "Fork from message N (from bottom) into a new tab", "/fork"),
     ("/branch", "Fork conversation into a new tab (alias for /fork)", "/branch"),
     ("/name", "Name current session (/name <text>, /name clear)", "/name"),
+    ("/attach", "Attach file(s) to next message", "/attach "),
+    ("/attach clear", "Remove all attachments", "/attach clear"),
+    ("/attach remove", "Remove a specific attachment by number", "/attach remove "),
+    ("/cat", "Display file contents in chat", "/cat "),
     # ── Keyboard-shortcut actions ───────────────────────────────────────────
     ("New Session  Ctrl+N", "Start a new conversation", "action:new_session"),
     ("New Tab  Ctrl+T", "Open a new conversation tab", "action:new_tab"),
@@ -1863,6 +1889,9 @@ class AmplifierChicApp(App):
         self._last_autosave: float = 0.0
         self._autosave_timer: object | None = None
 
+        # File attachments (cleared after sending)
+        self._attachments: list[Attachment] = []
+
         # Reverse search state (Ctrl+R inline)
         self._rsearch_active: bool = False
         self._rsearch_query: str = ""
@@ -1901,6 +1930,7 @@ class AmplifierChicApp(App):
                     tab_behavior="focus",
                     compact=True,
                 )
+                yield Static("", id="attachment-indicator")
                 yield Static("", id="input-counter")
                 with Horizontal(id="status-bar"):
                     yield Static("No session", id="status-session")
@@ -4404,6 +4434,9 @@ class AmplifierChicApp(App):
         # Expand @file mentions (e.g. @./src/main.py) before sending
         expanded = self._expand_at_mentions(text)
 
+        # Prepend attached file contents (if any) and clear them
+        expanded = self._build_message_with_attachments(expanded)
+
         has_session = self.session_manager and getattr(
             self.session_manager, "session", None
         )
@@ -4528,6 +4561,8 @@ class AmplifierChicApp(App):
             "/fork": lambda: self._cmd_fork(args),
             "/branch": lambda: self._cmd_fork(args),
             "/name": lambda: self._cmd_name(args),
+            "/attach": lambda: self._cmd_attach(args),
+            "/cat": lambda: self._cmd_cat(args),
         }
 
         handler = handlers.get(cmd)
@@ -4607,6 +4642,8 @@ class AmplifierChicApp(App):
             "  /!            Shorthand for /run (/! git diff)\n"
             "  /include      Include file contents (/include src/main.py, /include *.py --send)\n"
             "                Also: @./path/to/file in your prompt auto-includes\n"
+            "  /attach       Attach file(s) to next message (/attach *.py, clear, remove N)\n"
+            "  /cat          Display file contents in chat (/cat src/main.py)\n"
             "  /autosave     Auto-save status, toggle, force save, restore (/autosave on|off|now|restore)\n"
             "  /system       Set/view system prompt (/system <text>, clear, presets, use <preset>, append)\n"
             "  /keys         Keyboard shortcut overlay\n"
@@ -4861,6 +4898,202 @@ class AmplifierChicApp(App):
 
         # Match @path/to/file.ext — only paths starting with ./ ../ ~/ or /
         return re.sub(r"@((?:\.\.?/|~/|/)\S+)", _replace_at_file, text)
+
+    # -- /attach and /cat helpers -----------------------------------------------
+
+    def _cmd_attach(self, text: str) -> None:
+        """Attach files to include in next message."""
+        text = text.strip()
+
+        if not text:
+            self._show_attachments()
+            return
+
+        if text.lower() == "clear":
+            self._attachments.clear()
+            self._update_attachment_indicator()
+            self._add_system_message("Attachments cleared")
+            return
+
+        parts = text.split(None, 1)
+        if parts[0].lower() == "remove" and len(parts) > 1:
+            try:
+                n = int(parts[1])
+                if 1 <= n <= len(self._attachments):
+                    removed = self._attachments.pop(n - 1)
+                    self._update_attachment_indicator()
+                    self._add_system_message(f"Removed: {removed.name}")
+                else:
+                    self._add_system_message(
+                        f"Invalid attachment number (1-{len(self._attachments)})"
+                    )
+            except ValueError:
+                self._add_system_message("Usage: /attach remove <number>")
+            return
+
+        # Attach file(s) — check for glob patterns
+        raw = text
+        if any(c in raw for c in ["*", "?", "["]):
+            files = sorted(Path(".").glob(raw))
+            if not files:
+                self._add_system_message(f"No files matching: {raw}")
+                return
+            for f in files[:20]:
+                if f.is_file():
+                    self._attach_file(f)
+            if len(files) > 20:
+                self._add_system_message(
+                    f"... and {len(files) - 20} more files skipped"
+                )
+            return
+
+        path = Path(text).expanduser()
+        if not path.exists():
+            path = Path.cwd() / text
+        if not path.exists():
+            self._add_system_message(f"File not found: {text}")
+            return
+        if path.is_dir():
+            self._add_system_message(f"Cannot attach directory: {text}")
+            return
+        self._attach_file(path)
+
+    def _attach_file(self, path: Path) -> None:
+        """Attach a single file."""
+        if self._is_binary(path):
+            self._add_system_message(f"Skipping binary file: {path.name}")
+            return
+
+        try:
+            content = path.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:
+            self._add_system_message(f"Error reading {path.name}: {e}")
+            return
+
+        ext = path.suffix.lower()
+        lang = EXTENSION_TO_LANGUAGE.get(ext, "")
+        size = len(content.encode("utf-8"))
+
+        attachment = Attachment(
+            path=path,
+            name=path.name,
+            content=content,
+            language=lang,
+            size=size,
+        )
+        self._attachments.append(attachment)
+
+        total = sum(a.size for a in self._attachments)
+        size_str = f"{size / 1024:.1f}KB"
+
+        msg = f"Attached: {attachment.name} ({size_str})"
+        if total > MAX_ATTACHMENT_SIZE:
+            msg += f"\n  Total attachments: {total / 1024:.1f}KB (large — may use significant context)"
+
+        self._add_system_message(msg)
+        self._update_attachment_indicator()
+
+    def _show_attachments(self) -> None:
+        """Display currently attached files."""
+        if not self._attachments:
+            self._add_system_message(
+                "No files attached.\n"
+                "Usage: /attach <path>     Attach a file\n"
+                "       /attach *.py       Attach by glob pattern\n"
+                "       /attach clear      Remove all\n"
+                "       /attach remove N   Remove by number"
+            )
+            return
+
+        lines = ["Attached files:"]
+        total = 0
+        for i, att in enumerate(self._attachments, 1):
+            total += att.size
+            lines.append(f"  {i}. {att.name} ({att.size / 1024:.1f}KB)")
+        lines.append(f"\nTotal: {total / 1024:.1f}KB")
+        lines.append("These will be included with your next message.")
+        self._add_system_message("\n".join(lines))
+
+    def _update_attachment_indicator(self) -> None:
+        """Show/hide attachment count near input."""
+        try:
+            indicator = self.query_one("#attachment-indicator", Static)
+        except Exception:
+            return
+        if self._attachments:
+            count = len(self._attachments)
+            total_kb = sum(a.size for a in self._attachments) / 1024
+            names = ", ".join(a.name for a in self._attachments[:3])
+            if count > 3:
+                names += f" +{count - 3} more"
+            indicator.update(f"Attached: {names} ({total_kb:.1f}KB)")
+            indicator.display = True
+        else:
+            indicator.update("")
+            indicator.display = False
+
+    def _build_message_with_attachments(self, user_text: str) -> str:
+        """Build the full message including attached files."""
+        if not self._attachments:
+            return user_text
+
+        parts: list[str] = []
+        for att in self._attachments:
+            parts.append(f"File: {att.name}")
+            parts.append(f"```{att.language}")
+            parts.append(att.content)
+            parts.append("```")
+            parts.append("")
+
+        parts.append(user_text)
+
+        # Clear attachments after sending
+        self._attachments.clear()
+        self._update_attachment_indicator()
+
+        return "\n".join(parts)
+
+    def _cmd_cat(self, text: str) -> None:
+        """Display file contents in chat."""
+        text = text.strip()
+        if not text:
+            self._add_system_message(
+                "Usage: /cat <path>\n"
+                "  Displays file contents in chat (does not attach)."
+            )
+            return
+
+        path = Path(text).expanduser()
+        if not path.exists():
+            path = Path.cwd() / text
+        if not path.exists():
+            self._add_system_message(f"File not found: {text}")
+            return
+        if path.is_dir():
+            self._add_system_message(f"Cannot display directory: {text}")
+            return
+        if self._is_binary(path):
+            self._add_system_message(f"Cannot display binary file: {path.name}")
+            return
+
+        try:
+            content = path.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:
+            self._add_system_message(f"Error reading {path.name}: {e}")
+            return
+
+        ext = path.suffix.lower()
+        lang = EXTENSION_TO_LANGUAGE.get(ext, "")
+
+        lines = content.split("\n")
+        if len(lines) > 200:
+            content = "\n".join(lines[:200])
+            content += f"\n\n... ({len(lines) - 200} more lines)"
+
+        size_str = f"{len(content.encode('utf-8')) / 1024:.1f}KB"
+        self._add_system_message(
+            f"{path.name} ({len(lines)} lines, {size_str})\n```{lang}\n{content}\n```"
+        )
 
     def _cmd_alias(self, text: str) -> None:
         """List, create, or remove custom command aliases."""
