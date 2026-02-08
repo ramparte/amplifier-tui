@@ -114,6 +114,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/grep",
     "/redo",
     "/snippet",
+    "/title",
 )
 
 # Known context window sizes (tokens) for popular models.
@@ -590,6 +591,7 @@ SHORTCUTS_TEXT = """\
   /theme      Switch theme
   /colors     View/set colors
   /export     Export to markdown
+  /title      View/set session title (auto from first msg)
   /rename     Rename session
   /pin        Pin/unpin session
   /delete     Delete session
@@ -712,6 +714,7 @@ class AmplifierChicApp(App):
     DRAFTS_FILE = Path.home() / ".amplifier" / "tui-drafts.json"
     ALIASES_FILE = Path.home() / ".amplifier" / "tui-aliases.json"
     SNIPPETS_FILE = Path.home() / ".amplifier" / "tui-snippets.json"
+    SESSION_TITLES_FILE = Path.home() / ".amplifier" / "tui-session-titles.json"
     CRASH_DRAFT_FILE = Path.home() / ".amplifier" / "tui-draft.txt"
 
     DEFAULT_SNIPPETS: dict[str, str] = {
@@ -815,6 +818,9 @@ class AmplifierChicApp(App):
 
         # Crash-recovery draft timer (debounced save)
         self._crash_draft_timer: object | None = None
+
+        # Session auto-title (extracted from first user message)
+        self._session_title: str = ""
 
         # Reverse search state (Ctrl+R inline)
         self._rsearch_active: bool = False
@@ -980,6 +986,80 @@ class AmplifierChicApp(App):
         names[session_id] = name
         self.SESSION_NAMES_FILE.parent.mkdir(parents=True, exist_ok=True)
         self.SESSION_NAMES_FILE.write_text(json.dumps(names, indent=2))
+
+    # ── Session Titles ──────────────────────────────────────────
+
+    @staticmethod
+    def _extract_title(message: str, max_len: int = 50) -> str:
+        """Extract a short title from a user message."""
+        text = re.sub(r"```.*?```", "", message, flags=re.DOTALL)  # code blocks
+        text = re.sub(r"`[^`]+`", "", text)  # inline code
+        text = re.sub(r"[#*_~>\[\]()]", "", text)  # markdown chars
+        text = re.sub(r"https?://\S+", "", text)  # URLs
+        text = text.strip()
+
+        if not text:
+            return "Untitled"
+
+        # Take first line
+        first_line = text.split("\n")[0].strip()
+
+        # Take first sentence (up to period, question mark, or exclamation)
+        for i, ch in enumerate(first_line):
+            if ch in ".?!" and i > 10:
+                first_line = first_line[: i + 1]
+                break
+
+        # Truncate to max length at word boundary
+        if len(first_line) > max_len:
+            truncated = first_line[:max_len]
+            last_space = truncated.rfind(" ")
+            if last_space > max_len // 2:
+                truncated = truncated[:last_space]
+            first_line = truncated + "..."
+
+        return first_line or "Untitled"
+
+    def _load_session_titles(self) -> dict[str, str]:
+        """Load session titles from the JSON file."""
+        try:
+            if self.SESSION_TITLES_FILE.exists():
+                return json.loads(self.SESSION_TITLES_FILE.read_text())
+        except Exception:
+            pass
+        return {}
+
+    def _save_session_title(self) -> None:
+        """Save current session title to the JSON file."""
+        sid = self._get_session_id()
+        if not sid:
+            return
+        try:
+            titles = self._load_session_titles()
+            if self._session_title:
+                titles[sid] = self._session_title
+            elif sid in titles:
+                del titles[sid]
+            # Keep last 200 titles
+            if len(titles) > 200:
+                keys = list(titles.keys())
+                for k in keys[:-200]:
+                    del titles[k]
+            self.SESSION_TITLES_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self.SESSION_TITLES_FILE.write_text(json.dumps(titles, indent=2))
+        except Exception:
+            pass
+
+    def _load_session_title_for(self, session_id: str) -> str:
+        """Load the title for a specific session."""
+        titles = self._load_session_titles()
+        return titles.get(session_id, "")
+
+    def _apply_session_title(self) -> None:
+        """Update the UI to reflect the current session title."""
+        self.sub_title = self._session_title
+        self._update_breadcrumb()
+        self._save_session_title()
 
     # ── Pinned Sessions ─────────────────────────────────────────
 
@@ -1233,6 +1313,7 @@ class AmplifierChicApp(App):
         self,
         s: dict,
         custom_names: dict[str, str],
+        session_titles: dict[str, str] | None = None,
     ) -> str:
         """Build the display string for a session tree node.
 
@@ -1241,11 +1322,14 @@ class AmplifierChicApp(App):
         """
         sid = s["session_id"]
         custom = custom_names.get(sid)
+        title = (session_titles or {}).get(sid, "")
         name = s.get("name", "")
         desc = s.get("description", "")
 
         if custom:
             label = custom[:28] if len(custom) > 28 else custom
+        elif title:
+            label = title[:28] if len(title) > 28 else title
         elif name:
             label = name[:28] if len(name) > 28 else name
         elif desc:
@@ -1299,6 +1383,7 @@ class AmplifierChicApp(App):
             return
 
         custom_names = self._load_session_names()
+        session_titles = self._load_session_titles()
 
         # Partition into pinned / unpinned
         pinned = [s for s in sessions if s["session_id"] in self._pinned_sessions]
@@ -1312,7 +1397,7 @@ class AmplifierChicApp(App):
             pin_group = tree.root.add("▪ Pinned", expand=True)
             for s in pinned:
                 sid = s["session_id"]
-                display = self._session_display_label(s, custom_names)
+                display = self._session_display_label(s, custom_names, session_titles)
                 node = pin_group.add(display, data=sid)
                 node.add_leaf(f"id: {sid[:12]}...")
                 node.collapse()
@@ -1330,7 +1415,7 @@ class AmplifierChicApp(App):
                 group_node = tree.root.add(short, expand=True)
 
             sid = s["session_id"]
-            display = self._session_display_label(s, custom_names)
+            display = self._session_display_label(s, custom_names, session_titles)
             session_node = group_node.add(display, data=sid)
             session_node.add_leaf(f"id: {sid[:12]}...")
             session_node.collapse()
@@ -1414,13 +1499,14 @@ class AmplifierChicApp(App):
 
         q = query.lower().strip()
         custom_names = self._load_session_names()
+        session_titles = self._load_session_titles()
 
         def _matches(s: dict) -> bool:
             """Return True if the session matches the current filter query."""
             if not q:
                 return True
             sid = s["session_id"]
-            display = self._session_display_label(s, custom_names)
+            display = self._session_display_label(s, custom_names, session_titles)
             project = s["project"]
             return q in display.lower() or q in sid.lower() or q in project.lower()
 
@@ -1445,7 +1531,7 @@ class AmplifierChicApp(App):
             pin_group = tree.root.add("▪ Pinned", expand=True)
             for s in pinned:
                 sid = s["session_id"]
-                display = self._session_display_label(s, custom_names)
+                display = self._session_display_label(s, custom_names, session_titles)
                 node = pin_group.add(display, data=sid)
                 node.add_leaf(f"id: {sid[:12]}...")
                 node.collapse()
@@ -1462,7 +1548,7 @@ class AmplifierChicApp(App):
                 group_node = tree.root.add(short, expand=True)
 
             sid = s["session_id"]
-            display = self._session_display_label(s, custom_names)
+            display = self._session_display_label(s, custom_names, session_titles)
             session_node = group_node.add(display, data=sid)
             session_node.add_leaf(f"id: {sid[:12]}...")
             session_node.collapse()
@@ -1755,6 +1841,8 @@ class AmplifierChicApp(App):
         for child in list(chat_view.children):
             child.remove()
         self._show_welcome("New session will start when you send a message.")
+        self._session_title = ""
+        self.sub_title = ""
         self._update_session_display()
         self._update_token_display()
         self._update_status("Ready")
@@ -2076,6 +2164,7 @@ class AmplifierChicApp(App):
             "/grep": lambda: self._cmd_grep(text),
             "/redo": lambda: self._cmd_redo(args),
             "/snippet": lambda: self._cmd_snippet(args),
+            "/title": lambda: self._cmd_title(args),
         }
 
         handler = handlers.get(cmd)
@@ -2103,6 +2192,7 @@ class AmplifierChicApp(App):
             "  /copy         Copy last response | /copy N | /copy all | /copy code\n"
             "  /bookmark     Bookmark last response (/bm alias, optional label)\n"
             "  /bookmarks    List bookmarks | /bookmarks <N> to jump\n"
+            "  /title        View/set session title (/title <text> or /title clear)\n"
             "  /rename       Rename current session (e.g. /rename My Project)\n"
             "  /pin          Pin/unpin session (pinned appear at top of sidebar)\n"
             "  /delete       Delete session (with confirmation)\n"
@@ -3655,6 +3745,33 @@ class AmplifierChicApp(App):
         except OSError as e:
             self._add_system_message(f"Export failed: {e}")
 
+    def _cmd_title(self, text: str) -> None:
+        """View or set the session title."""
+        text = text.strip()
+
+        if not text:
+            # Show current title
+            if self._session_title:
+                self._add_system_message(f"Session title: {self._session_title}")
+            else:
+                self._add_system_message(
+                    "No session title set (auto-generates from first message)"
+                )
+            return
+
+        if text == "clear":
+            self._session_title = ""
+            self.sub_title = ""
+            self._save_session_title()
+            self._update_breadcrumb()
+            self._add_system_message("Session title cleared")
+            return
+
+        # Set custom title (max 80 chars for manual titles)
+        self._session_title = text[:80]
+        self._apply_session_title()
+        self._add_system_message(f"Session title set: {self._session_title}")
+
     def _cmd_rename(self, text: str) -> None:
         """Rename the current session in the sidebar."""
         sm = self.session_manager if hasattr(self, "session_manager") else None
@@ -4541,12 +4658,18 @@ class AmplifierChicApp(App):
             project_dir = "…/" + "/".join(segments[-2:])
         parts.append(project_dir)
 
-        # Session name or truncated ID
+        # Session title > custom name > truncated ID
         sm = self.session_manager if hasattr(self, "session_manager") else None
         sid = getattr(sm, "session_id", None) if sm else None
         if sid:
-            names = self._load_session_names()
-            parts.append(names.get(sid, sid[:12]))
+            if self._session_title:
+                label = self._session_title
+                if len(label) > 30:
+                    label = label[:27] + "..."
+                parts.append(label)
+            else:
+                names = self._load_session_names()
+                parts.append(names.get(sid, sid[:12]))
 
         # Model (shortened)
         model = getattr(sm, "model_name", "") if sm else ""
@@ -4768,6 +4891,11 @@ class AmplifierChicApp(App):
                 self.call_from_thread(self._update_session_display)
                 self.call_from_thread(self._update_token_display)
 
+            # Auto-title from first user message
+            if not self._session_title:
+                self._session_title = self._extract_title(message)
+                self.call_from_thread(self._apply_session_title)
+
             self._setup_streaming_callbacks()
             self.call_from_thread(self._update_status, "Thinking...")
 
@@ -4801,6 +4929,13 @@ class AmplifierChicApp(App):
 
             # Resume the actual session (restores LLM context)
             await self.session_manager.resume_session(session_id)
+
+            # Restore session title
+            title = self._load_session_title_for(session_id)
+            if title:
+                self._session_title = title
+                self.call_from_thread(self._apply_session_title)
+
             self.call_from_thread(self._update_session_display)
             self.call_from_thread(self._update_token_display)
             self.call_from_thread(self._update_status, "Ready")
