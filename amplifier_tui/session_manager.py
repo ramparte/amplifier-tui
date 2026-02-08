@@ -61,6 +61,39 @@ class SessionManager:
         self.on_execution_start: Callable[[], None] | None = None
         self.on_execution_end: Callable[[], None] | None = None
 
+        # Token usage tracking
+        self.on_usage_update: Callable[[], None] | None = None
+        self.total_input_tokens: int = 0
+        self.total_output_tokens: int = 0
+        self.model_name: str = ""
+        self.context_window: int = 0
+
+    def reset_usage(self) -> None:
+        """Reset token usage counters for a new session."""
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.model_name = ""
+        self.context_window = 0
+
+    def _extract_model_info(self) -> None:
+        """Extract model name and context window from the session's provider."""
+        if not self.session:
+            return
+        try:
+            providers = self.session.coordinator.get("providers") or {}
+            for _name, prov in providers.items():
+                if hasattr(prov, "default_model"):
+                    self.model_name = prov.default_model
+                elif hasattr(prov, "model"):
+                    self.model_name = prov.model
+                if hasattr(prov, "get_info"):
+                    info = prov.get_info()
+                    if hasattr(info, "defaults") and isinstance(info.defaults, dict):
+                        self.context_window = info.defaults.get("context_window", 0)
+                break  # Use the first provider
+        except Exception:
+            pass
+
     async def start_new_session(self, cwd: Path | None = None) -> None:
         """Start a new Amplifier session."""
         if cwd is None:
@@ -98,8 +131,10 @@ class SessionManager:
         initialized = await create_initialized_session(session_config, console)
         self.session = initialized.session
 
-        # Register streaming hooks
+        # Register streaming hooks and extract model info
         self._register_hooks()
+        self.reset_usage()
+        self._extract_model_info()
 
     async def resume_session(self, session_id: str) -> None:
         """Resume an existing Amplifier session."""
@@ -140,8 +175,10 @@ class SessionManager:
         initialized = await create_initialized_session(session_config, console)
         self.session = initialized.session
 
-        # Register streaming hooks
+        # Register streaming hooks and extract model info
         self._register_hooks()
+        self.reset_usage()
+        self._extract_model_info()
 
     def _register_hooks(self) -> None:
         """Register hooks on the session for streaming UI updates."""
@@ -210,6 +247,18 @@ class SessionManager:
                 self.on_execution_end()
             return HookResult(action="continue")
 
+        async def on_llm_response(event: str, data: dict) -> Any:
+            usage = data.get("usage", {})
+            if usage:
+                self.total_input_tokens += usage.get("input", 0)
+                self.total_output_tokens += usage.get("output", 0)
+            model = data.get("model", "")
+            if model and not self.model_name:
+                self.model_name = model
+            if self.on_usage_update:
+                self.on_usage_update()
+            return HookResult(action="continue")
+
         hooks.register("content_block:start", on_block_start, name="tui-block-start")
         hooks.register("content_block:delta", on_block_delta, name="tui-block-delta")
         hooks.register("content_block:end", on_block_end, name="tui-content")
@@ -217,6 +266,7 @@ class SessionManager:
         hooks.register("tool:post", on_tool_end, name="tui-tool-post")
         hooks.register("execution:start", on_exec_start, name="tui-exec-start")
         hooks.register("execution:end", on_exec_end, name="tui-exec-end")
+        hooks.register("llm:response", on_llm_response, name="tui-usage")
 
     def _load_transcript(self, transcript_path: Path) -> list[dict]:
         """Load messages from a transcript file."""

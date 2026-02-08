@@ -352,12 +352,14 @@ class AmplifierChicApp(App):
         if self.session_manager:
             self.session_manager.session = None
             self.session_manager.session_id = None
+            self.session_manager.reset_usage()
         # Clear chat
         chat_view = self.query_one("#chat-view", ScrollableContainer)
         for child in list(chat_view.children):
             child.remove()
         self._show_welcome("New session will start when you send a message.")
         self._update_session_display()
+        self._update_token_display()
         self._update_status("Ready")
         self.query_one("#chat-input", ChatInput).focus()
 
@@ -544,6 +546,7 @@ class AmplifierChicApp(App):
         inp.remove_class("disabled")
         inp.focus()
         self._remove_processing_indicator()
+        self._update_token_display()
         self._update_status("Ready")
 
     def _remove_processing_indicator(self) -> None:
@@ -557,6 +560,47 @@ class AmplifierChicApp(App):
     def _update_status(self, state: str = "Ready") -> None:
         try:
             self.query_one("#status-state", Static).update(state)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _format_token_count(count: int) -> str:
+        """Format token count: 1234 -> '1.2k', 200000 -> '200k'."""
+        if count >= 1_000_000:
+            return f"{count / 1_000_000:.1f}M"
+        elif count >= 10_000:
+            val = count / 1_000
+            return f"{val:.0f}k" if val >= 100 else f"{val:.1f}k"
+        elif count >= 1_000:
+            return f"{count / 1_000:.1f}k"
+        return str(count)
+
+    def _update_token_display(self) -> None:
+        """Update the status bar with current token usage and model info."""
+        if not self.session_manager:
+            return
+        try:
+            sm = self.session_manager
+            parts: list[str] = []
+
+            if sm.model_name:
+                name = sm.model_name
+                if name.startswith("claude-"):
+                    name = name[7:]
+                parts.append(name)
+
+            total = sm.total_input_tokens + sm.total_output_tokens
+            if total > 0 and sm.context_window > 0:
+                used = self._format_token_count(total)
+                cap = self._format_token_count(sm.context_window)
+                pct = int(total / sm.context_window * 100)
+                parts.append(f"{used}/{cap} ({pct}%)")
+            elif total > 0:
+                parts.append(f"{self._format_token_count(total)} tokens")
+
+            self.query_one("#status-model", Static).update(
+                " | ".join(parts) if parts else ""
+            )
         except Exception:
             pass
 
@@ -621,11 +665,15 @@ class AmplifierChicApp(App):
             self.call_from_thread(self._add_tool_use, name, tool_input, result)
             self.call_from_thread(self._update_status, "Thinking...")
 
+        def on_usage():
+            self.call_from_thread(self._update_token_display)
+
         self.session_manager.on_content_block_start = on_block_start
         self.session_manager.on_content_block_delta = on_block_delta
         self.session_manager.on_content_block_end = on_block_end
         self.session_manager.on_tool_pre = on_tool_start
         self.session_manager.on_tool_post = on_tool_end
+        self.session_manager.on_usage_update = on_usage
 
     # ── Streaming Display ─────────────────────────────────────────
 
@@ -722,6 +770,7 @@ class AmplifierChicApp(App):
                 self.call_from_thread(self._update_status, "Starting session...")
                 await self.session_manager.start_new_session()
                 self.call_from_thread(self._update_session_display)
+                self.call_from_thread(self._update_token_display)
 
             self._setup_streaming_callbacks()
             self.call_from_thread(self._update_status, "Thinking...")
@@ -757,6 +806,7 @@ class AmplifierChicApp(App):
             # Resume the actual session (restores LLM context)
             await self.session_manager.resume_session(session_id)
             self.call_from_thread(self._update_session_display)
+            self.call_from_thread(self._update_token_display)
             self.call_from_thread(self._update_status, "Ready")
 
             # Handle initial prompt if provided

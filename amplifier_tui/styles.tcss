@@ -252,7 +252,7 @@ CollapsibleTitle:hover {
 }
 
 #status-state {
-    width: auto;
+    width: 1fr;
     margin: 0 2;
 }
 
