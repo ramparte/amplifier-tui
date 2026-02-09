@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import base64
 import difflib
 import json
@@ -36,6 +38,7 @@ from textual.widgets import (
 )
 from textual.widgets.option_list import Option
 from textual import work
+from textual.timer import Timer
 
 from .history import PromptHistory
 from .preferences import (
@@ -67,6 +70,7 @@ from .preferences import (
     save_vim_mode,
     save_word_wrap,
 )
+from .session_manager import SessionManager
 from .theme import TEXTUAL_THEMES, make_custom_textual_theme
 
 # Tool name -> human-friendly status label (without trailing "...")
@@ -365,7 +369,7 @@ class TabState:
     tab_id: str
     container_id: str  # ScrollableContainer widget ID for this tab
     # Session state (saved/restored when switching tabs)
-    sm_session: object | None = None
+    sm_session: Any = None
     sm_session_id: str | None = None
     session_title: str = ""
     # Search index
@@ -380,7 +384,7 @@ class TabState:
     response_times: list = field(default_factory=list)
     tool_usage: dict = field(default_factory=dict)
     assistant_msg_index: int = 0
-    last_assistant_widget: object | None = None
+    last_assistant_widget: Static | None = None
     last_assistant_text: str = ""
     # Per-session data
     session_bookmarks: list = field(default_factory=list)
@@ -2195,7 +2199,7 @@ class AmplifierChicApp(App):
         super().__init__()
         self.resume_session_id = resume_session_id
         self.initial_prompt = initial_prompt
-        self.session_manager: object | None = None
+        self.session_manager: SessionManager | None = None
         self.is_processing = False
         self._got_stream_content = False
         self._amplifier_available = True
@@ -2203,8 +2207,8 @@ class AmplifierChicApp(App):
         self._session_list_data: list[dict] = []
         self._sidebar_visible = False
         self._spinner_frame = 0
-        self._spinner_timer: object | None = None
-        self._timestamp_timer: object | None = None
+        self._spinner_timer: Timer | None = None
+        self._timestamp_timer: Timer | None = None
         self._processing_label: str | None = None
         self._status_activity_label: str = "Ready"
         self._prefs = load_preferences()
@@ -2304,7 +2308,7 @@ class AmplifierChicApp(App):
         self._fold_threshold: int = self._prefs.display.fold_threshold or 20
 
         # Crash-recovery draft timer (debounced save)
-        self._crash_draft_timer: object | None = None
+        self._crash_draft_timer: Timer | None = None
 
         # Draft auto-save change detection
         self._last_saved_draft: str = ""
@@ -2314,7 +2318,7 @@ class AmplifierChicApp(App):
 
         # File watch state (/watch command)
         self._watched_files: dict[str, dict] = {}
-        self._watch_timer: object | None = None
+        self._watch_timer: Timer | None = None
 
         # Tab management state
         self._tabs: list[TabState] = [
@@ -2338,7 +2342,7 @@ class AmplifierChicApp(App):
         self._autosave_enabled: bool = self._prefs.autosave.enabled
         self._autosave_interval: int = self._prefs.autosave.interval
         self._last_autosave: float = 0.0
-        self._autosave_timer: object | None = None
+        self._autosave_timer: Timer | None = None
 
         # File attachments (cleared after sending)
         self._attachments: list[Attachment] = []
@@ -2510,8 +2514,6 @@ class AmplifierChicApp(App):
         """Import Amplifier in background so UI appears instantly."""
         self.call_from_thread(self._update_status, "Loading Amplifier...")
         try:
-            from .session_manager import SessionManager
-
             self.session_manager = SessionManager()
             self._amplifier_ready = True
         except Exception:
@@ -4111,8 +4113,6 @@ class AmplifierChicApp(App):
     @work(thread=True)
     def _load_sessions_worker(self) -> None:
         """Load session list in background thread."""
-        from .session_manager import SessionManager
-
         sessions = SessionManager.list_all_sessions(limit=50)
         self.call_from_thread(self._populate_session_list, sessions)
 
@@ -4814,6 +4814,8 @@ class AmplifierChicApp(App):
     @work(thread=True)
     async def _cleanup_session_worker(self) -> None:
         """End session in a worker thread with a proper async event loop."""
+        if self.session_manager is None:
+            return
         await self.session_manager.end_session()
 
     def action_new_session(self) -> None:
@@ -4831,6 +4833,8 @@ class AmplifierChicApp(App):
     @work(thread=True)
     async def _end_and_reset_session(self) -> None:
         """End current session in background, then reset UI."""
+        if self.session_manager is None:
+            return
         try:
             await self.session_manager.end_session()
         except Exception:
@@ -6865,8 +6869,6 @@ class AmplifierChicApp(App):
 
         Returns (session_id, error_message).  On success error_message is empty.
         """
-        from .session_manager import SessionManager
-
         sessions = SessionManager.list_all_sessions(limit=500)
 
         # Exact match
@@ -6909,8 +6911,6 @@ class AmplifierChicApp(App):
 
     def _sessions_list(self) -> None:
         """List all saved sessions."""
-        from .session_manager import SessionManager
-
         sessions = SessionManager.list_all_sessions(limit=200)
         if not sessions:
             self._add_system_message("No saved sessions found.")
@@ -6935,8 +6935,6 @@ class AmplifierChicApp(App):
 
     def _sessions_recent(self) -> None:
         """Show the 10 most recent sessions."""
-        from .session_manager import SessionManager
-
         sessions = SessionManager.list_all_sessions(limit=10)
         if not sessions:
             self._add_system_message("No saved sessions found.")
@@ -13287,6 +13285,8 @@ class AmplifierChicApp(App):
         2. content_block:start  - create widget early, remove spinner
         3. content_block:end    - finalize with complete text (always fires)
         """
+        if self.session_manager is None:
+            return
         # Per-turn state captured by closures (reset each message send)
         accumulated = {"text": ""}
         last_update = {"t": 0.0}
@@ -13487,6 +13487,9 @@ class AmplifierChicApp(App):
     @work(thread=True)
     async def _send_message_worker(self, message: str) -> None:
         """Send a message to Amplifier in a background thread."""
+        if self.session_manager is None:
+            self.call_from_thread(self._add_system_message, "No active session")
+            return
         try:
             # Auto-create session on first message
             if not self.session_manager.session:
@@ -13530,6 +13533,9 @@ class AmplifierChicApp(App):
     @work(thread=True)
     async def _resume_session_worker(self, session_id: str) -> None:
         """Resume a session in a background thread."""
+        if self.session_manager is None:
+            self.call_from_thread(self._add_system_message, "No active session")
+            return
         self.call_from_thread(self._clear_welcome)
         self.call_from_thread(self._update_status, "Loading session...")
 
