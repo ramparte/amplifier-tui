@@ -1,0 +1,214 @@
+tui_svg_analysis:
+  source: capture_20260208_122932.svg
+  dimensions:
+    width: 1482.0
+    height: 1270.0
+  theme:
+    primary_text:
+      hex: '#2a2a3e'
+      span_count: 35
+    secondary_text:
+      hex: '#ffffff'
+      span_count: 20
+    accent_1:
+      hex: '#cb7700'
+      span_count: 9
+    accent_2:
+      hex: '#c0b0e0'
+      span_count: 4
+    accent_3:
+      hex: '#8877aa'
+      span_count: 2
+    muted:
+      hex: '#383838'
+      span_count: 1
+  layout:
+    regions:
+      header: 2
+      content: 25
+      input_area: 5
+      status_bar: 1
+    messages:
+    - type: assistant
+      lines: 6-6
+      preview: "How\_do\_I\_set\_up\_a\_Python\_virtual\_environment?"
+    - type: thinking
+      lines: 8-8
+      preview: "\u25B6\_Thinking:\_The\_user\_is\_asking\_about\_Python\_virtual\_\
+        environments..."
+    - type: tool
+      lines: 9-9
+      preview: "\u25B6\_Tool:\_bash"
+    - type: assistant
+      lines: 11-34
+      preview: "Virtual\_Environments"
+    - type: thinking
+      lines: 36-38
+      preview: "\u25BC\_Thinking:\_Conda\_is\_a\_different\_ecosystem..."
+    - type: assistant
+      lines: 39-41
+      preview: "Conda\_creates\_isolated\_environments\_with\_their\_own\_Python:"
+  content:
+  - line: 0
+    text: "\u2026/ANext/amplifier-tui"
+  - line: 2
+    text: "\u2588Auto-save\_found\_(2\_min\_ago).\_Use\_/autosave\_restore\_to\_recover."
+    colors:
+    - '#88bbcc'
+    - '#448899'
+  - line: 3
+    text: "just\_now"
+  - line: 6
+    text: "How\_do\_I\_set\_up\_a\_Python\_virtual\_environment?"
+    bold: true
+  - line: 8
+    text: "\u25B6\_Thinking:\_The\_user\_is\_asking\_about\_Python\_virtual\_environments..."
+    italic: true
+  - line: 9
+    text: "\u25B6\_Tool:\_bash"
+  - line: 11
+    text: "Virtual\_Environments"
+    bold: true
+  - line: 12
+    text: "Create\_one\_with\_the\_built-in\_venv\_module:"
+    colors:
+    - '#c0b0e0'
+    - '#ffffff'
+  - line: 14
+    text: "\u250C\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2510"
+  - line: 15
+    text: "\u2502\u2502"
+  - line: 16
+    text: "\u2502python3\_-m\_venv\_.venv\u2502"
+    colors:
+    - '#2a2a3e'
+    - '#ffffff'
+  - line: 17
+    text: "\u2502source\_.venv/bin/activate\u2502"
+    colors:
+    - '#838e9a'
+    - '#2a2a3e'
+    - '#ffffff'
+  - line: 18
+    text: "\u2502\u2502"
+  - line: 19
+    text: "\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2518"
+  - line: 21
+    text: "Your\_prompt\_will\_show\_(.venv)\_when\_active.\_Install\_packages\_normally\_\
+      with\_pip\_install."
+    colors:
+    - '#c0b0e0'
+    - '#ffffff'
+  - line: 23
+    text: "Tip:\_Use\_uv\_for\_faster\_package\_management:"
+    bold: true
+    colors:
+    - '#c0b0e0'
+    - '#ffffff'
+  - line: 25
+    text: "\u250C\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2510"
+  - line: 26
+    text: "\u2502\u2502"
+  - line: 27
+    text: "\u2502uv\_venv\_.venv\u2502"
+    colors:
+    - '#2a2a3e'
+    - '#ffffff'
+  - line: 28
+    text: "\u2502uv\_pip\_install\_requests\u2502"
+    colors:
+    - '#2a2a3e'
+    - '#ffffff'
+  - line: 29
+    text: "\u2502\u2502"
+  - line: 30
+    text: "\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2518"
+  - line: 34
+    text: "What\_about\_conda?"
+    bold: true
+  - line: 36
+    text: "\u25BC\_Thinking:\_Conda\_is\_a\_different\_ecosystem..."
+    italic: true
+  - line: 38
+    text: "Conda\_is\_a\_different\_ecosystem.\_I\_should\_compare\_it\_with\_venv/uv."
+    italic: true
+  - line: 39
+    text: "Conda\_creates\_isolated\_environments\_with\_their\_own\_Python:"
+    bold: true
+  - line: 41
+    text: "\u250C\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2510"
+  - line: 42
+    text: "\u2502\u2502"
+  - line: 43
+    text: "\u2502conda\_create\_-n\_myenv\_python=3.11\u2502"
+    bold: true
+    colors:
+    - '#c6c656'
+    - '#2a2a3e'
+    - '#ffffff'
+    - '#8ebbe8'
+  - line: 45
+    text: "\u250C\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2510"
+  - line: 46
+    text: "\u2502\u2502"
+  - line: 47
+    text: "\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+      \u2518"
+  - line: 49
+    text: "No\_sessionR"
+    colors:
+    - '#9f9f9f'
+    - '#cb7700'
+

@@ -1,0 +1,218 @@
+tui_analysis:
+  source: capture_20260207_100854.png
+  backend: lite
+  dimensions:
+    width: 1920
+    height: 1645
+  theme:
+    background:
+      hex: '#000000'
+      frequency: 0.636
+    secondary_bg:
+      hex: '#111111'
+      frequency: 0.2493
+    border:
+      hex: '#292929'
+      frequency: 0.0481
+    text:
+      hex: '#573b1a'
+      frequency: 0.0191
+    accent_1:
+      hex: '#1c1b1c'
+      frequency: 0.0182
+    accent_2:
+      hex: '#b6b8b0'
+      frequency: 0.0172
+  layout:
+    regions:
+    - type: header
+      bounds:
+        x: 0
+        y: 0
+        width: 1920
+        height: 55
+      rel_y: 0.017
+    - type: content
+      bounds:
+        x: 0
+        y: 159
+        width: 1920
+        height: 14
+      rel_y: 0.101
+    - type: content
+      bounds:
+        x: 0
+        y: 254
+        width: 1920
+        height: 2
+      rel_y: 0.155
+    - type: content
+      bounds:
+        x: 0
+        y: 260
+        width: 1920
+        height: 1
+      rel_y: 0.158
+    - type: content
+      bounds:
+        x: 0
+        y: 266
+        width: 1920
+        height: 2
+      rel_y: 0.162
+    - type: content
+      bounds:
+        x: 0
+        y: 444
+        width: 1920
+        height: 3
+      rel_y: 0.271
+    - type: content
+      bounds:
+        x: 0
+        y: 449
+        width: 1920
+        height: 2
+      rel_y: 0.274
+    - type: content
+      bounds:
+        x: 0
+        y: 455
+        width: 1920
+        height: 3
+      rel_y: 0.278
+    - type: content
+      bounds:
+        x: 0
+        y: 570
+        width: 1920
+        height: 15
+      rel_y: 0.351
+    - type: content
+      bounds:
+        x: 0
+        y: 602
+        width: 1920
+        height: 14
+      rel_y: 0.37
+    - type: content
+      bounds:
+        x: 0
+        y: 728
+        width: 1920
+        height: 15
+      rel_y: 0.447
+    - type: content
+      bounds:
+        x: 0
+        y: 791
+        width: 1920
+        height: 8
+      rel_y: 0.483
+    - type: content
+      bounds:
+        x: 0
+        y: 801
+        width: 1920
+        height: 5
+      rel_y: 0.488
+    - type: content
+      bounds:
+        x: 0
+        y: 918
+        width: 1920
+        height: 3
+      rel_y: 0.559
+    - type: content
+      bounds:
+        x: 0
+        y: 923
+        width: 1920
+        height: 2
+      rel_y: 0.562
+    - type: content
+      bounds:
+        x: 0
+        y: 930
+        width: 1920
+        height: 2
+      rel_y: 0.566
+    - type: content
+      bounds:
+        x: 0
+        y: 949
+        width: 1920
+        height: 15
+      rel_y: 0.581
+    - type: content
+      bounds:
+        x: 0
+        y: 1297
+        width: 1920
+        height: 3
+      rel_y: 0.789
+    - type: content
+      bounds:
+        x: 0
+        y: 1303
+        width: 1920
+        height: 1
+      rel_y: 0.792
+    - type: content
+      bounds:
+        x: 0
+        y: 1309
+        width: 1920
+        height: 2
+      rel_y: 0.796
+    - type: input_area
+      bounds:
+        x: 0
+        y: 1360
+        width: 1920
+        height: 15
+      rel_y: 0.831
+    - type: status_bar
+      bounds:
+        x: 0
+        y: 1523
+        width: 1920
+        height: 3
+      rel_y: 0.927
+    - type: status_bar
+      bounds:
+        x: 0
+        y: 1541
+        width: 1920
+        height: 31
+      rel_y: 0.946
+    - type: status_bar
+      bounds:
+        x: 0
+        y: 1586
+        width: 1920
+        height: 3
+      rel_y: 0.965
+    - type: status_bar
+      bounds:
+        x: 0
+        y: 1613
+        width: 1920
+        height: 15
+      rel_y: 0.985
+    - type: status_bar
+      bounds:
+        x: 0
+        y: 1632
+        width: 1920
+        height: 13
+      rel_y: 0.996
+    sidebar:
+      detected: true
+      x_position: 32
+      width_fraction: 0.017
+      confidence: 1.0
+  brightness:
+    min: 0.8
+    max: 252.6
+    median: 6.3
