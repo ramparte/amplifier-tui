@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 
-import difflib
 import json
 import os
 import re
@@ -379,7 +378,15 @@ class AmplifierChicApp(
         self._session_title: str = ""
 
         # File watch state (/watch command)
-        self._watched_files: dict[str, dict] = {}
+        from .features.file_watch import FileWatcher
+
+        self._file_watcher = FileWatcher(
+            add_message=self._add_system_message,
+            notify_sound=self._notify_sound,
+            set_interval=self.set_interval,
+        )
+        # Backward-compat aliases used by watch_cmds mixin
+        self._watched_files = self._file_watcher.watched_files
         self._watch_timer: Timer | None = None
 
         # Tab management state
@@ -410,6 +417,10 @@ class AmplifierChicApp(
         self._attachments: list[Attachment] = []
 
         # Reverse search state (Ctrl+R inline)
+        # NOTE: _rsearch_mgr is created lazily in _init_rsearch_manager()
+        # because self._history isn't available until after __init__.
+        self._rsearch_mgr: object | None = None  # ReverseSearchManager (lazy)
+        # Backward-compat aliases — set when manager is created
         self._rsearch_active: bool = False
         self._rsearch_query: str = ""
         self._rsearch_matches: list[int] = []
@@ -2021,174 +2032,81 @@ class AmplifierChicApp(
         else:
             self.push_screen(ShortcutOverlay())
 
+    def _ensure_rsearch_mgr(self) -> object:
+        """Lazily create the :class:`ReverseSearchManager`.
+
+        Deferred because ``self._history`` is not available during
+        ``__init__``.
+        """
+        if self._rsearch_mgr is None:
+            from .features.reverse_search import ReverseSearchManager
+
+            self._rsearch_mgr = ReverseSearchManager(
+                history=self._history,
+                get_input=lambda: self.query_one("#chat-input", ChatInput),
+                get_search_bar=lambda: self.query_one(
+                    "#history-search-bar", HistorySearchBar
+                ),
+            )
+        return self._rsearch_mgr
+
     def action_search_history(self) -> None:
         """Enter reverse-incremental search mode (Ctrl+R).
 
-        If already in search mode (Ctrl+R pressed again), cycle to the
-        next match.  Otherwise start a fresh search session.
+        Thin adapter — delegates to :class:`ReverseSearchManager`.
         """
-        if self._history.entry_count == 0:
-            self._add_system_message("No prompt history yet.")
-            return
-
-        if self._rsearch_active:
-            # Already searching – cycle to next older match
-            self._rsearch_cycle_next()
-            return
-
-        input_widget = self.query_one("#chat-input", ChatInput)
-        self._rsearch_active = True
-        self._rsearch_query = ""
-        self._rsearch_matches = []
-        self._rsearch_match_idx = -1
-        self._rsearch_original = input_widget.text
-        self._update_rsearch_display()
-        input_widget.focus()
+        mgr = self._ensure_rsearch_mgr()
+        mgr.start(add_message=self._add_system_message)  # type: ignore[union-attr]
+        self._rsearch_active = mgr.active  # type: ignore[union-attr]
 
     # ── Reverse search helpers ────────────────────────────────────
 
     def _handle_rsearch_key(self, widget: ChatInput, event: object) -> bool:
         """Handle a key press while reverse search is active.
 
-        Returns ``True`` if the key was consumed (caller should
-        ``prevent_default`` + ``stop``).  Returns ``False`` when
-        search was accepted and the key should be handled normally.
+        Thin adapter — delegates to :meth:`ReverseSearchManager.handle_key`.
         """
-        key = getattr(event, "key", "")
-
-        if key in ("escape", "ctrl+g"):
-            self._rsearch_cancel()
-            return True
-
-        if key in ("enter", "shift+enter"):
-            self._rsearch_accept()
-            return True
-
-        if key == "backspace":
-            if self._rsearch_query:
-                self._rsearch_query = self._rsearch_query[:-1]
-                self._do_rsearch()
-            return True
-
-        if key == "ctrl+r":
-            self._rsearch_cycle_next()
-            return True
-
-        if key == "ctrl+s":
-            self._rsearch_cycle_prev()
-            return True
-
-        character = getattr(event, "character", None)
-        is_printable = getattr(event, "is_printable", False)
-        if character and is_printable:
-            self._rsearch_query += character
-            self._do_rsearch()
-            return True
-
-        # Any other key (arrows, ctrl combos, …) – accept result, fall through
-        self._rsearch_accept()
-        return False
+        mgr = self._ensure_rsearch_mgr()
+        result = mgr.handle_key(event)  # type: ignore[union-attr]
+        self._rsearch_active = mgr.active  # type: ignore[union-attr]
+        return result
 
     def _rsearch_cycle_next(self) -> None:
-        """Cycle to the next (older) match in the current result set."""
-        if not self._rsearch_matches:
-            self._update_rsearch_display()
-            return
-        # Wrap around from last match back to first
-        self._rsearch_match_idx = (self._rsearch_match_idx + 1) % len(
-            self._rsearch_matches
-        )
-        entry = self._history.get_entry(self._rsearch_matches[self._rsearch_match_idx])
-        if entry is not None:
-            input_widget = self.query_one("#chat-input", ChatInput)
-            input_widget.clear()
-            input_widget.insert(entry)
-        self._update_rsearch_display()
+        """Thin adapter — delegates to :meth:`ReverseSearchManager.cycle_next`."""
+        mgr = self._ensure_rsearch_mgr()
+        mgr.cycle_next()  # type: ignore[union-attr]
 
     def _rsearch_cycle_prev(self) -> None:
-        """Cycle to the previous (newer) match in the current result set."""
-        if not self._rsearch_matches:
-            self._update_rsearch_display()
-            return
-        # Wrap around from first match back to last
-        self._rsearch_match_idx = (self._rsearch_match_idx - 1) % len(
-            self._rsearch_matches
-        )
-        entry = self._history.get_entry(self._rsearch_matches[self._rsearch_match_idx])
-        if entry is not None:
-            input_widget = self.query_one("#chat-input", ChatInput)
-            input_widget.clear()
-            input_widget.insert(entry)
-        self._update_rsearch_display()
+        """Thin adapter — delegates to :meth:`ReverseSearchManager.cycle_prev`."""
+        mgr = self._ensure_rsearch_mgr()
+        mgr.cycle_prev()  # type: ignore[union-attr]
 
     def _do_rsearch(self) -> None:
-        """Execute a reverse search and display the best match."""
-        input_widget = self.query_one("#chat-input", ChatInput)
-        query = self._rsearch_query
-        if not query:
-            self._rsearch_matches = []
-            self._rsearch_match_idx = -1
-            input_widget.clear()
-            input_widget.insert(self._rsearch_original)
-            self._update_rsearch_display()
-            return
-
-        self._rsearch_matches = self._history.reverse_search_indices(query)
-        if self._rsearch_matches:
-            self._rsearch_match_idx = 0
-            entry = self._history.get_entry(self._rsearch_matches[0])
-            if entry is not None:
-                input_widget.clear()
-                input_widget.insert(entry)
-        else:
-            self._rsearch_match_idx = -1
-        self._update_rsearch_display()
+        """Thin adapter — delegates to :meth:`ReverseSearchManager.do_search`."""
+        mgr = self._ensure_rsearch_mgr()
+        mgr.do_search()  # type: ignore[union-attr]
 
     def _rsearch_cancel(self) -> None:
-        """Cancel reverse search and restore the original input."""
+        """Thin adapter — delegates to :meth:`ReverseSearchManager.cancel`."""
+        mgr = self._ensure_rsearch_mgr()
+        mgr.cancel()  # type: ignore[union-attr]
         self._rsearch_active = False
-        input_widget = self.query_one("#chat-input", ChatInput)
-        input_widget.clear()
-        input_widget.insert(self._rsearch_original)
-        self._clear_rsearch_display()
 
     def _rsearch_accept(self) -> None:
-        """Accept the current search result and exit search mode."""
+        """Thin adapter — delegates to :meth:`ReverseSearchManager.accept`."""
+        mgr = self._ensure_rsearch_mgr()
+        mgr.accept()  # type: ignore[union-attr]
         self._rsearch_active = False
-        self._clear_rsearch_display()
 
     def _update_rsearch_display(self) -> None:
-        """Show the search indicator in the dedicated search bar."""
-        try:
-            bar = self.query_one("#history-search-bar", HistorySearchBar)
-            match_text: str | None = None
-            if self._rsearch_matches and self._rsearch_match_idx >= 0:
-                match_text = self._history.get_entry(
-                    self._rsearch_matches[self._rsearch_match_idx]
-                )
-            bar.show_search(
-                query=self._rsearch_query,
-                match=match_text,
-                index=self._rsearch_match_idx,
-                total=len(self._rsearch_matches),
-            )
-            # Also set a compact border subtitle so the input border itself
-            # gives a hint that search mode is active.
-            iw = self.query_one("#chat-input", ChatInput)
-            iw.border_subtitle = "(reverse-i-search active — Esc to cancel)"
-        except Exception:
-            pass
+        """Thin adapter — delegates to :meth:`ReverseSearchManager.update_display`."""
+        mgr = self._ensure_rsearch_mgr()
+        mgr.update_display()  # type: ignore[union-attr]
 
     def _clear_rsearch_display(self) -> None:
-        """Hide the search bar and restore the line-count subtitle."""
-        try:
-            self.query_one("#history-search-bar", HistorySearchBar).dismiss()
-        except Exception:
-            pass
-        try:
-            self.query_one("#chat-input", ChatInput)._update_line_indicator()
-        except Exception:
-            pass
+        """Thin adapter — delegates to :meth:`ReverseSearchManager.clear_display`."""
+        mgr = self._ensure_rsearch_mgr()
+        mgr.clear_display()  # type: ignore[union-attr]
 
     def action_search_chat(self) -> None:
         """Toggle the find-in-chat search bar (Ctrl+F)."""
@@ -3782,103 +3700,40 @@ class AmplifierChicApp(
     # ── /split – side-by-side reference panel ────────────────────────────
 
     def _show_watch_diff(self, abs_path: str) -> None:
-        """Show a unified diff for the last change to a watched file."""
-        info = self._watched_files[abs_path]
-        rel = os.path.relpath(abs_path)
+        """Show a unified diff for the last change to a watched file.
 
-        prev = info.get("prev_content")
-        current = info.get("last_content")
-
-        if prev is None and current is None:
-            self._add_system_message(f"[watch] No content captured yet for: {rel}")
-            return
-
-        if prev is None:
-            self._add_system_message(
-                f"[watch] No previous version to diff against: {rel}\n"
-                "Waiting for first change..."
-            )
-            return
-
-        diff_lines = list(
-            difflib.unified_diff(
-                prev.splitlines(keepends=True),
-                current.splitlines(keepends=True) if current else [],
-                fromfile=f"a/{rel}",
-                tofile=f"b/{rel}",
-                n=3,
-            )
-        )
-
-        if not diff_lines:
-            self._add_system_message(f"[watch] No diff available for: {rel}")
-            return
-
-        # Truncate very long diffs to keep the chat readable
-        max_lines = 80
-        truncated = len(diff_lines) > max_lines
-        display = diff_lines[:max_lines]
-        text = "".join(display)
-        if truncated:
-            text += f"\n... ({len(diff_lines) - max_lines} more lines)"
-
-        self._add_system_message(f"[watch] Diff for {rel}:\n{text}")
+        Thin adapter — delegates to :meth:`FileWatcher._compute_diff`.
+        """
+        result = self._file_watcher.get_diff(abs_path)
+        if result is not None:
+            self._add_system_message(result)
 
     def _looks_like_commit_ref(self, text: str) -> bool:
-        """Check if *text* looks like a git commit reference."""
-        if text.startswith("HEAD"):
-            return True
-        # SHA-like hex string (7-40 chars)
-        if re.fullmatch(r"[0-9a-fA-F]{7,40}", text):
-            return True
-        # Contains ~ or ^ (e.g., main~3, abc123^2)
-        if "~" in text or "^" in text:
-            return True
-        return False
+        """Check if *text* looks like a git commit reference.
+
+        Thin adapter — delegates to :func:`features.git_integration.looks_like_commit_ref`.
+        """
+        from .features.git_integration import looks_like_commit_ref
+
+        return looks_like_commit_ref(text)
 
     def _colorize_diff(self, diff_text: str) -> str:
-        """Apply Rich markup colors to diff output."""
-        from rich.markup import escape
+        """Apply Rich markup colors to diff output.
 
-        lines: list[str] = []
-        for line in diff_text.split("\n"):
-            escaped = escape(line)
-            if line.startswith("+++") or line.startswith("---"):
-                lines.append(f"[bold]{escaped}[/bold]")
-            elif line.startswith("@@"):
-                lines.append(f"[cyan]{escaped}[/cyan]")
-            elif line.startswith("+"):
-                lines.append(f"[green]{escaped}[/green]")
-            elif line.startswith("-"):
-                lines.append(f"[red]{escaped}[/red]")
-            elif line.startswith("diff "):
-                lines.append(f"[bold yellow]{escaped}[/bold yellow]")
-            else:
-                lines.append(escaped)
-        return "\n".join(lines)
+        Thin adapter — delegates to :func:`features.git_integration.colorize_diff`.
+        """
+        from .features.git_integration import colorize_diff
+
+        return colorize_diff(diff_text)
 
     def _show_diff(self, diff_output: str, header: str = "") -> None:
-        """Display colorized diff output, truncating if too large."""
-        max_lines = 500
-        all_lines = diff_output.split("\n")
-        total = len(all_lines)
-        truncated = total > max_lines
+        """Display colorized diff output, truncating if too large.
 
-        text = "\n".join(all_lines[:max_lines]) if truncated else diff_output
-        colored = self._colorize_diff(text)
+        Thin adapter — delegates to :func:`features.git_integration.show_diff`.
+        """
+        from .features.git_integration import show_diff
 
-        if header:
-            from rich.markup import escape
-
-            colored = escape(header) + colored
-
-        if truncated:
-            colored += (
-                f"\n\n... truncated ({total} total lines)."
-                " Use /diff <file> to see specific files."
-            )
-
-        self._add_system_message(colored)
+        self._add_system_message(show_diff(diff_output, header=header))
 
     # ------------------------------------------------------------------
     # /git command
@@ -4258,39 +4113,23 @@ class AmplifierChicApp(
 
     @staticmethod
     def _html_escape(text: str) -> str:
-        """Escape HTML special characters."""
-        return (
-            text.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;")
-        )
+        """Escape HTML special characters.
+
+        Thin adapter — delegates to :func:`features.export.html_escape`.
+        """
+        from .features.export import html_escape
+
+        return html_escape(text)
 
     @staticmethod
     def _md_to_html(text: str) -> str:
-        """Very basic markdown to HTML conversion."""
-        # Code blocks (fenced)
-        text = re.sub(
-            r"```(\w+)?\n(.*?)\n```",
-            lambda m: (
-                f'<pre><code class="language-{m.group(1) or ""}">'
-                f"{m.group(2)}</code></pre>"
-            ),
-            text,
-            flags=re.DOTALL,
-        )
-        # Inline code
-        text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
-        # Bold
-        text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
-        # Italic
-        text = re.sub(r"\*(.+?)\*", r"<em>\1</em>", text)
-        # Line breaks (outside <pre> blocks)
-        parts = re.split(r"(<pre>.*?</pre>)", text, flags=re.DOTALL)
-        for i, part in enumerate(parts):
-            if not part.startswith("<pre>"):
-                parts[i] = part.replace("\n", "<br>\n")
-        return "".join(parts)
+        """Very basic markdown to HTML conversion.
+
+        Thin adapter — delegates to :func:`features.export.md_to_html`.
+        """
+        from .features.export import md_to_html
+
+        return md_to_html(text)
 
     def _show_notes(self) -> None:
         """Show all session notes."""
@@ -5127,38 +4966,22 @@ class AmplifierChicApp(
     def _send_terminal_notification(title: str, body: str = "") -> None:
         """Send a terminal notification via OSC escape sequences.
 
-        Uses multiple methods for broad terminal compatibility:
-        - OSC 9: iTerm2, WezTerm, kitty
-        - OSC 777: rxvt-unicode
-        - BEL: universal fallback (triggers terminal bell / visual bell)
-
-        Writes to sys.__stdout__ to bypass Textual's stdout capture.
+        Thin adapter — delegates to
+        :func:`features.notifications.send_terminal_notification`.
         """
-        out = sys.__stdout__
-        if out is None:
-            return
-        try:
-            out.write(f"\033]9;{title}: {body}\a")
-            out.write(f"\033]777;notify;{title};{body}\a")
-            out.write("\a")
-            out.flush()
-        except Exception:
-            pass  # Don't crash if the terminal doesn't support these
+        from .features.notifications import send_terminal_notification
+
+        send_terminal_notification(title, body)
 
     @staticmethod
     def _play_bell() -> None:
         """Write BEL character to the real terminal via *sys.__stdout__*.
 
-        Textual captures ``sys.stdout``, so we use the original fd directly.
+        Thin adapter — delegates to :func:`features.notifications.play_bell`.
         """
-        out = sys.__stdout__
-        if out is None:
-            return
-        try:
-            out.write("\a")
-            out.flush()
-        except Exception:
-            pass
+        from .features.notifications import play_bell
+
+        play_bell()
 
     def _flash_title_bar(self) -> None:
         """Briefly change the terminal title to signal response completion.

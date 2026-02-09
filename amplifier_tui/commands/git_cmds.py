@@ -3,33 +3,23 @@
 from __future__ import annotations
 
 import difflib
-import os
-import subprocess
+
+from ..features.git_integration import (
+    run_git,
+    looks_like_commit_ref,
+    show_diff as _show_diff_text,
+)
 
 
 class GitCommandsMixin:
     """Git integration commands."""
 
     def _run_git(self, *args: str, cwd: str | None = None) -> tuple[bool, str]:
-        """Run a git command and return *(success, output)*."""
-        try:
-            result = subprocess.run(
-                ["git", *args],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                cwd=cwd or os.getcwd(),
-            )
-            return (
-                result.returncode == 0,
-                result.stdout.strip() or result.stderr.strip(),
-            )
-        except FileNotFoundError:
-            return False, "git not found"
-        except subprocess.TimeoutExpired:
-            return False, "git command timed out"
-        except Exception as exc:
-            return False, str(exc)
+        """Run a git command and return *(success, output)*.
+
+        Thin adapter — delegates to :func:`features.git_integration.run_git`.
+        """
+        return run_git(*args, cwd=cwd)
 
     # ------------------------------------------------------------------
     # Diff display helpers
@@ -156,7 +146,7 @@ class GitCommandsMixin:
             out = "\n".join(lines[:50]) + f"\n... ({len(lines) - 50} more lines)"
         # Use colorized display for actual diffs, plain for --stat
         if args.strip():
-            self._show_diff(out)
+            self._add_system_message(_show_diff_text(out))
         else:
             self._add_system_message(f"```\n{out}\n```")
 
@@ -245,7 +235,7 @@ class GitCommandsMixin:
                 lines.append("Use /diff staged, /diff <file>, or /diff all")
                 self._add_system_message("\n".join(lines))
                 return
-            self._show_diff(output)
+            self._add_system_message(_show_diff_text(output))
             return
 
         # --- /diff all ---
@@ -259,7 +249,7 @@ class GitCommandsMixin:
                 elif not output:
                     self._add_system_message("No changes")
                     return
-            self._show_diff(output)
+            self._add_system_message(_show_diff_text(output))
             return
 
         # --- /diff staged ---
@@ -268,7 +258,7 @@ class GitCommandsMixin:
             if not ok or not output:
                 self._add_system_message("No staged changes")
                 return
-            self._show_diff(output)
+            self._add_system_message(_show_diff_text(output))
             return
 
         # --- /diff last ---
@@ -283,7 +273,7 @@ class GitCommandsMixin:
             # Prepend the commit summary line when available
             ok2, msg = self._run_git("log", "-1", "--oneline")
             header = f"Last commit: {msg}\n\n" if ok2 and msg else ""
-            self._show_diff(output, header=header)
+            self._add_system_message(_show_diff_text(output, header=header))
             return
 
         # --- /diff <file1> <file2> (two paths) ---
@@ -303,11 +293,11 @@ class GitCommandsMixin:
                         f"No differences between '{parts[0]}' and '{parts[1]}'"
                     )
                     return
-                self._show_diff(output)
+                self._add_system_message(_show_diff_text(output))
                 return
 
         # --- /diff HEAD~N or commit-ish ---
-        if self._looks_like_commit_ref(text):
+        if looks_like_commit_ref(text):
             ok, output = self._run_git("diff", text, "--color=never")
             if not ok:
                 self._add_system_message(f"git error: {output}")
@@ -315,7 +305,7 @@ class GitCommandsMixin:
             if not output:
                 self._add_system_message(f"No changes from {text}")
                 return
-            self._show_diff(output)
+            self._add_system_message(_show_diff_text(output))
             return
 
         # --- /diff <file> ---
@@ -329,7 +319,7 @@ class GitCommandsMixin:
             if not ok or not output:
                 self._add_system_message(f"No changes for '{text}'")
                 return
-        self._show_diff(output)
+        self._add_system_message(_show_diff_text(output))
 
     # ------------------------------------------------------------------
     # /diff msgs  – compare two chat messages
@@ -443,4 +433,3 @@ class GitCommandsMixin:
         result = "\n".join(formatted) + summary
 
         self._add_system_message(f"Message diff:\n{result}")
-

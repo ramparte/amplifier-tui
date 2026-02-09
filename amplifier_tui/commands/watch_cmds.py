@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-import difflib
 import os
 
 
@@ -108,82 +107,22 @@ class WatchCommandsMixin:
         self._add_system_message(f"Watching: {os.path.relpath(abs_path)}")
 
     def _start_watch_timer(self) -> None:
-        """Start the 2-second polling timer for watched files."""
-        if self._watch_timer is None:
-            self._watch_timer = self.set_interval(2.0, self._check_watched_files)
+        """Start the 2-second polling timer for watched files.
+
+        Thin adapter — delegates to :meth:`FileWatcher._start_timer`.
+        """
+        self._file_watcher._start_timer()
 
     def _stop_watch_timer(self) -> None:
-        """Stop the polling timer when no files are watched."""
-        if self._watch_timer is not None:
-            self._watch_timer.stop()
-            self._watch_timer = None
+        """Stop the polling timer when no files are watched.
+
+        Thin adapter — delegates to :meth:`FileWatcher._stop_timer`.
+        """
+        self._file_watcher._stop_timer()
 
     def _check_watched_files(self) -> None:
-        """Periodic check for file changes (runs every 2s)."""
-        for path, info in list(self._watched_files.items()):
-            try:
-                if not os.path.exists(path):
-                    rel = os.path.relpath(path)
-                    self._add_system_message(f"[watch] File removed: {rel}")
-                    del self._watched_files[path]
-                    continue
+        """Periodic check for file changes (runs every 2s).
 
-                stat = os.stat(path)
-                if stat.st_mtime != info["mtime"] or stat.st_size != info["size"]:
-                    rel = os.path.relpath(path)
-
-                    # Read new content for diff (only on change, not every poll)
-                    new_content: str | None = None
-                    line_delta_str = ""
-                    if os.path.isfile(path):
-                        try:
-                            with open(path, encoding="utf-8", errors="replace") as f:
-                                new_content = f.read()
-                        except OSError:
-                            pass
-
-                        if new_content is not None and info["last_content"] is not None:
-                            old_lines = info["last_content"].splitlines()
-                            new_lines = new_content.splitlines()
-                            added = 0
-                            removed = 0
-                            for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
-                                None, old_lines, new_lines
-                            ).get_opcodes():
-                                if tag == "insert":
-                                    added += j2 - j1
-                                elif tag == "delete":
-                                    removed += i2 - i1
-                                elif tag == "replace":
-                                    added += j2 - j1
-                                    removed += i2 - i1
-                            parts = []
-                            if added:
-                                parts.append(f"+{added}")
-                            if removed:
-                                parts.append(f"-{removed}")
-                            if parts:
-                                line_delta_str = f" ({', '.join(parts)} lines)"
-
-                    # Byte-level fallback when line diff isn't available
-                    size_delta = stat.st_size - info["size"]
-                    if not line_delta_str:
-                        if size_delta > 0:
-                            line_delta_str = f" (+{size_delta} bytes)"
-                        elif size_delta < 0:
-                            line_delta_str = f" ({size_delta} bytes)"
-
-                    # Rotate content snapshots and update tracking
-                    info["prev_content"] = info["last_content"]
-                    info["last_content"] = new_content
-                    info["mtime"] = stat.st_mtime
-                    info["size"] = stat.st_size
-
-                    self._add_system_message(f"[watch] Changed: {rel}{line_delta_str}")
-                    self._notify_sound(event="file_change")
-            except Exception:
-                pass
-
-        if not self._watched_files:
-            self._stop_watch_timer()
-
+        Thin adapter — delegates to :meth:`FileWatcher.check`.
+        """
+        self._file_watcher.check()

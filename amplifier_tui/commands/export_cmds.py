@@ -4,211 +4,68 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-import json
 import re
 
 from textual.widgets import Static
 
 from .._utils import _copy_to_clipboard
+from ..features.export import (
+    get_export_metadata,
+    export_markdown as _fmt_markdown,
+    export_text as _fmt_text,
+    export_json as _fmt_json,
+    export_html as _fmt_html,
+)
 
 
 class ExportCommandsMixin:
     """Export, title, and rename commands."""
 
     def _get_export_metadata(self) -> dict[str, str]:
-        """Gather metadata for export headers."""
+        """Gather metadata for export headers.
+
+        Thin adapter — extracts state from *self* and delegates to
+        :func:`features.export.get_export_metadata`.
+        """
         sm = self.session_manager if hasattr(self, "session_manager") else None
         session_id = (getattr(sm, "session_id", None) or "") if sm else ""
         model = (getattr(sm, "model_name", None) or "unknown") if sm else "unknown"
-        total_words = getattr(self, "_user_words", 0) + getattr(
-            self, "_assistant_words", 0
+        return get_export_metadata(
+            session_id=session_id,
+            session_title=self._session_title or "",
+            model=model,
+            message_count=len(self._search_messages),
+            user_words=getattr(self, "_user_words", 0),
+            assistant_words=getattr(self, "_assistant_words", 0),
         )
-        est_tokens = int(total_words * 1.3)
-        return {
-            "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "session_id": session_id,
-            "session_title": self._session_title or "",
-            "model": model,
-            "message_count": str(len(self._search_messages)),
-            "token_estimate": f"~{est_tokens:,}",
-        }
 
     def _export_markdown(self, messages: list[tuple[str, str, Static | None]]) -> str:
-        """Format messages as markdown."""
-        meta = self._get_export_metadata()
-        lines = [
-            "# Amplifier Chat Export",
-            "",
-        ]
-        lines.append(f"- **Date**: {meta['date']}")
-        if meta["session_id"]:
-            lines.append(f"- **Session**: {meta['session_id'][:12]}")
-        if meta["session_title"]:
-            lines.append(f"- **Title**: {meta['session_title']}")
-        lines.append(f"- **Model**: {meta['model']}")
-        lines.append(f"- **Messages**: {meta['message_count']}")
-        lines.append(f"- **Tokens**: {meta['token_estimate']}")
-        lines.append("")
-        lines.append("---")
-        lines.append("")
+        """Format messages as markdown.
 
-        for role, content, _widget in messages:
-            if role == "user":
-                lines.append("## User")
-            elif role == "assistant":
-                lines.append("## Assistant")
-            elif role == "thinking":
-                lines.append("<details><summary>Thinking</summary>")
-                lines.append("")
-                lines.append(content)
-                lines.append("")
-                lines.append("</details>")
-                lines.append("")
-                lines.append("---")
-                lines.append("")
-                continue
-            elif role == "system":
-                lines.append(f"> **System**: {content}")
-                lines.append("")
-                lines.append("---")
-                lines.append("")
-                continue
-            else:
-                lines.append(f"## {role.title()}")
-            lines.append("")
-            lines.append(content)
-            lines.append("")
-            lines.append("---")
-            lines.append("")
-
-        lines.append("*Exported from Amplifier TUI*")
-        return "\n".join(lines)
+        Thin adapter — delegates to :func:`features.export.export_markdown`.
+        """
+        return _fmt_markdown(messages, self._get_export_metadata())
 
     def _export_text(self, messages: list[tuple[str, str, Static | None]]) -> str:
-        """Format messages as plain text."""
-        meta = self._get_export_metadata()
-        lines: list[str] = [
-            f"Amplifier Chat - {meta['date']}",
-            "=" * 40,
-            f"Session: {meta['session_id'][:12] if meta['session_id'] else 'n/a'}",
-            f"Model: {meta['model']}",
-            f"Messages: {meta['message_count']}",
-            f"Tokens: {meta['token_estimate']}",
-            "=" * 40,
-            "",
-        ]
-        for role, content, _widget in messages:
-            label = {
-                "user": "You",
-                "assistant": "AI",
-                "system": "System",
-                "thinking": "Thinking",
-            }.get(role, role)
-            lines.append(f"[{label}]")
-            lines.append(content)
-            lines.append("")
-        return "\n".join(lines)
+        """Format messages as plain text.
+
+        Thin adapter — delegates to :func:`features.export.export_text`.
+        """
+        return _fmt_text(messages, self._get_export_metadata())
 
     def _export_json(self, messages: list[tuple[str, str, Static | None]]) -> str:
-        """Format messages as JSON."""
-        meta = self._get_export_metadata()
-        data = {
-            "session_id": meta["session_id"],
-            "session_title": meta["session_title"],
-            "model": meta["model"],
-            "exported_at": datetime.now().isoformat(),
-            "message_count": len(messages),
-            "token_estimate": meta["token_estimate"],
-            "messages": [
-                {"role": role, "content": content}
-                for role, content, _widget in messages
-            ],
-        }
-        return json.dumps(data, indent=2, ensure_ascii=False)
+        """Format messages as JSON.
+
+        Thin adapter — delegates to :func:`features.export.export_json`.
+        """
+        return _fmt_json(messages, self._get_export_metadata())
 
     def _export_html(self, messages: list[tuple[str, str, Static | None]]) -> str:
-        """Format messages as styled HTML with dark theme."""
-        meta = self._get_export_metadata()
-        title_text = (
-            self._html_escape(meta["session_title"])
-            if meta["session_title"]
-            else "Chat Export"
-        )
-        html = [
-            "<!DOCTYPE html>",
-            "<html lang='en'><head>",
-            "<meta charset='utf-8'>",
-            f"<title>Amplifier - {title_text} - {meta['date']}</title>",
-            "<style>",
-            "body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;"
-            " max-width: 800px; margin: 0 auto; padding: 20px; background: #1e1e2e; color: #cdd6f4; }",
-            ".metadata { color: #6c7086; font-size: 0.85em; border-bottom: 1px solid #313244;"
-            " padding-bottom: 1rem; margin-bottom: 2rem; }",
-            ".metadata span { margin-right: 1.5em; }",
-            ".message { margin: 16px 0; padding: 12px 16px; border-radius: 8px; }",
-            ".user { background: #313244; border-left: 3px solid #89b4fa; }",
-            ".assistant { background: #1e1e2e; border-left: 3px solid #a6e3a1; }",
-            ".system { background: #181825; border-left: 3px solid #f9e2af; font-style: italic; }",
-            ".thinking { background: #181825; border-left: 3px solid #9399b2; }",
-            ".role { font-weight: bold; margin-bottom: 8px; color: #89b4fa; }",
-            ".assistant .role { color: #a6e3a1; }",
-            ".system .role { color: #f9e2af; }",
-            ".thinking .role { color: #9399b2; }",
-            "pre { background: #11111b; padding: 12px; border-radius: 4px; overflow-x: auto; }",
-            "code { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace; font-size: 0.9em; }",
-            "p code { background: #313244; padding: 2px 5px; border-radius: 3px; }",
-            "details { margin: 8px 0; }",
-            "summary { cursor: pointer; color: #9399b2; font-weight: bold; }",
-            ".meta { color: #6c7086; font-size: 0.85em; margin-top: 12px; }",
-            "h1 { color: #cba6f7; border-bottom: 1px solid #313244; padding-bottom: 8px; }",
-            "a { color: #89b4fa; }",
-            "</style>",
-            "</head><body>",
-            "<h1>Amplifier Chat Export</h1>",
-        ]
-        sid_short = meta["session_id"][:12] if meta["session_id"] else "n/a"
-        meta_parts = [
-            f"<span><strong>Date:</strong> {meta['date']}</span>",
-            f"<span><strong>Session:</strong> {self._html_escape(sid_short)}</span>",
-            f"<span><strong>Model:</strong> {self._html_escape(meta['model'])}</span>",
-            f"<span><strong>Messages:</strong> {meta['message_count']}</span>",
-            f"<span><strong>Tokens:</strong> {self._html_escape(meta['token_estimate'])}</span>",
-        ]
-        if meta["session_title"]:
-            meta_parts.insert(
-                1,
-                f"<span><strong>Title:</strong> {self._html_escape(meta['session_title'])}</span>",
-            )
-        html.append(f"<div class='metadata'>{''.join(meta_parts)}</div>")
+        """Format messages as styled HTML with dark theme.
 
-        for role, content, _widget in messages:
-            escaped = self._html_escape(content)
-            rendered = self._md_to_html(escaped)
-
-            if role == "thinking":
-                html.append(
-                    f"<details class='message thinking'>"
-                    f"<summary class='role'>Thinking</summary>"
-                    f"<div>{rendered}</div></details>"
-                )
-            else:
-                role_label = {
-                    "user": "User",
-                    "assistant": "Assistant",
-                    "system": "System",
-                }.get(role, role.title())
-                html.append(
-                    f"<div class='message {self._html_escape(role)}'>"
-                    f"<div class='role'>{role_label}</div>"
-                    f"<div>{rendered}</div></div>"
-                )
-
-        html.append(
-            "<p class='meta' style='text-align:center; margin-top:32px;'>"
-            "Exported from Amplifier TUI</p>"
-        )
-        html.append("</body></html>")
-        return "\n".join(html)
+        Thin adapter — delegates to :func:`features.export.export_html`.
+        """
+        return _fmt_html(messages, self._get_export_metadata())
 
     # ------------------------------------------------------------------
     # /export command
@@ -497,4 +354,3 @@ class ExportCommandsMixin:
             self._populate_session_list(self._session_list_data)
 
         self._add_system_message(f'Session named: "{text}"')
-
