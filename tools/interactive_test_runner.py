@@ -181,17 +181,24 @@ BATCH_1_CORE_DISPLAY = [
         [("system_msg", check_system_message_appeared)],
     ),
     (
+        "T6.1_pre",
+        "key",
+        "ctrl+b",
+        "Open sidebar before focus-mode test",
+        [("sidebar_visible", check_sidebar_visible)],
+    ),
+    (
         "T6.1a",
         "command",
         "/focus",
-        "Toggle focus mode",
+        "Focus mode hides sidebar",
         [("sidebar_hidden", check_sidebar_hidden)],
     ),
     (
         "T6.1b",
         "command",
         "/focus",
-        "Toggle focus mode OFF (restore)",
+        "Focus mode OFF restores sidebar",
         [("sidebar_visible", check_sidebar_visible)],
     ),
     ("T5.2", "command", "/clear", "Clear chat display", []),
@@ -685,8 +692,8 @@ BATCH_4_KEYBINDINGS = [
         "T15.2b",
         "key",
         "ctrl+b",
-        "Ctrl+B - Toggle sidebar back",
-        [("sidebar_visible", check_sidebar_visible)],
+        "Ctrl+B - Toggle sidebar closed",
+        [("sidebar_hidden", check_sidebar_hidden)],
     ),
     ("T15.3", "key", "ctrl+p", "Ctrl+P - Command palette", []),
     (
@@ -793,23 +800,17 @@ async def run_single_test(app, pilot, test_def, output_dir: Path) -> TestResult:
     try:
         # Execute the action
         if action_type == "command":
-            # Inject text directly into ChatInput (fast, reliable)
-            try:
-                chat_input = app.query_one("#chat-input")
-                chat_input.clear()
-                chat_input.insert(action_data)
-            except Exception:
-                # Fallback: press each char (slower)
-                try:
-                    await pilot.click("#chat-input")
-                    await pilot.pause(delay=0.05)
-                except Exception:
-                    pass
-                for ch in action_data:
-                    await pilot.press("space" if ch == " " else ch)
+            # Inject text and submit directly (bypasses multiline/vim mode
+            # key handling, but still goes through the real Submitted → handler
+            # path so command dispatch is fully exercised)
+            from amplifier_tui.widgets.chat_input import ChatInput as _CI
 
+            chat_input = app.query_one("#chat-input", _CI)
+            chat_input.clear()
+            chat_input.insert(action_data)
+            chat_input.focus()
             await pilot.pause(delay=0.05)
-            await pilot.press("enter")
+            chat_input.post_message(_CI.Submitted(text_area=chat_input))
             await pilot.pause(delay=0.3)
 
         elif action_type == "key":

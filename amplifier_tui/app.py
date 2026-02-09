@@ -2000,13 +2000,12 @@ class AmplifierChicApp(
     def action_toggle_sidebar(self) -> None:
         sidebar = self.query_one("#session-sidebar")
         self._sidebar_visible = not self._sidebar_visible
+        sidebar.display = self._sidebar_visible
         if self._sidebar_visible:
-            sidebar.add_class("visible")
             self._load_session_list()
             # Focus the filter input so user can start typing immediately
             self.query_one("#session-filter", Input).focus()
         else:
-            sidebar.remove_class("visible")
             # Clear filter when closing so next open shows all sessions
             self.query_one("#session-filter", Input).value = ""
 
@@ -2402,22 +2401,31 @@ class AmplifierChicApp(
         self._set_focus_mode(not self._focus_mode)
 
     def _set_focus_mode(self, enabled: bool) -> None:
-        """Apply focus mode state using a CSS class on the app."""
+        """Toggle focus mode (hides chrome for distraction-free chat).
+
+        Uses .focus-mode CSS class for status bar / breadcrumb / pinned panel.
+        Sidebar uses inline display (consistent with action_toggle_sidebar).
+        """
         if enabled == self._focus_mode:
             return
 
+        self._focus_mode = enabled
         if enabled:
-            # Remember sidebar state so we can restore it on exit
             self._sidebar_was_visible_before_focus = self._sidebar_visible
-            self._focus_mode = True
             self.add_class("focus-mode")
+            try:
+                self.query_one("#session-sidebar").display = False
+            except NoMatches:
+                pass
             self._add_system_message("Focus mode ON (F11 or /focus to exit)")
         else:
-            self._focus_mode = False
             self.remove_class("focus-mode")
-            # Restore sidebar to its pre-focus state
-            if self._sidebar_was_visible_before_focus and not self._sidebar_visible:
-                self.action_toggle_sidebar()
+            if self._sidebar_was_visible_before_focus:
+                try:
+                    self.query_one("#session-sidebar").display = True
+                except NoMatches:
+                    pass
+                self._sidebar_visible = True
             self._add_system_message("Focus mode OFF")
 
         # Keep input focused
