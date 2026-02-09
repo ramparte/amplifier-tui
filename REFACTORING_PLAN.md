@@ -11,6 +11,9 @@
 - #14 P2: 15 unguarded `session_manager` accesses risk crash
 - #15 P3: 88 pyright errors total
 - #16 P3: God file (this entire plan)
+- #17 P2: Sidebar toggle does not restore sidebar on second invocation (interactive testing)
+- #18 P3: Keyboard shortcuts dialog truncates descriptions (interactive testing)
+- #19 P2: Sidebar toggle-back corrupts input area and status bar layout (interactive testing)
 
 ---
 
