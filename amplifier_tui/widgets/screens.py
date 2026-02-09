@@ -12,10 +12,10 @@ from textual.widgets.option_list import Option
 from ..history import PromptHistory
 
 SHORTCUTS_TEXT = """\
-         Keyboard Shortcuts
-\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+                   Keyboard Shortcuts
+\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
- NAVIGATION \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+ NAVIGATION \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   Ctrl+\u2191/\u2193         Scroll chat up/down
   Ctrl+Home/End    Jump to top/bottom
   Home/End          Top/bottom (input empty)
@@ -24,7 +24,7 @@ SHORTCUTS_TEXT = """\
   Tab              Cycle focus
   F11              Focus mode
 
- CHAT \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+ CHAT \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   Enter            Send message
   Shift+Enter      New line (also Ctrl+J)
   Alt+M            Toggle multiline mode
@@ -34,33 +34,33 @@ SHORTCUTS_TEXT = """\
   Ctrl+L           Clear chat
   Ctrl+A           Toggle auto-scroll
 
- SEARCH & EDIT \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-  Ctrl+F           Find in chat (interactive search bar)
+ SEARCH & EDIT \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  Ctrl+F           Find in chat (search bar)
   Ctrl+R           Reverse history search (Ctrl+S fwd)
   Ctrl+G           Open external editor
-  Ctrl+Y           Copy last AI response (Ctrl+Shift+C also works)
+  Ctrl+Y           Copy last AI response
   Ctrl+M           Bookmark last response
   Ctrl+S           Stash/restore draft
 
- VIM BOOKMARKS (normal mode) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-  Ctrl+B           Toggle bookmark on last message
+ VIM BOOKMARKS (normal mode) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  Ctrl+B           Toggle bookmark on last msg
   [                Jump to previous bookmark
   ]                Jump to next bookmark
 
- SESSIONS \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+ SESSIONS \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   Ctrl+N           New session
   Ctrl+T           New tab
   F2               Rename current tab
-  Ctrl+W           Close tab (split: switch pane)
-  Ctrl+PgUp/Dn    Switch tabs (split: switch pane)
-  Alt+Left/Right   Prev/next tab (split: switch pane)
+  Ctrl+W           Close tab (or switch split pane)
+  Ctrl+PgUp/Dn    Switch tabs (or split pane)
+  Alt+Left/Right   Prev/next tab (or split pane)
   Alt+1-9          Jump to tab 1-9
   Alt+0            Jump to last tab
   Ctrl+P           Command palette (fuzzy search)
   F1 / Ctrl+/      This help
   Ctrl+Q           Quit
 
- SPLIT VIEW \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+ SPLIT VIEW \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   /split           Toggle tab split (2+ tabs)
   /split N         Split with tab N
   /split swap      Swap left/right panes
@@ -68,11 +68,11 @@ SHORTCUTS_TEXT = """\
   Alt+Left/Right   Switch active pane
   Ctrl+W           Switch active pane
 
-          Slash Commands
-\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+                    Slash Commands
+\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   Type /help for the full reference
 
- SESSION \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+ SESSION \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   /new             New session
   /sessions        Toggle session sidebar
   /rename          Rename tab (F2)
@@ -80,86 +80,86 @@ SHORTCUTS_TEXT = """\
   /delete          Delete current session
   /pin-session     Pin/unpin in sidebar
   /sort            Sort sessions
-  /split           Split view (tab split, pins, chat, file)
+  /split           Split view (tab, pins, chat, file)
   /tab             Tab management
   /tabs            List open tabs
   /info            Session details
-  /stats           Session statistics (tools, tokens, time)
+  /stats           Session stats (tools, tokens, time)
 
- CHAT & HISTORY \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+ CHAT & HISTORY \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   /clear           Clear chat display
   /copy            Copy response (last/N/all/code)
   /undo [N]        Undo last N exchange(s)
-  /retry [text]    Undo last exchange & resend (or send new text)
+  /retry [text]    Undo & resend (or send new text)
   /redo [text]     Alias for /retry
-  /fold            Fold last long message (all, none, <N>, threshold)
+  /fold            Fold long message (all/none/<N>)
   /unfold          Unfold last folded message (all)
   /compact         Toggle compact mode
-  /history         Browse/search/clear input history
+  /history         Browse/search/clear history
 
- SEARCH \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+ SEARCH \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   /find            Interactive find-in-chat (Ctrl+F)
   /search          Search chat messages
   /grep            Search chat (regex)
 
- PINS & BOOKMARKS \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-  /pin             Pin message (N, list, clear, remove N)
+ PINS & BOOKMARKS \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  /pin             Pin message (N, list, clear, rm N)
   /pins            List pinned messages
   /unpin N         Remove a pin
-  /bookmark        Bookmark last response (list, N, jump N, remove N, clear)
+  /bookmark        Bookmark response (list/N/jump/rm)
   /bookmarks       List/jump to bookmarks
-  /note            Add a session note (/note list, /note clear)
-  /notes           List all notes (alias for /note list)
+  /note            Session note (list, clear)
+  /notes           List all notes
   /ref             Save URL/reference
-  /refs             List saved references
+  /refs            List saved references
 
- MODEL & DISPLAY \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+ MODEL & DISPLAY \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   /model [name]    View/switch AI model
-  /theme [name]    Switch color theme (/theme preview, /theme preview <name>, /theme revert)
-  /colors          View/set text colors (/colors presets, /colors use <preset>)
+  /theme [name]    Switch theme (preview/revert)
+  /colors          Text colors (presets, use <name>)
   /wrap            Toggle word wrap
   /timestamps      Toggle timestamps (/ts)
   /focus           Toggle focus mode
   /stream          Toggle streaming display
   /scroll          Toggle auto-scroll
 
- EXPORT & DATA \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-  /export          Export chat (md/html/json/txt/last [N]/clipboard)
+ EXPORT & DATA \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  /export          Export chat (md/html/json/txt)
   /diff            Show git diff (color-coded)
-  /diff msgs       Compare last two assistant messages (or /diff msgs N M)
-  /git             Quick git operations (status/log/diff/branch/stash/blame)
+  /diff msgs       Compare assistant messages
+  /git             Git ops (status/log/diff/branch)
   /watch           Watch files for changes
-  /run <cmd>       Run shell command inline (/! shorthand)
+  /run <cmd>       Run shell command (/! shorthand)
   /tokens          Token/context usage
   /context         Context window details
   /showtokens      Toggle token display
   /contextwindow   Set context window size
 
- FILES \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+ FILES \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   /attach <path>   Attach file(s) to next message
   /attach          Show current attachments
   /attach clear    Remove all attachments
   /cat <path>      Display file contents in chat
 
- INPUT & SETTINGS \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+ INPUT & SETTINGS \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   /edit            Open $EDITOR for input
-  /editor          Alias for /edit | /editor submit toggles auto-submit
+  /editor          Open editor (/editor submit)
   /draft           Save/load input drafts
   /snippet         Prompt snippets
-  /template        Prompt templates with {{variables}}
-  /mode            Amplifier modes (planning, research, review, debug)
-  /system          Set/view system prompt (presets, use, clear)
+  /template        Prompt templates ({{vars}})
+  /mode            Modes (planning/research/review)
+  /system          System prompt (presets/use/clear)
   /alias           Custom command shortcuts
   /vim             Toggle vim keybindings
-  /suggest         Toggle smart prompt suggestions
+  /suggest         Toggle smart suggestions
   /prefs           Preferences
   /notify          Toggle notifications
-  /sound           Toggle notification sound (on|off|test)
-  /palette         Command palette (same as Ctrl+P)
+  /sound           Notification sound (on/off/test)
+  /palette         Command palette (Ctrl+P)
   /keys            Show this overlay
   /quit            Quit
 
-    Press F1, Ctrl+/, or Esc to close\
+           Press F1, Ctrl+/, or Esc to close\
 """
 
 

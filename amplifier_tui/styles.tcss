@@ -662,8 +662,9 @@ ShortcutOverlay {
 }
 
 #shortcut-modal {
-    width: 52;
-    max-height: 80%;
+    width: 80;
+    max-width: 90%;
+    max-height: 85%;
     background: $surface;
     border: tall $primary;
     padding: 1 2;
