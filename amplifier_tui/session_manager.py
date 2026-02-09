@@ -9,6 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
+from .log import logger
+
 # Add the global Amplifier installation to sys.path if it exists
 # This allows us to import from amplifier_core/foundation even though they're not in our venv
 _amplifier_site_packages = Path.home() / ".local/share/uv/tools/amplifier/lib"
@@ -35,9 +37,10 @@ if _amplifier_site_packages.exists():
                                         and str(pth_path) not in sys.path
                                     ):
                                         sys.path.insert(0, str(pth_path))
-                    except Exception:
-                        # Skip problematic .pth files
-                        pass
+                    except OSError:
+                        logger.debug(
+                            "Failed to process .pth file %s", pth_file, exc_info=True
+                        )
                 break
 
 if TYPE_CHECKING:
@@ -92,7 +95,7 @@ class SessionManager:
                         self.context_window = info.defaults.get("context_window", 0)
                 break  # Use the first provider
         except Exception:
-            pass
+            logger.debug("Failed to extract model info", exc_info=True)
 
     def switch_model(self, model_name: str) -> bool:
         """Switch the active model on the current session's provider.
@@ -115,6 +118,7 @@ class SessionManager:
                     return True
             return False
         except Exception:
+            logger.debug("Failed to switch model to %s", model_name, exc_info=True)
             return False
 
     def get_provider_models(self) -> list[tuple[str, str]]:
@@ -136,7 +140,7 @@ class SessionManager:
                 if model:
                     results.append((model, name))
         except Exception:
-            pass
+            logger.debug("Failed to get provider models", exc_info=True)
         return results
 
     @staticmethod
@@ -414,12 +418,12 @@ class SessionManager:
 
                 await hooks.emit(SESSION_END, {"session_id": self.session_id})
         except Exception:
-            pass
+            logger.debug("Failed to emit SESSION_END", exc_info=True)
 
         try:
             await self.session.cleanup()
         except Exception:
-            pass
+            logger.debug("Failed to clean up session", exc_info=True)
 
         self.session = None
 
@@ -458,7 +462,10 @@ class SessionManager:
                 path_str = "/" + raw_name[1:].replace("-", "/")
                 project_path = path_str
                 project_label = Path(path_str).name
-            except Exception:
+            except (ValueError, IndexError):
+                logger.debug(
+                    "Failed to parse project path from %s", raw_name, exc_info=True
+                )
                 project_path = raw_name
                 project_label = raw_name[:20]
 
@@ -491,8 +498,12 @@ class SessionManager:
                             meta = json.load(f)
                             info["name"] = meta.get("name", "")
                             info["description"] = meta.get("description", "")
-                    except Exception:
-                        pass
+                    except (OSError, json.JSONDecodeError):
+                        logger.debug(
+                            "Failed to read session metadata %s",
+                            metadata_path,
+                            exc_info=True,
+                        )
 
                 results.append(info)
 

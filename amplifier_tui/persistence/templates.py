@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ._base import JsonStore
+from ..log import logger
 
 DEFAULT_TEMPLATES: dict[str, str] = {
     "review": (
@@ -42,14 +43,14 @@ class TemplateStore(JsonStore):
         try:
             if self.path.exists():
                 return self.load_raw()  # type: ignore[return-value]
-        except Exception:
-            pass
+        except OSError:
+            logger.debug("failed to load templates from %s", self.path, exc_info=True)
         # First run: seed with default templates
         defaults = dict(DEFAULT_TEMPLATES)
         try:
             self.save_raw(defaults, sort_keys=True)
-        except Exception:
-            pass
+        except OSError:
+            logger.debug("failed to seed default templates", exc_info=True)
         return defaults
 
     def save(self, templates: dict[str, str]) -> None:

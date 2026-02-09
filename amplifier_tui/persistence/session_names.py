@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from ._base import JsonStore
+from ..log import logger
 
 
 class SessionNameStore(JsonStore):
@@ -34,8 +35,10 @@ class SessionNameStore(JsonStore):
             if session_id in names:
                 del names[session_id]
                 self.save_raw(names)
-        except Exception:
-            pass
+        except OSError:
+            logger.debug(
+                "failed to remove session name for %s", session_id, exc_info=True
+            )
 
     # -- titles ---------------------------------------------------------------
 
@@ -44,8 +47,10 @@ class SessionNameStore(JsonStore):
         try:
             if self.titles_path.exists():
                 return json.loads(self.titles_path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        except (OSError, json.JSONDecodeError):
+            logger.debug(
+                "failed to load session titles from %s", self.titles_path, exc_info=True
+            )
         return {}
 
     def save_title(self, session_id: str, title: str | None) -> None:
@@ -66,8 +71,10 @@ class SessionNameStore(JsonStore):
                 json.dumps(titles, indent=2, ensure_ascii=False),
                 encoding="utf-8",
             )
-        except Exception:
-            pass
+        except OSError:
+            logger.debug(
+                "failed to save session title for %s", session_id, exc_info=True
+            )
 
     def title_for(self, session_id: str) -> str:
         """Load the title for a specific session (empty string if none)."""

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from textual.css.query import NoMatches
+
+from ..log import logger
 from ..preferences import (
     save_compact_mode,
     save_fold_threshold,
@@ -164,8 +167,8 @@ class DisplayCommandsMixin:
             # Dismiss any visible suggestions
             try:
                 self.query_one("#suggestion-bar", SuggestionBar).dismiss()
-            except Exception:
-                pass
+            except NoMatches:
+                logger.debug("Suggestion bar not found", exc_info=True)
 
     def _cmd_progress(self, text: str) -> None:
         """Toggle detailed progress labels on/off.
@@ -469,4 +472,3 @@ class DisplayCommandsMixin:
         toggle.update(toggle._make_label(folded=not folded))
         state = "unfolded" if folded else "folded"
         self._add_system_message(f"Message #{n} from bottom {state}")
-

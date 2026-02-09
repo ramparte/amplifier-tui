@@ -8,6 +8,7 @@ from pathlib import Path
 import json
 import re
 
+from ..log import logger
 from ..constants import (
     SLASH_COMMANDS,
 )
@@ -355,7 +356,7 @@ class PersistenceCommandsMixin:
                         self._add_system_message(f"Snippet '{subcmd}' inserted")
                     inp.focus()
                 except Exception:
-                    pass
+                    logger.debug("Failed to insert snippet into input", exc_info=True)
             else:
                 self._add_system_message(
                     f"No snippet '{subcmd}'.\n"
@@ -506,7 +507,8 @@ class PersistenceCommandsMixin:
             self._add_system_message(
                 f"Exported {len(self._snippets)} snippets to:\n{export_path}"
             )
-        except Exception as e:
+        except OSError as e:
+            logger.debug("Failed to export snippets to %s", export_path, exc_info=True)
             self._add_system_message(f"Export error: {e}")
 
     def _cmd_snippet_import(self, path: str) -> None:
@@ -529,7 +531,8 @@ class PersistenceCommandsMixin:
                 f"Imported {count} new snippet(s)"
                 + (f" ({skipped} already existed)" if skipped else "")
             )
-        except Exception as e:
+        except (OSError, json.JSONDecodeError) as e:
+            logger.debug("Failed to import snippets from %s", abs_path, exc_info=True)
             self._add_system_message(f"Import error: {e}")
 
     # -- Snippet editor -------------------------------------------------
@@ -613,7 +616,7 @@ class PersistenceCommandsMixin:
                 inp.insert(tmpl)
                 inp.focus()
             except Exception:
-                pass
+                logger.debug("Failed to insert template into input", exc_info=True)
             if unique_vars:
                 self._add_system_message(
                     f"Template '{tname}' inserted. "
@@ -701,6 +704,7 @@ class PersistenceCommandsMixin:
             try:
                 input_text = self.query_one("#chat-input", ChatInput).text.strip()
             except Exception:
+                logger.debug("Failed to read input widget text", exc_info=True)
                 input_text = ""
             if input_text:
                 lines.append(
@@ -728,7 +732,7 @@ class PersistenceCommandsMixin:
                     input_widget = self.query_one("#chat-input", ChatInput)
                     input_widget.clear()
                 except Exception:
-                    pass
+                    logger.debug("Failed to clear input widget", exc_info=True)
                 self._add_system_message("Draft cleared")
             else:
                 self._add_system_message("No active session")
@@ -1003,6 +1007,5 @@ class PersistenceCommandsMixin:
                 return candidate
 
         return None
-
 
     # ── Bookmark helpers ──────────────────────────────────────────

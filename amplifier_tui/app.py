@@ -28,8 +28,10 @@ from textual.widgets import (
     Tree,
 )
 from textual import work
+from textual.css.query import NoMatches
 from textual.timer import Timer
 
+from .log import logger
 from .history import PromptHistory
 from .preferences import (
     THEME_DESCRIPTIONS,
@@ -590,8 +592,8 @@ class AmplifierChicApp(
                     f"{preview}\n"
                     "Press Enter to send, or edit as needed."
                 )
-            except Exception:
-                pass
+            except NoMatches:
+                logger.debug("Chat input widget not found for crash draft recovery", exc_info=True)
 
         # Check for auto-save recovery from a previous crash
         self._check_autosave_recovery()
@@ -607,6 +609,7 @@ class AmplifierChicApp(
             self.session_manager = SessionManager()
             self._amplifier_ready = True
         except Exception:
+            logger.debug("Failed to initialize Amplifier session manager", exc_info=True)
             self._amplifier_available = False
             self.call_from_thread(
                 self._show_welcome,
@@ -645,8 +648,8 @@ class AmplifierChicApp(
                 if self._tab_split_mode
                 else None,
             )
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("Tab bar widget not found", exc_info=True)
         self._update_tab_indicator()
 
     def _update_tab_indicator(self) -> None:
@@ -663,8 +666,8 @@ class AmplifierChicApp(
                 widget.update(f"Tab {self._active_tab_index + 1}/{count}")
             else:
                 widget.update("")
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("Status tabs widget not found", exc_info=True)
 
     def _save_current_tab_state(self) -> None:
         """Save current app state into the active tab's TabState."""
@@ -695,8 +698,8 @@ class AmplifierChicApp(
         # Preserve unsent input text across tab switches
         try:
             tab.input_text = self.query_one("#chat-input", ChatInput).text
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("Chat input widget not found when saving tab state", exc_info=True)
 
     def _load_tab_state(self, tab: TabState) -> None:
         """Load a TabState's data into current app state."""
@@ -750,8 +753,8 @@ class AmplifierChicApp(
                 f"#{old_tab.container_id}", ScrollableContainer
             )
             old_container.add_class("tab-chat-hidden")
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("Old tab container not found when switching tabs", exc_info=True)
 
         # Switch index
         self._active_tab_index = index
@@ -763,8 +766,8 @@ class AmplifierChicApp(
                 f"#{new_tab.container_id}", ScrollableContainer
             )
             new_container.remove_class("tab-chat-hidden")
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("New tab container not found when switching tabs", exc_info=True)
 
         # Load new tab state
         self._load_tab_state(new_tab)
@@ -776,8 +779,8 @@ class AmplifierChicApp(
             if new_tab.input_text:
                 input_widget.insert(new_tab.input_text)
             self._last_saved_draft = new_tab.input_text
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("Chat input widget not found when restoring tab input", exc_info=True)
 
         # Update UI
         self._update_tab_bar()
@@ -829,8 +832,8 @@ class AmplifierChicApp(
                 f"#{old_tab.container_id}", ScrollableContainer
             )
             old_container.add_class("tab-chat-hidden")
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("Old tab container not found when creating new tab", exc_info=True)
 
         # Create new container and mount it
         new_container = ScrollableContainer(id=container_id, classes="tab-chat-view")
@@ -839,8 +842,8 @@ class AmplifierChicApp(
             # Mount before split-panel
             split_panel = self.query_one("#split-panel", ScrollableContainer)
             split_container.mount(new_container, before=split_panel)
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("Split container or panel not found when mounting new tab", exc_info=True)
 
         # Add tab and switch to it
         self._tabs.append(tab)
@@ -908,8 +911,8 @@ class AmplifierChicApp(
                 f"#{closing_tab.container_id}", ScrollableContainer
             )
             container.remove()
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("Tab container not found when closing tab", exc_info=True)
 
         # Remove from tabs list
         self._tabs.pop(index)
@@ -925,8 +928,8 @@ class AmplifierChicApp(
                     f"#{new_tab.container_id}", ScrollableContainer
                 )
                 new_container.remove_class("tab-chat-hidden")
-            except Exception:
-                pass
+            except NoMatches:
+                logger.debug("New active tab container not found after closing tab", exc_info=True)
             self._load_tab_state(new_tab)
         elif index < self._active_tab_index:
             self._active_tab_index -= 1
@@ -972,8 +975,8 @@ class AmplifierChicApp(
             chat_input = self.query_one("#chat-input", ChatInput)
             chat_input.value = f"/rename {current}"
             chat_input.focus()
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("Chat input widget not found for tab rename", exc_info=True)
 
     def action_new_tab(self) -> None:
         """Create a new tab (Ctrl+T)."""
@@ -992,7 +995,8 @@ class AmplifierChicApp(
         try:
             container = self.query_one(f"#{tab.container_id}", ScrollableContainer)
             has_content = len(list(container.children)) > 0
-        except Exception:
+        except NoMatches:
+            logger.debug("Tab container not found when checking for content", exc_info=True)
             has_content = False
         if has_content:
             self._close_tab()
@@ -1231,7 +1235,7 @@ class AmplifierChicApp(
             self._purge_old_drafts(drafts)
             self._draft_store.save_all(drafts)
         except Exception:
-            pass
+            logger.debug("failed to save draft", exc_info=True)
 
     def _restore_draft(self) -> None:
         """Restore draft for current session if one exists."""
@@ -1251,7 +1255,7 @@ class AmplifierChicApp(
                 self._last_saved_draft = draft_text
                 self._add_system_message(f"Draft restored ({len(draft_text)} chars)")
         except Exception:
-            pass
+            logger.debug("failed to restore draft", exc_info=True)
 
     def _clear_draft(self) -> None:
         """Remove draft for current session."""
@@ -1262,7 +1266,7 @@ class AmplifierChicApp(
             self._draft_store.remove(session_id)
             self._last_saved_draft = ""
         except Exception:
-            pass
+            logger.debug("failed to clear draft", exc_info=True)
 
     def _auto_save_draft(self) -> None:
         """Periodic auto-save of input draft (called every 5s by timer).
@@ -1281,7 +1285,7 @@ class AmplifierChicApp(
                     if current.strip():
                         self.notify("Draft saved", timeout=1.5, severity="information")
         except Exception:
-            pass
+            logger.debug("failed to auto-save draft", exc_info=True)
 
     def _purge_old_drafts(self, drafts: dict) -> None:
         """Remove drafts older than 30 days and cap at 50 entries."""
@@ -1311,7 +1315,7 @@ class AmplifierChicApp(
                 for sid, _ in by_ts[: len(drafts) - 50]:
                     del drafts[sid]
         except Exception:
-            pass
+            logger.debug("failed to purge old drafts", exc_info=True)
 
     # ── Session auto-save ───────────────────────────────────────────────────
 
@@ -1366,7 +1370,7 @@ class AmplifierChicApp(
             # Rotate old auto-saves for this tab
             self._rotate_autosaves(tab_id)
         except Exception:
-            pass  # Silent failure — never interrupt the user
+            logger.debug("auto-save failed", exc_info=True)
 
     def _rotate_autosaves(self, tab_id: str) -> None:
         """Keep only the last MAX_AUTOSAVES_PER_TAB files per tab."""
@@ -1376,8 +1380,8 @@ class AmplifierChicApp(
             while len(files) > MAX_AUTOSAVES_PER_TAB:
                 oldest = files.pop(0)
                 oldest.unlink(missing_ok=True)
-        except Exception:
-            pass
+        except OSError:
+            logger.debug("failed to rotate autosaves", exc_info=True)
 
     def _check_autosave_recovery(self) -> None:
         """Check for auto-save files on startup and notify the user."""
@@ -1399,7 +1403,7 @@ class AmplifierChicApp(
                     "Use /autosave restore to recover."
                 )
         except Exception:
-            pass
+            logger.debug("failed to check autosave recovery", exc_info=True)
 
     # ── System Prompt (/system) ──────────────────────────────────────────
 
@@ -1407,7 +1411,7 @@ class AmplifierChicApp(
         """Update the status bar system prompt indicator."""
         try:
             indicator = self.query_one("#status-system", Static)
-        except Exception:
+        except NoMatches:
             return
 
         if self._system_prompt:
@@ -1431,7 +1435,8 @@ class AmplifierChicApp(
                 key=lambda f: f.stat().st_mtime,
                 reverse=True,
             )
-        except Exception:
+        except OSError:
+            logger.debug("failed to list autosaves", exc_info=True)
             autosaves = []
 
         if not autosaves:
@@ -1453,7 +1458,8 @@ class AmplifierChicApp(
                     f"({age:.0f} min ago, {size:.1f} KB, "
                     f"{msg_count} msgs{label})"
                 )
-            except Exception:
+            except (OSError, json.JSONDecodeError):
+                logger.debug("failed to read autosave metadata", exc_info=True)
                 lines.append(f"  {i}. {f.name}")
 
         lines.append("")
@@ -1472,7 +1478,7 @@ class AmplifierChicApp(
             text = input_widget.text.strip()
             self._draft_store.save_crash(text)
         except Exception:
-            pass
+            logger.debug("failed to save crash draft", exc_info=True)
 
     def _clear_crash_draft(self) -> None:
         """Clear the global crash-recovery draft file."""
@@ -1637,7 +1643,7 @@ class AmplifierChicApp(
         """Refresh the pinned-messages panel at the top of the chat area."""
         try:
             panel = self.query_one("#pinned-panel", PinnedPanel)
-        except Exception:
+        except NoMatches:
             return
 
         panel.remove_children()
@@ -1846,7 +1852,7 @@ class AmplifierChicApp(
         """Update the character/line counter below the chat input."""
         try:
             counter = self.query_one("#input-counter", Static)
-        except Exception:
+        except NoMatches:
             return
 
         if not text.strip():
@@ -1901,7 +1907,7 @@ class AmplifierChicApp(
                     input_empty = not self.query_one(
                         "#chat-input", ChatInput
                     ).text.strip()
-                except Exception:
+                except NoMatches:
                     pass
                 if input_empty:
                     self._set_focus_mode(False)
@@ -1914,7 +1920,7 @@ class AmplifierChicApp(
                     filt.value = ""
                     event.prevent_default()
                     event.stop()
-            except Exception:
+            except NoMatches:
                 pass
 
     def _filter_sessions(self, query: str) -> None:
@@ -2127,8 +2133,8 @@ class AmplifierChicApp(
             if query:
                 inp.value = query
             inp.focus()
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("Find bar widgets not found", exc_info=True)
 
     def _hide_find_bar(self) -> None:
         """Close the find bar, clear highlights, return focus to chat input."""
@@ -2140,8 +2146,8 @@ class AmplifierChicApp(
             self._find_matches = []
             self._find_index = -1
             self.query_one("#chat-input", ChatInput).focus()
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("Find bar or chat input widget not found", exc_info=True)
 
     def _find_execute_search(self, query: str) -> None:
         """Search _search_messages for *query*, highlight matching widgets."""
@@ -2204,7 +2210,7 @@ class AmplifierChicApp(
             try:
                 widget.scroll_visible()
             except Exception:
-                pass
+                logger.debug("Failed to scroll widget into view", exc_info=True)
 
     def _find_update_counter(self) -> None:
         """Update the '3/17' counter label in the find bar."""
@@ -2214,8 +2220,8 @@ class AmplifierChicApp(
                 label.update("0/0")
             else:
                 label.update(f"{self._find_index + 1}/{len(self._find_matches)}")
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("Find count label not found", exc_info=True)
 
     def _find_clear_highlights(self) -> None:
         """Remove .find-match and .find-current from all highlighted widgets."""
@@ -2238,40 +2244,40 @@ class AmplifierChicApp(
                 btn.remove_class("find-case-active")
             inp = self.query_one("#find-input", Input)
             self._find_execute_search(inp.value)
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("Find case button or input not found", exc_info=True)
 
     def action_scroll_chat_top(self) -> None:
         """Scroll chat to the very top (Ctrl+Home)."""
         try:
             chat = self._active_chat_view()
             chat.scroll_home(animate=False)
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("Chat view not found for scroll_home", exc_info=True)
 
     def action_scroll_chat_bottom(self) -> None:
         """Scroll chat to the very bottom (Ctrl+End)."""
         try:
             chat = self._active_chat_view()
             chat.scroll_end(animate=False)
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("Chat view not found for scroll_end", exc_info=True)
 
     def action_scroll_chat_up(self) -> None:
         """Scroll chat up by a small amount (Ctrl+Up)."""
         try:
             chat = self._active_chat_view()
             chat.scroll_up(animate=False)
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("Chat view not found for scroll_up", exc_info=True)
 
     def action_scroll_chat_down(self) -> None:
         """Scroll chat down by a small amount (Ctrl+Down)."""
         try:
             chat = self._active_chat_view()
             chat.scroll_down(animate=False)
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("Chat view not found for scroll_down", exc_info=True)
 
     async def action_quit(self) -> None:
         """Clean up the Amplifier session before quitting.
@@ -2289,7 +2295,7 @@ class AmplifierChicApp(
                 worker = self._cleanup_session_worker()
                 await worker.wait()
             except Exception:
-                pass
+                logger.debug("Session cleanup failed during quit", exc_info=True)
         self.exit()
 
     @work(thread=True)
@@ -2319,7 +2325,7 @@ class AmplifierChicApp(
         try:
             await self.session_manager.end_session()
         except Exception:
-            pass
+            logger.debug("Failed to end session cleanly", exc_info=True)
         # Reset session manager state (but keep the manager)
         if self.session_manager:
             self.session_manager.session = None
@@ -2388,8 +2394,8 @@ class AmplifierChicApp(
             try:
                 chat_view = self._active_chat_view()
                 chat_view.scroll_end(animate=False)
-            except Exception:
-                pass
+            except NoMatches:
+                logger.debug("Chat view not found for auto-scroll", exc_info=True)
 
     def action_toggle_focus_mode(self) -> None:
         """Toggle focus mode: hide all chrome, show only chat + input."""
@@ -2417,8 +2423,8 @@ class AmplifierChicApp(
         # Keep input focused
         try:
             self.query_one("#chat-input", ChatInput).focus()
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("Chat input not found for focus", exc_info=True)
 
     def action_toggle_split_focus(self) -> None:
         """Switch focus between chat input, chat view, and split panel (Ctrl+T)."""
@@ -2428,7 +2434,8 @@ class AmplifierChicApp(
             chat_input = self.query_one("#chat-input", ChatInput)
             split_panel = self.query_one("#split-panel", ScrollableContainer)
             chat_view = self._active_chat_view()
-        except Exception:
+        except NoMatches:
+            logger.debug("Split focus widgets not found", exc_info=True)
             return
 
         focused = self.focused
@@ -2512,7 +2519,8 @@ class AmplifierChicApp(
             # Auto-send if preference is enabled
             if self._prefs.display.editor_auto_send:
                 self._submit_message()
-        except Exception as e:
+        except (subprocess.SubprocessError, OSError) as e:
+            logger.debug("Editor launch failed", exc_info=True)
             self._add_system_message(f"Could not open editor: {e}")
         finally:
             try:
@@ -2550,8 +2558,8 @@ class AmplifierChicApp(
             count = len(self._stash_stack)
             label = f"Stash: {count}" if count > 0 else ""
             self.query_one("#status-stash", Static).update(label)
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("Stash indicator widget not found", exc_info=True)
 
     def action_copy_response(self) -> None:
         """Copy the last assistant response to the system clipboard."""
@@ -2582,15 +2590,16 @@ class AmplifierChicApp(
         # Dismiss suggestions on submit
         try:
             self.query_one("#suggestion-bar", SuggestionBar).dismiss()
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("Suggestion bar not found on submit", exc_info=True)
         self._submit_message()
 
     def _refresh_suggestions(self) -> None:
         """Compute and display smart prompt suggestions based on current input."""
         try:
             bar = self.query_one("#suggestion-bar", SuggestionBar)
-        except Exception:
+        except NoMatches:
+            logger.debug("Suggestion bar not found for refresh", exc_info=True)
             return
 
         if not self._prefs.display.show_suggestions:
@@ -2599,7 +2608,8 @@ class AmplifierChicApp(
 
         try:
             input_w = self.query_one("#chat-input", ChatInput)
-        except Exception:
+        except NoMatches:
+            logger.debug("Chat input not found for suggestions", exc_info=True)
             bar.dismiss()
             return
 
@@ -2981,7 +2991,8 @@ class AmplifierChicApp(
         try:
             chunk = path.read_bytes()[:8192]
             return b"\x00" in chunk
-        except Exception:
+        except OSError:
+            logger.debug("Failed to read file for binary check: %s", path, exc_info=True)
             return True
 
     def _read_file_for_include(self, path: Path) -> str | None:
@@ -3004,7 +3015,8 @@ class AmplifierChicApp(
 
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
-        except Exception as e:
+        except OSError as e:
+            logger.debug("Failed to read file for include: %s", path, exc_info=True)
             self._add_system_message(f"Error reading {path.name}: {e}")
             return None
 
@@ -3083,7 +3095,8 @@ class AmplifierChicApp(
 
         try:
             content = path.read_text(encoding="utf-8", errors="replace")
-        except Exception as e:
+        except OSError as e:
+            logger.debug("Failed to read file for attach: %s", path, exc_info=True)
             self._add_system_message(f"Error reading {path.name}: {e}")
             return
 
@@ -3135,7 +3148,8 @@ class AmplifierChicApp(
         """Show/hide attachment count near input."""
         try:
             indicator = self.query_one("#attachment-indicator", Static)
-        except Exception:
+        except NoMatches:
+            logger.debug("Attachment indicator not found", exc_info=True)
             return
         if self._attachments:
             count = len(self._attachments)
@@ -3236,7 +3250,8 @@ class AmplifierChicApp(
             self._add_system_message(
                 f"Snippet '{name}' updated ({len(new_content)} chars)"
             )
-        except Exception as e:
+        except (subprocess.SubprocessError, OSError) as e:
+            logger.debug("Snippet editor launch failed", exc_info=True)
             self._add_system_message(f"Could not open editor: {e}")
         finally:
             try:
@@ -3388,8 +3403,8 @@ class AmplifierChicApp(
         if metadata_path.exists():
             try:
                 meta = json.loads(metadata_path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+            except (OSError, json.JSONDecodeError):
+                logger.debug("Failed to read session metadata: %s", metadata_path, exc_info=True)
 
         # Count messages from transcript
         transcript_path = session_dir / "transcript.jsonl"
@@ -3655,8 +3670,8 @@ class AmplifierChicApp(
         label = "[ML]" if self._prefs.display.multiline_default else ""
         try:
             self.query_one("#status-ml", Static).update(label)
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("status-ml widget not found", exc_info=True)
 
     def action_toggle_multiline(self) -> None:
         """Alt+M action: toggle multiline mode."""
@@ -3669,7 +3684,8 @@ class AmplifierChicApp(
         # Update status bar mode indicator
         try:
             indicator = self.query_one("#status-mode", Static)
-        except Exception:
+        except NoMatches:
+            logger.debug("status-mode widget not found", exc_info=True)
             indicator = None
 
         if indicator is not None:
@@ -3684,7 +3700,8 @@ class AmplifierChicApp(
         # Update input border color to reflect mode
         try:
             chat_input = self.query_one("#chat-input", ChatInput)
-        except Exception:
+        except NoMatches:
+            logger.debug("chat-input widget not found", exc_info=True)
             chat_input = None
 
         if chat_input is not None:
@@ -3846,7 +3863,7 @@ class AmplifierChicApp(
                 if isinstance(nxt, FoldToggle):
                     nxt.remove()
             except Exception:
-                pass
+                logger.debug("failed to remove sibling widgets", exc_info=True)
 
             # Legacy: also check for old-style timestamp before the message
             try:
@@ -3854,7 +3871,7 @@ class AmplifierChicApp(
                 if prev_sib is not None and prev_sib.has_class("msg-timestamp"):
                     prev_sib.remove()
             except Exception:
-                pass
+                logger.debug("failed to remove legacy timestamp sibling", exc_info=True)
 
             # Remove the message widget itself
             widget.remove()
@@ -4060,7 +4077,8 @@ class AmplifierChicApp(
         """Re-style every visible chat widget with the current theme colors."""
         try:
             chat_view = self._active_chat_view()
-        except Exception:
+        except NoMatches:
+            logger.debug("chat view not found for theme application", exc_info=True)
             return
 
         ts_color = self._prefs.colors.timestamp
@@ -4142,7 +4160,8 @@ class AmplifierChicApp(
         for i, note in enumerate(self._session_notes, 1):
             try:
                 ts = datetime.fromisoformat(note["created_at"]).strftime("%H:%M:%S")
-            except Exception:
+            except (ValueError, TypeError):
+                logger.debug("failed to parse note timestamp", exc_info=True)
                 ts = "?"
             lines.append(f"\n{i}. [{ts}] {note['text']}")
 
@@ -4172,7 +4191,8 @@ class AmplifierChicApp(
         for note in self._session_notes:
             try:
                 ts = datetime.fromisoformat(note["created_at"]).strftime("%H:%M")
-            except Exception:
+            except (ValueError, TypeError):
+                logger.debug("failed to parse note timestamp for replay", exc_info=True)
                 ts = "?"
             note_text = f"\U0001f4dd Note ({ts}): {note['text']}"
             msg = NoteMessage(note_text)
@@ -4848,8 +4868,8 @@ class AmplifierChicApp(
         try:
             indicator = self.query_one("#processing-indicator", ProcessingIndicator)
             indicator.update(indicator_text)
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("processing-indicator widget not found", exc_info=True)
 
         # Keep status bar in sync with elapsed time
         if elapsed_str:
@@ -4996,8 +5016,8 @@ class AmplifierChicApp(
         try:
             out.write("\033]2;[\u2713 Ready] Amplifier TUI\a")
             out.flush()
-        except Exception:
-            pass
+        except OSError:
+            logger.debug("failed to write flash title to stdout", exc_info=True)
         self.set_timer(3.0, self._restore_title)
 
     def _restore_title(self) -> None:
@@ -5008,8 +5028,8 @@ class AmplifierChicApp(
         try:
             out.write("\033]2;Amplifier TUI\a")
             out.flush()
-        except Exception:
-            pass
+        except OSError:
+            logger.debug("failed to restore terminal title", exc_info=True)
 
     def _notify_sound(
         self,
@@ -5047,8 +5067,8 @@ class AmplifierChicApp(
     def _remove_processing_indicator(self) -> None:
         try:
             self.query_one("#processing-indicator").remove()
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("processing-indicator not found for removal", exc_info=True)
 
     def _ensure_processing_indicator(self, label: str | None = None) -> None:
         """Ensure the processing indicator is visible with the given label.
@@ -5068,7 +5088,8 @@ class AmplifierChicApp(
         try:
             indicator = self.query_one("#processing-indicator", ProcessingIndicator)
             indicator.update(text)
-        except Exception:
+        except NoMatches:
+            logger.debug("processing-indicator not found, re-creating", exc_info=True)
             if not self.is_processing:
                 return
             chat_view = self._active_chat_view()
@@ -5093,16 +5114,16 @@ class AmplifierChicApp(
         label = "\u2195 ON" if self._auto_scroll else "\u2195 OFF"
         try:
             self.query_one("#status-scroll", Static).update(label)
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("status-scroll widget not found", exc_info=True)
 
     def _update_vim_status(self) -> None:
         """Update the status bar vim mode indicator."""
         label = "[vim]" if self._prefs.display.vim_mode else ""
         try:
             self.query_one("#status-vim", Static).update(label)
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("status-vim widget not found", exc_info=True)
 
     def _check_smart_scroll_pause(self) -> None:
         """During streaming, auto-pause if user has scrolled up."""
@@ -5115,8 +5136,8 @@ class AmplifierChicApp(
                 if distance_from_bottom > 5:
                     self._auto_scroll = False
                     self._update_scroll_indicator()
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("chat view not found for smart scroll check", exc_info=True)
 
     # ── Status Bar ──────────────────────────────────────────────
 
@@ -5125,8 +5146,8 @@ class AmplifierChicApp(
             if self._prefs.display.compact_mode:
                 state = f"{state} [compact]"
             self.query_one("#status-state", Static).update(state)
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("status-state widget not found", exc_info=True)
 
     @staticmethod
     def _format_token_count(count: int) -> str:
@@ -5235,8 +5256,8 @@ class AmplifierChicApp(
                 ctx_widget.styles.color = _context_color(pct)
             else:
                 ctx_widget.update("")
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("status bar widget not found for token display", exc_info=True)
 
     def _update_session_display(self) -> None:
         if self.session_manager and getattr(self.session_manager, "session_id", None):
@@ -5252,7 +5273,8 @@ class AmplifierChicApp(
         """Update the breadcrumb bar with project / session / model context."""
         try:
             breadcrumb = self.query_one("#breadcrumb-bar", Static)
-        except Exception:
+        except NoMatches:
+            logger.debug("breadcrumb-bar widget not found", exc_info=True)
             return
 
         parts: list[str] = []
@@ -5324,8 +5346,8 @@ class AmplifierChicApp(
 
         try:
             self.query_one("#status-wordcount", Static).update(display)
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("status-wordcount widget not found", exc_info=True)
 
     # ── Streaming Callbacks ─────────────────────────────────────
 
@@ -5474,6 +5496,7 @@ class AmplifierChicApp(
 
                 self._stream_widget.update(RichMarkdown(display_text))
             except Exception:
+                logger.debug("Rich Markdown rendering failed, falling back to plain text", exc_info=True)
                 self._stream_widget.update(display_text)
         else:
             self._stream_widget.update(display_text)
@@ -5576,6 +5599,7 @@ class AmplifierChicApp(
                 self.call_from_thread(self._add_assistant_message, response)
 
         except Exception as e:
+            logger.debug("send message worker failed", exc_info=True)
             if self._streaming_cancelled:
                 return  # Suppress errors from cancelled workers
             self.call_from_thread(self._show_error, str(e))
@@ -5634,6 +5658,7 @@ class AmplifierChicApp(
                 self.call_from_thread(self._finish_processing)
 
         except Exception as e:
+            logger.debug("resume session worker failed", exc_info=True)
             self.call_from_thread(self._show_error, f"Failed to resume: {e}")
             self.call_from_thread(self._update_status, "Error")
 

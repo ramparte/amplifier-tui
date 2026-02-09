@@ -7,7 +7,10 @@ import re
 
 from textual.widgets import TextArea
 
+from textual.css.query import NoMatches
+
 from ..constants import SLASH_COMMANDS, SYSTEM_PRESETS
+from ..log import logger
 from .bars import SuggestionBar
 
 
@@ -583,7 +586,8 @@ class ChatInput(TextArea):
             if self._suggestions_enabled:
                 try:
                     bar = self.app.query_one("#suggestion-bar", SuggestionBar)
-                except Exception:
+                except NoMatches:
+                    logger.debug("Suggestion bar not found", exc_info=True)
                     bar = None
                 if bar and bar.has_suggestions:
                     if self._suggestion_accepted:

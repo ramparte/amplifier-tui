@@ -5,8 +5,10 @@ from __future__ import annotations
 import os
 
 from textual.containers import ScrollableContainer
+from textual.css.query import NoMatches
 from textual.widgets import Static
 
+from ..log import logger
 from ..widgets import (
     ChatInput,
 )
@@ -281,7 +283,8 @@ class SplitCommandsMixin:
         try:
             with open(abs_path) as f:
                 content = f.read()
-        except Exception as e:
+        except OSError as e:
+            logger.debug("Failed to read file %s", abs_path, exc_info=True)
             self._add_system_message(f"Cannot read file: {e}")
             return
 
@@ -316,8 +319,8 @@ class SplitCommandsMixin:
         try:
             panel = self.query_one("#split-panel", ScrollableContainer)
             panel.remove_children()
-        except Exception:
-            pass
+        except NoMatches:
+            logger.debug("Split panel not found during close", exc_info=True)
         self._add_system_message("Split view closed")
 
     # ── Tab split view (two live tabs side by side) ──────────────────────
@@ -364,6 +367,7 @@ class SplitCommandsMixin:
             # (move right after left in case they aren't adjacent)
             right_container.move_after(left_container)
         except Exception:
+            logger.debug("Failed to set up tab split view", exc_info=True)
             self._tab_split_mode = False
             self._tab_split_left_index = None
             self._tab_split_right_index = None
@@ -410,8 +414,10 @@ class SplitCommandsMixin:
                         "split-right-pane",
                         "split-pane-active",
                     )
-                except Exception:
-                    pass
+                except NoMatches:
+                    logger.debug(
+                        "Container not found during split cleanup", exc_info=True
+                    )
 
         # Hide the non-active tab's container
         if other_index is not None and other_index < len(self._tabs):
@@ -421,8 +427,8 @@ class SplitCommandsMixin:
                     f"#{other_tab.container_id}", ScrollableContainer
                 )
                 other_container.add_class("tab-chat-hidden")
-            except Exception:
-                pass
+            except NoMatches:
+                logger.debug("Container not found during split exit", exc_info=True)
 
         self.remove_class("tab-split-mode")
         self._tab_split_mode = False
@@ -470,7 +476,7 @@ class SplitCommandsMixin:
             # Reorder in DOM so new-left appears before new-right
             old_right_container.move_before(old_left_container)
         except Exception:
-            pass
+            logger.debug("Failed to swap split panes", exc_info=True)
 
         # Update active indicator
         self._update_split_active_indicator()
@@ -518,7 +524,7 @@ class SplitCommandsMixin:
                 input_widget.insert(active_tab.input_text)
             input_widget.focus()
         except Exception:
-            pass
+            logger.debug("Failed to restore input for split pane", exc_info=True)
 
     def _update_split_active_indicator(self) -> None:
         """Update CSS classes to show which pane is active in tab split."""
@@ -536,8 +542,10 @@ class SplitCommandsMixin:
                         container.add_class("split-pane-active")
                     else:
                         container.remove_class("split-pane-active")
-                except Exception:
-                    pass
+                except NoMatches:
+                    logger.debug(
+                        "Container not found during active indicator update",
+                        exc_info=True,
+                    )
 
     # ── /watch – file change monitoring ──────────────────────────────────
-

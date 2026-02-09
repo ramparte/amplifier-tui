@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import sys
 
+from ..log import logger
+
 
 def send_terminal_notification(title: str, body: str = "") -> None:
     """Send a terminal notification via OSC escape sequences.
@@ -26,8 +28,8 @@ def send_terminal_notification(title: str, body: str = "") -> None:
         out.write(f"\033]777;notify;{title};{body}\a")
         out.write("\a")
         out.flush()
-    except Exception:
-        pass  # Don't crash if the terminal doesn't support these
+    except OSError:
+        logger.debug("Terminal notification write failed", exc_info=True)
 
 
 def play_bell() -> None:
@@ -41,5 +43,5 @@ def play_bell() -> None:
     try:
         out.write("\a")
         out.flush()
-    except Exception:
-        pass
+    except OSError:
+        logger.debug("Terminal bell write failed", exc_info=True)

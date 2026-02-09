@@ -12,6 +12,8 @@ import os
 from datetime import datetime
 from typing import Any, Callable
 
+from ..log import logger
+
 # Type alias for the timer handle returned by ``App.set_interval``.
 TimerHandle = Any
 
@@ -164,7 +166,7 @@ class FileWatcher:
                     self._add_message(f"[watch] Changed: {rel}{line_delta_str}")
                     self._notify_sound(event="file_change")
             except Exception:
-                pass
+                logger.debug("File watch check failed for %s", path, exc_info=True)
 
         if not self.watched_files:
             self._stop_timer()

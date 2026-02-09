@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from ..log import logger
+
 
 class JsonStore:
     """Simple JSON file store with atomic write.
@@ -23,8 +25,8 @@ class JsonStore:
         try:
             if self.path.exists():
                 return json.loads(self.path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        except (OSError, json.JSONDecodeError):
+            logger.debug("failed to load JSON store from %s", self.path, exc_info=True)
         return self._default()
 
     def save_raw(self, data: dict | list, *, sort_keys: bool = False) -> None:

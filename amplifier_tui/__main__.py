@@ -3,6 +3,8 @@
 import argparse
 import sys
 
+from .log import logger
+
 
 def main():
     """Run Amplifier TUI TUI."""
@@ -48,6 +50,7 @@ def main():
     except (KeyboardInterrupt, SystemExit):
         pass
     except Exception:
+        logger.debug("Fatal error in amplifier-tui", exc_info=True)
         import traceback
 
         traceback.print_exc()

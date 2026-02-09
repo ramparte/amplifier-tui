@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ._base import JsonStore
+from ..log import logger
 
 
 class RefStore(JsonStore):
@@ -23,8 +24,10 @@ class RefStore(JsonStore):
             all_refs = self.load_all()
             all_refs[session_id] = refs
             self.save_raw(all_refs)
-        except Exception:
-            pass
+        except OSError:
+            logger.debug(
+                "failed to save refs for session %s", session_id, exc_info=True
+            )
 
     def for_session(self, session_id: str | None) -> list[dict]:
         """Return refs for a single session (empty list if none)."""

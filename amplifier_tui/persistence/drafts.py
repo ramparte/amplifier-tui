@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ._base import JsonStore
+from ..log import logger
 
 
 class DraftStore(JsonStore):
@@ -29,8 +30,10 @@ class DraftStore(JsonStore):
             if session_id in drafts:
                 del drafts[session_id]
                 self.save_all(drafts)
-        except Exception:
-            pass
+        except OSError:
+            logger.debug(
+                "failed to remove draft for session %s", session_id, exc_info=True
+            )
 
     # -- crash-recovery draft -------------------------------------------------
 
@@ -42,8 +45,8 @@ class DraftStore(JsonStore):
                 self.crash_path.write_text(text)
             elif self.crash_path.exists():
                 self.crash_path.unlink()
-        except Exception:
-            pass
+        except OSError:
+            logger.debug("failed to save crash-recovery draft", exc_info=True)
 
     def load_crash(self) -> str | None:
         """Load crash-recovery draft if it exists and is non-empty."""
@@ -52,8 +55,8 @@ class DraftStore(JsonStore):
                 text = self.crash_path.read_text().strip()
                 if text:
                     return text
-        except Exception:
-            pass
+        except OSError:
+            logger.debug("failed to load crash-recovery draft", exc_info=True)
         return None
 
     def clear_crash(self) -> None:
@@ -61,5 +64,5 @@ class DraftStore(JsonStore):
         try:
             if self.crash_path.exists():
                 self.crash_path.unlink()
-        except Exception:
-            pass
+        except OSError:
+            logger.debug("failed to clear crash-recovery draft", exc_info=True)

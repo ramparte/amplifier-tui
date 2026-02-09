@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Protocol
 
+from ..log import logger
+
 if TYPE_CHECKING:
     pass
 
@@ -247,15 +249,15 @@ class ReverseSearchManager:
             iw = self._get_input()
             iw.border_subtitle = "(reverse-i-search active — Esc to cancel)"
         except Exception:
-            pass
+            logger.debug("Search display update failed", exc_info=True)
 
     def clear_display(self) -> None:
         """Hide the search bar and restore the line-count subtitle."""
         try:
             self._get_search_bar().dismiss()
         except Exception:
-            pass
+            logger.debug("Search bar dismiss failed", exc_info=True)
         try:
             self._get_input()._update_line_indicator()
         except Exception:
-            pass
+            logger.debug("Input line indicator update failed", exc_info=True)

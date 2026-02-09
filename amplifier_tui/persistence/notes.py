@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from ._base import JsonStore
+from ..log import logger
 
 
 class NoteStore(JsonStore):
@@ -42,5 +43,5 @@ class NoteStore(JsonStore):
                 for k in keys[:-50]:
                     del all_notes[k]
             self.save_raw(all_notes)
-        except Exception:
-            pass
+        except (OSError, json.JSONDecodeError):
+            logger.debug("failed to save notes for session %s", sid, exc_info=True)

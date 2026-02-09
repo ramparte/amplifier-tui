@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from ._base import JsonStore
+from ..log import logger
 
 
 class MessagePinStore(JsonStore):
@@ -42,5 +43,5 @@ class MessagePinStore(JsonStore):
                 for k in keys[:-50]:
                     del all_pins[k]
             self.save_raw(all_pins)
-        except Exception:
-            pass
+        except (OSError, json.JSONDecodeError):
+            logger.debug("failed to save pins for session %s", sid, exc_info=True)

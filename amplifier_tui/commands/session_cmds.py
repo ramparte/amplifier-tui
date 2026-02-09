@@ -12,6 +12,7 @@ from textual.widgets import Tree
 from ..preferences import (
     save_session_sort,
 )
+from ..log import logger
 from ..session_manager import SessionManager
 
 
@@ -96,7 +97,7 @@ class SessionCommandsMixin:
             chat = self._active_chat_view()
             chat.scroll_end(animate=False)
         except Exception:
-            pass
+            logger.debug("Failed to scroll chat to bottom", exc_info=True)
 
     def _cmd_clear(self) -> None:
         self.action_clear_chat()
@@ -214,8 +215,12 @@ class SessionCommandsMixin:
                             if query_lower in field.lower():
                                 meta_match = field
                                 break
-                    except Exception:
-                        pass
+                    except (OSError, json.JSONDecodeError):
+                        logger.debug(
+                            "Failed to read metadata from %s",
+                            metadata_path,
+                            exc_info=True,
+                        )
 
                 # Search custom names / titles
                 if not meta_match:
@@ -369,4 +374,3 @@ class SessionCommandsMixin:
             f"Delete session {short_id}...?\n"
             "Type /delete confirm to proceed or /delete cancel to abort."
         )
-

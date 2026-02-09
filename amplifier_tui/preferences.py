@@ -12,6 +12,8 @@ from pathlib import Path
 
 import yaml
 
+from .log import logger
+
 PREFS_PATH = Path.home() / ".amplifier" / "tui-preferences.yaml"
 
 # Named color map: user-friendly names -> hex values.
@@ -585,15 +587,17 @@ def load_preferences(path: Path | None = None) -> Preferences:
             # Load user-defined custom themes into the module-level dicts
             if isinstance(data.get("custom_themes"), dict):
                 _load_custom_themes(data["custom_themes"])
-        except Exception:
-            pass  # Fall back to defaults on any parse error
+        except (OSError, yaml.YAMLError):
+            logger.debug("Failed to parse preferences file %s", path, exc_info=True)
     else:
         # Create default file for user to customize
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(_DEFAULT_YAML)
-        except Exception:
-            pass  # Don't fail if we can't write
+        except OSError:
+            logger.debug(
+                "Failed to create default preferences file %s", path, exc_info=True
+            )
 
     return prefs
 
@@ -657,8 +661,8 @@ def save_colors(colors: ColorPreferences, path: Path | None = None) -> None:
                 )
 
         path.write_text(text)
-    except Exception:
-        pass  # Best-effort persistence
+    except OSError:
+        logger.debug("Failed to save colors preference to %s", path, exc_info=True)
 
 
 def save_theme_name(name: str, path: Path | None = None) -> None:
@@ -701,8 +705,8 @@ def save_theme_name(name: str, path: Path | None = None) -> None:
             text = text.rstrip() + f"\n\ntheme:\n  name: {value}\n"
 
         path.write_text(text)
-    except Exception:
-        pass  # Best-effort persistence
+    except OSError:
+        logger.debug("Failed to save theme name preference to %s", path, exc_info=True)
 
 
 def save_preferred_model(model: str, path: Path | None = None) -> None:
@@ -745,8 +749,10 @@ def save_preferred_model(model: str, path: Path | None = None) -> None:
             text = text.rstrip() + f"\n\nmodel:\n  preferred: {value}\n"
 
         path.write_text(text)
-    except Exception:
-        pass  # Best-effort persistence
+    except OSError:
+        logger.debug(
+            "Failed to save preferred model preference to %s", path, exc_info=True
+        )
 
 
 def save_show_timestamps(enabled: bool, path: Path | None = None) -> None:
@@ -788,8 +794,10 @@ def save_show_timestamps(enabled: bool, path: Path | None = None) -> None:
             text = text.rstrip() + f"\n\ndisplay:\n  show_timestamps: {value}\n"
 
         path.write_text(text)
-    except Exception:
-        pass  # Best-effort persistence
+    except OSError:
+        logger.debug(
+            "Failed to save show timestamps preference to %s", path, exc_info=True
+        )
 
 
 def save_word_wrap(enabled: bool, path: Path | None = None) -> None:
@@ -831,8 +839,8 @@ def save_word_wrap(enabled: bool, path: Path | None = None) -> None:
             text = text.rstrip() + f"\n\ndisplay:\n  word_wrap: {value}\n"
 
         path.write_text(text)
-    except Exception:
-        pass  # Best-effort persistence
+    except OSError:
+        logger.debug("Failed to save word wrap preference to %s", path, exc_info=True)
 
 
 def save_compact_mode(enabled: bool, path: Path | None = None) -> None:
@@ -874,8 +882,10 @@ def save_compact_mode(enabled: bool, path: Path | None = None) -> None:
             text = text.rstrip() + f"\n\ndisplay:\n  compact_mode: {value}\n"
 
         path.write_text(text)
-    except Exception:
-        pass  # Best-effort persistence
+    except OSError:
+        logger.debug(
+            "Failed to save compact mode preference to %s", path, exc_info=True
+        )
 
 
 def save_vim_mode(enabled: bool, path: Path | None = None) -> None:
@@ -917,8 +927,8 @@ def save_vim_mode(enabled: bool, path: Path | None = None) -> None:
             text = text.rstrip() + f"\n\ndisplay:\n  vim_mode: {value}\n"
 
         path.write_text(text)
-    except Exception:
-        pass  # Best-effort persistence
+    except OSError:
+        logger.debug("Failed to save vim mode preference to %s", path, exc_info=True)
 
 
 def save_multiline_default(enabled: bool, path: Path | None = None) -> None:
@@ -960,8 +970,10 @@ def save_multiline_default(enabled: bool, path: Path | None = None) -> None:
             text = text.rstrip() + f"\n\ndisplay:\n  multiline_default: {value}\n"
 
         path.write_text(text)
-    except Exception:
-        pass  # Best-effort persistence
+    except OSError:
+        logger.debug(
+            "Failed to save multiline default preference to %s", path, exc_info=True
+        )
 
 
 def save_streaming_enabled(enabled: bool, path: Path | None = None) -> None:
@@ -1003,8 +1015,10 @@ def save_streaming_enabled(enabled: bool, path: Path | None = None) -> None:
             text = text.rstrip() + f"\n\ndisplay:\n  streaming_enabled: {value}\n"
 
         path.write_text(text)
-    except Exception:
-        pass  # Best-effort persistence
+    except OSError:
+        logger.debug(
+            "Failed to save streaming enabled preference to %s", path, exc_info=True
+        )
 
 
 def save_notification_sound(enabled: bool, path: Path | None = None) -> None:
@@ -1046,8 +1060,10 @@ def save_notification_sound(enabled: bool, path: Path | None = None) -> None:
             text = text.rstrip() + f"\n\nnotifications:\n  sound_enabled: {value}\n"
 
         path.write_text(text)
-    except Exception:
-        pass  # Best-effort persistence
+    except OSError:
+        logger.debug(
+            "Failed to save notification sound preference to %s", path, exc_info=True
+        )
 
 
 def save_notification_enabled(enabled: bool, path: Path | None = None) -> None:
@@ -1089,8 +1105,10 @@ def save_notification_enabled(enabled: bool, path: Path | None = None) -> None:
             text = text.rstrip() + f"\n\nnotifications:\n  enabled: {value}\n"
 
         path.write_text(text)
-    except Exception:
-        pass  # Best-effort persistence
+    except OSError:
+        logger.debug(
+            "Failed to save notification enabled preference to %s", path, exc_info=True
+        )
 
 
 def save_notification_min_seconds(seconds: float, path: Path | None = None) -> None:
@@ -1132,8 +1150,12 @@ def save_notification_min_seconds(seconds: float, path: Path | None = None) -> N
             text = text.rstrip() + f"\n\nnotifications:\n  min_seconds: {value}\n"
 
         path.write_text(text)
-    except Exception:
-        pass  # Best-effort persistence
+    except OSError:
+        logger.debug(
+            "Failed to save notification min seconds preference to %s",
+            path,
+            exc_info=True,
+        )
 
 
 def save_notification_title_flash(enabled: bool, path: Path | None = None) -> None:
@@ -1175,8 +1197,12 @@ def save_notification_title_flash(enabled: bool, path: Path | None = None) -> No
             text = text.rstrip() + f"\n\nnotifications:\n  title_flash: {value}\n"
 
         path.write_text(text)
-    except Exception:
-        pass  # Best-effort persistence
+    except OSError:
+        logger.debug(
+            "Failed to save notification title flash preference to %s",
+            path,
+            exc_info=True,
+        )
 
 
 def save_session_sort(sort_mode: str, path: Path | None = None) -> None:
@@ -1218,8 +1244,10 @@ def save_session_sort(sort_mode: str, path: Path | None = None) -> None:
             text = text.rstrip() + f"\n\nsidebar:\n  session_sort: {value}\n"
 
         path.write_text(text)
-    except Exception:
-        pass  # Best-effort persistence
+    except OSError:
+        logger.debug(
+            "Failed to save session sort preference to %s", path, exc_info=True
+        )
 
 
 def save_autosave_enabled(enabled: bool, path: Path | None = None) -> None:
@@ -1259,8 +1287,8 @@ def save_autosave_enabled(enabled: bool, path: Path | None = None) -> None:
             text = text.rstrip() + f"\n\nautosave:\n  enabled: {value}\n"
 
         path.write_text(text)
-    except Exception:
-        pass  # Best-effort persistence
+    except OSError:
+        logger.debug("Failed to save autoenabled preference to %s", path, exc_info=True)
 
 
 def save_autosave_interval(seconds: int, path: Path | None = None) -> None:
@@ -1300,8 +1328,10 @@ def save_autosave_interval(seconds: int, path: Path | None = None) -> None:
             text = text.rstrip() + f"\n\nautosave:\n  interval: {value}\n"
 
         path.write_text(text)
-    except Exception:
-        pass  # Best-effort persistence
+    except OSError:
+        logger.debug(
+            "Failed to save autointerval preference to %s", path, exc_info=True
+        )
 
 
 def save_show_token_usage(enabled: bool, path: Path | None = None) -> None:
@@ -1341,8 +1371,10 @@ def save_show_token_usage(enabled: bool, path: Path | None = None) -> None:
             text = text.rstrip() + f"\n\ndisplay:\n  show_token_usage: {value}\n"
 
         path.write_text(text)
-    except Exception:
-        pass  # Best-effort persistence
+    except OSError:
+        logger.debug(
+            "Failed to save show token usage preference to %s", path, exc_info=True
+        )
 
 
 def save_context_window_size(size: int, path: Path | None = None) -> None:
@@ -1383,8 +1415,10 @@ def save_context_window_size(size: int, path: Path | None = None) -> None:
             text = text.rstrip() + f"\n\ndisplay:\n  context_window_size: {value}\n"
 
         path.write_text(text)
-    except Exception:
-        pass  # Best-effort persistence
+    except OSError:
+        logger.debug(
+            "Failed to save context window size preference to %s", path, exc_info=True
+        )
 
 
 def save_fold_threshold(threshold: int, path: Path | None = None) -> None:
@@ -1425,8 +1459,10 @@ def save_fold_threshold(threshold: int, path: Path | None = None) -> None:
             text = text.rstrip() + f"\n\ndisplay:\n  fold_threshold: {value}\n"
 
         path.write_text(text)
-    except Exception:
-        pass  # Best-effort persistence
+    except OSError:
+        logger.debug(
+            "Failed to save fold threshold preference to %s", path, exc_info=True
+        )
 
 
 def save_editor_auto_send(enabled: bool, path: Path | None = None) -> None:
@@ -1468,8 +1504,10 @@ def save_editor_auto_send(enabled: bool, path: Path | None = None) -> None:
             text = text.rstrip() + f"\n\ndisplay:\n  editor_auto_send: {value}\n"
 
         path.write_text(text)
-    except Exception:
-        pass  # Best-effort persistence
+    except OSError:
+        logger.debug(
+            "Failed to save editor auto send preference to %s", path, exc_info=True
+        )
 
 
 def save_show_suggestions(enabled: bool, path: Path | None = None) -> None:
@@ -1511,8 +1549,10 @@ def save_show_suggestions(enabled: bool, path: Path | None = None) -> None:
             text = text.rstrip() + f"\n\ndisplay:\n  show_suggestions: {value}\n"
 
         path.write_text(text)
-    except Exception:
-        pass  # Best-effort persistence
+    except OSError:
+        logger.debug(
+            "Failed to save show suggestions preference to %s", path, exc_info=True
+        )
 
 
 def save_progress_labels(enabled: bool, path: Path | None = None) -> None:
@@ -1554,5 +1594,7 @@ def save_progress_labels(enabled: bool, path: Path | None = None) -> None:
             text = text.rstrip() + f"\n\ndisplay:\n  progress_labels: {value}\n"
 
         path.write_text(text)
-    except Exception:
-        pass  # Best-effort persistence
+    except OSError:
+        logger.debug(
+            "Failed to save progress labels preference to %s", path, exc_info=True
+        )

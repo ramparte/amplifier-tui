@@ -8,6 +8,7 @@ import re
 
 from textual.widgets import Static
 
+from ..log import logger
 from .._utils import _copy_to_clipboard
 from ..features.export import (
     get_export_metadata,
@@ -339,7 +340,8 @@ class ExportCommandsMixin:
         # Set the name
         try:
             self._save_session_name(sid, text)
-        except Exception as e:
+        except OSError as e:
+            logger.debug("Failed to save session name for %s", sid, exc_info=True)
             self._add_system_message(f"Failed to save name: {e}")
             return
 

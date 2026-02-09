@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ._base import JsonStore
+from ..log import logger
 
 DEFAULT_SNIPPETS: dict[str, dict[str, str]] = {
     "review": {
@@ -68,17 +69,19 @@ class SnippetStore(JsonStore):
                     # Re-persist in the new format
                     try:
                         self.save_raw(migrated, sort_keys=True)
-                    except Exception:
-                        pass
+                    except OSError:
+                        logger.debug(
+                            "failed to re-persist migrated snippets", exc_info=True
+                        )
                 return migrated
         except Exception:
-            pass
+            logger.debug("failed to load snippets from %s", self.path, exc_info=True)
         # First run: seed with default snippets
         defaults = dict(DEFAULT_SNIPPETS)
         try:
             self.save_raw(defaults, sort_keys=True)
-        except Exception:
-            pass
+        except OSError:
+            logger.debug("failed to seed default snippets", exc_info=True)
         return defaults
 
     def save(self, snippets: dict[str, dict[str, str]]) -> None:

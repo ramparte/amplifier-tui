@@ -7,6 +7,7 @@ import re
 import time
 
 
+from ..log import logger
 from .._utils import _copy_to_clipboard
 from ..constants import (
     AUTOSAVE_DIR,
@@ -130,7 +131,8 @@ class ContentCommandsMixin:
                     last = f"{ago / 60:.0f}m ago"
             try:
                 count = len(list(AUTOSAVE_DIR.glob("autosave-*.json")))
-            except Exception:
+            except OSError:
+                logger.debug("Failed to list autosave files", exc_info=True)
                 count = 0
             self._add_system_message(
                 f"Auto-save: {status}\n"
@@ -150,7 +152,7 @@ class ContentCommandsMixin:
                 try:
                     self._autosave_timer.stop()  # type: ignore[union-attr]
                 except Exception:
-                    pass
+                    logger.debug("Failed to stop autosave timer", exc_info=True)
             self._autosave_timer = self.set_interval(
                 self._autosave_interval,
                 self._do_autosave,
@@ -166,7 +168,7 @@ class ContentCommandsMixin:
                 try:
                     self._autosave_timer.stop()  # type: ignore[union-attr]
                 except Exception:
-                    pass
+                    logger.debug("Failed to stop autosave timer", exc_info=True)
                 self._autosave_timer = None
             self._add_system_message("Auto-save disabled")
 
@@ -274,7 +276,8 @@ class ContentCommandsMixin:
 
         try:
             content = path.read_text(encoding="utf-8", errors="replace")
-        except Exception as e:
+        except OSError as e:
+            logger.debug("Failed to read file %s", path, exc_info=True)
             self._add_system_message(f"Error reading {path.name}: {e}")
             return
 
@@ -697,4 +700,3 @@ class ContentCommandsMixin:
             return
 
         self._execute_undo(count)
-

@@ -10,6 +10,8 @@ import os
 import re
 import subprocess
 
+from ..log import logger
+
 
 def run_git(*args: str, cwd: str | None = None) -> tuple[bool, str]:
     """Run a git command and return *(success, output)*."""
@@ -29,7 +31,8 @@ def run_git(*args: str, cwd: str | None = None) -> tuple[bool, str]:
         return False, "git not found"
     except subprocess.TimeoutExpired:
         return False, "git command timed out"
-    except Exception as exc:
+    except (subprocess.SubprocessError, OSError) as exc:
+        logger.debug("Git command failed: %s", args, exc_info=True)
         return False, str(exc)
 
 

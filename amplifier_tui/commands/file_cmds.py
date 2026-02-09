@@ -6,6 +6,7 @@ from pathlib import Path
 import os
 import subprocess
 
+from ..log import logger
 from ..constants import (
     _DANGEROUS_PATTERNS,
     _MAX_RUN_OUTPUT_LINES,
@@ -97,7 +98,8 @@ class FileCommandsMixin:
 
         except subprocess.TimeoutExpired:
             self._add_system_message(f"Command timed out after {_RUN_TIMEOUT}s: {text}")
-        except Exception as e:
+        except (subprocess.SubprocessError, OSError) as e:
+            logger.debug("Command execution failed", exc_info=True)
             self._add_system_message(f"Error running command: {e}")
 
     # -- /include helpers ------------------------------------------------------
@@ -240,4 +242,3 @@ class FileCommandsMixin:
         save_notification_sound(self._prefs.notifications.sound_enabled)
         state = "on" if self._prefs.notifications.sound_enabled else "off"
         self._add_system_message(f"Notification sound: {state}")
-

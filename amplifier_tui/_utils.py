@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from .constants import TOOL_LABELS, _MAX_LABEL_LEN
+from .log import logger
 
 
 def _context_color(pct: float) -> str:
@@ -83,8 +84,8 @@ def _get_tool_label(name: str, tool_input: dict | str | None) -> str:
                 host = urlparse(url).netloc
                 if host:
                     base = f"Fetching {host}"
-            except Exception:
-                pass
+            except ValueError:
+                logger.debug("Failed to parse URL %s", url, exc_info=True)
 
     elif name == "web_search":
         query = inp.get("query", "")
@@ -141,13 +142,14 @@ def _copy_to_clipboard(text: str) -> bool:
         sys.stdout.write(f"\033]52;c;{encoded}\a")
         sys.stdout.flush()
         return True
-    except Exception:
-        pass
+    except OSError:
+        logger.debug("OSC 52 clipboard write failed", exc_info=True)
 
     # Fallback: native clipboard tools with platform-specific handling
     try:
         uname_release = platform.uname().release.lower()
-    except Exception:
+    except OSError:
+        logger.debug("Failed to detect platform release", exc_info=True)
         uname_release = ""
 
     # WSL: clip.exe expects UTF-16LE
@@ -162,16 +164,16 @@ def _copy_to_clipboard(text: str) -> bool:
             proc.communicate(text.encode("utf-16-le"))
             if proc.returncode == 0:
                 return True
-        except Exception:
-            pass
+        except (subprocess.SubprocessError, OSError):
+            logger.debug("clip.exe clipboard copy failed", exc_info=True)
 
     # macOS
     if platform.system() == "Darwin" and shutil.which("pbcopy"):
         try:
             subprocess.run(["pbcopy"], input=text.encode(), check=True, timeout=2)
             return True
-        except Exception:
-            pass
+        except (subprocess.SubprocessError, OSError):
+            logger.debug("pbcopy clipboard copy failed", exc_info=True)
 
     # Linux: try xclip, then xsel
     for cmd in [
@@ -182,7 +184,8 @@ def _copy_to_clipboard(text: str) -> bool:
             try:
                 subprocess.run(cmd, input=text.encode(), check=True, timeout=2)
                 return True
-            except Exception:
+            except (subprocess.SubprocessError, OSError):
+                logger.debug("Clipboard copy via %s failed", cmd[0], exc_info=True)
                 continue
 
     return False

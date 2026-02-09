@@ -9,6 +9,8 @@ import json
 from textual import work
 from textual.widgets import Static
 
+from ..log import logger
+
 
 class SearchCommandsMixin:
     """Search and grep commands."""
@@ -94,7 +96,7 @@ class SearchCommandsMixin:
             try:
                 first_widget.scroll_visible()
             except Exception:
-                pass
+                logger.debug("Failed to scroll to search result", exc_info=True)
 
     def _search_open_result(self, arg: str) -> None:
         """Open a session from the last cross-session search results."""
@@ -159,8 +161,12 @@ class SearchCommandsMixin:
                         meta = json.loads(metadata_path.read_text(encoding="utf-8"))
                         meta_name = meta.get("name", "")
                         meta_desc = meta.get("description", "")
-                    except Exception:
-                        pass
+                    except (OSError, json.JSONDecodeError):
+                        logger.debug(
+                            "Failed to read session metadata from %s",
+                            metadata_path,
+                            exc_info=True,
+                        )
 
                 # Derive project name from the encoded directory name
                 project_name = (
@@ -357,9 +363,8 @@ class SearchCommandsMixin:
             try:
                 first_widget.scroll_visible()
             except Exception:
-                pass
+                logger.debug("Failed to scroll to grep result", exc_info=True)
 
     # ------------------------------------------------------------------
     # Git helpers
     # ------------------------------------------------------------------
-
