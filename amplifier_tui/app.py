@@ -94,6 +94,18 @@ from .commands import (
     SplitCommandsMixin,
     WatchCommandsMixin,
 )
+from .persistence import (
+    AliasStore,
+    BookmarkStore,
+    DraftStore,
+    MessagePinStore,
+    NoteStore,
+    PinnedSessionStore,
+    RefStore,
+    SessionNameStore,
+    SnippetStore,
+    TemplateStore,
+)
 from ._utils import _context_color, _copy_to_clipboard, _get_tool_label  # noqa: E402
 
 
@@ -403,6 +415,23 @@ class AmplifierChicApp(
         self._rsearch_matches: list[int] = []
         self._rsearch_match_idx: int = -1
         self._rsearch_original: str = ""
+
+        # ── Persistence stores ──────────────────────────────────────────
+        _amp = Path.home() / ".amplifier"
+        self._alias_store = AliasStore(_amp / "tui-aliases.json")
+        self._bookmark_store = BookmarkStore(_amp / "tui-bookmarks.json")
+        self._draft_store = DraftStore(_amp / "tui-drafts.json", _amp / "tui-draft.txt")
+        self._note_store = NoteStore(_amp / "tui-notes.json")
+        self._pin_store = MessagePinStore(_amp / "tui-pins.json")
+        self._pinned_session_store = PinnedSessionStore(
+            _amp / "tui-pinned-sessions.json"
+        )
+        self._ref_store = RefStore(_amp / "tui-refs.json")
+        self._session_name_store = SessionNameStore(
+            _amp / "tui-session-names.json", _amp / "tui-session-titles.json"
+        )
+        self._snippet_store = SnippetStore(_amp / "tui-snippets.json")
+        self._template_store = TemplateStore(_amp / "tui-templates.json")
 
     # ── Layout ──────────────────────────────────────────────────
 
@@ -1017,19 +1046,11 @@ class AmplifierChicApp(
 
     def _load_session_names(self) -> dict[str, str]:
         """Load custom session names from the JSON file."""
-        try:
-            if self.SESSION_NAMES_FILE.exists():
-                return json.loads(self.SESSION_NAMES_FILE.read_text())
-        except Exception:
-            pass
-        return {}
+        return self._session_name_store.load_names()
 
     def _save_session_name(self, session_id: str, name: str) -> None:
         """Save a custom session name to the JSON file."""
-        names = self._load_session_names()
-        names[session_id] = name
-        self.SESSION_NAMES_FILE.parent.mkdir(parents=True, exist_ok=True)
-        self.SESSION_NAMES_FILE.write_text(json.dumps(names, indent=2))
+        self._session_name_store.save_name(session_id, name)
 
     # ── Session Titles ──────────────────────────────────────────
 
@@ -1086,38 +1107,18 @@ class AmplifierChicApp(
 
     def _load_session_titles(self) -> dict[str, str]:
         """Load session titles from the JSON file."""
-        try:
-            if self.SESSION_TITLES_FILE.exists():
-                return json.loads(self.SESSION_TITLES_FILE.read_text())
-        except Exception:
-            pass
-        return {}
+        return self._session_name_store.load_titles()
 
     def _save_session_title(self) -> None:
         """Save current session title to the JSON file."""
         sid = self._get_session_id()
         if not sid:
             return
-        try:
-            titles = self._load_session_titles()
-            if self._session_title:
-                titles[sid] = self._session_title
-            elif sid in titles:
-                del titles[sid]
-            # Keep last 200 titles
-            if len(titles) > 200:
-                keys = list(titles.keys())
-                for k in keys[:-200]:
-                    del titles[k]
-            self.SESSION_TITLES_FILE.parent.mkdir(parents=True, exist_ok=True)
-            self.SESSION_TITLES_FILE.write_text(json.dumps(titles, indent=2))
-        except Exception:
-            pass
+        self._session_name_store.save_title(sid, self._session_title or None)
 
     def _load_session_title_for(self, session_id: str) -> str:
         """Load the title for a specific session."""
-        titles = self._load_session_titles()
-        return titles.get(session_id, "")
+        return self._session_name_store.title_for(session_id)
 
     def _apply_session_title(self) -> None:
         """Update the UI to reflect the current session title."""
@@ -1129,23 +1130,11 @@ class AmplifierChicApp(
 
     def _load_pinned_sessions(self) -> set[str]:
         """Load pinned session IDs from the JSON file."""
-        try:
-            if self.PINNED_SESSIONS_FILE.exists():
-                data = json.loads(self.PINNED_SESSIONS_FILE.read_text())
-                return set(data)
-        except Exception:
-            pass
-        return set()
+        return self._pinned_session_store.load()
 
     def _save_pinned_sessions(self) -> None:
         """Persist the current set of pinned session IDs."""
-        try:
-            self.PINNED_SESSIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
-            self.PINNED_SESSIONS_FILE.write_text(
-                json.dumps(sorted(self._pinned_sessions), indent=2)
-            )
-        except Exception:
-            pass
+        self._pinned_session_store.save(self._pinned_sessions)
 
     def _remove_pinned_session(self, session_id: str) -> None:
         """Remove a session from pinned set (e.g. on delete)."""
@@ -1157,128 +1146,44 @@ class AmplifierChicApp(
 
     def _load_aliases(self) -> dict[str, str]:
         """Load custom command aliases from the JSON file."""
-        try:
-            if self.ALIASES_FILE.exists():
-                return json.loads(self.ALIASES_FILE.read_text())
-        except Exception:
-            pass
-        return {}
+        return self._alias_store.load()
 
     def _save_aliases(self) -> None:
         """Persist custom command aliases."""
-        try:
-            self.ALIASES_FILE.parent.mkdir(parents=True, exist_ok=True)
-            self.ALIASES_FILE.write_text(
-                json.dumps(self._aliases, indent=2, sort_keys=True)
-            )
-        except Exception:
-            pass
+        self._alias_store.save(self._aliases)
 
     # ── Snippets ────────────────────────────────────────────
 
     def _load_snippets(self) -> dict[str, dict[str, str]]:
-        """Load reusable prompt snippets from the JSON file.
-
-        Handles migration from old ``{name: text}`` format to the new
-        ``{name: {content, category, created}}`` structure.
-        """
-        try:
-            if self.SNIPPETS_FILE.exists():
-                raw = json.loads(self.SNIPPETS_FILE.read_text())
-                migrated = self._migrate_snippets(raw)
-                if migrated is not raw:
-                    # Re-persist in the new format
-                    try:
-                        self.SNIPPETS_FILE.write_text(
-                            json.dumps(migrated, indent=2, sort_keys=True)
-                        )
-                    except Exception:
-                        pass
-                return migrated
-        except Exception:
-            pass
-        # First run: seed with default snippets
-        defaults = dict(self.DEFAULT_SNIPPETS)
-        try:
-            self.SNIPPETS_FILE.parent.mkdir(parents=True, exist_ok=True)
-            self.SNIPPETS_FILE.write_text(
-                json.dumps(defaults, indent=2, sort_keys=True)
-            )
-        except Exception:
-            pass
-        return defaults
+        """Load reusable prompt snippets from the JSON file."""
+        return self._snippet_store.load()
 
     @staticmethod
     def _migrate_snippets(
         data: dict[str, str | dict[str, str]],
     ) -> dict[str, dict[str, str]]:
         """Migrate old ``{name: text}`` format to ``{name: {content, category, created}}``."""
-        needs_migration = any(isinstance(v, str) for v in data.values())
-        if not needs_migration:
-            return data  # type: ignore[return-value]
-        migrated: dict[str, dict[str, str]] = {}
-        today = datetime.now().strftime("%Y-%m-%d")
-        for name, value in data.items():
-            if isinstance(value, str):
-                migrated[name] = {"content": value, "category": "", "created": today}
-            else:
-                migrated[name] = value  # type: ignore[assignment]
-        return migrated
+        return SnippetStore._migrate(data)
 
     def _save_snippets(self) -> None:
         """Persist reusable prompt snippets."""
-        try:
-            self.SNIPPETS_FILE.parent.mkdir(parents=True, exist_ok=True)
-            self.SNIPPETS_FILE.write_text(
-                json.dumps(self._snippets, indent=2, sort_keys=True)
-            )
-        except Exception:
-            pass
+        self._snippet_store.save(self._snippets)
 
     # ── Templates ─────────────────────────────────────────
 
     def _load_templates(self) -> dict[str, str]:
         """Load prompt templates from the JSON file."""
-        try:
-            if self.TEMPLATES_FILE.exists():
-                return json.loads(self.TEMPLATES_FILE.read_text())
-        except Exception:
-            pass
-        # First run: seed with default templates
-        defaults = dict(self.DEFAULT_TEMPLATES)
-        try:
-            self.TEMPLATES_FILE.parent.mkdir(parents=True, exist_ok=True)
-            self.TEMPLATES_FILE.write_text(
-                json.dumps(defaults, indent=2, sort_keys=True)
-            )
-        except Exception:
-            pass
-        return defaults
+        return self._template_store.load()
 
     def _save_templates(self) -> None:
         """Persist prompt templates."""
-        try:
-            self.TEMPLATES_FILE.parent.mkdir(parents=True, exist_ok=True)
-            self.TEMPLATES_FILE.write_text(
-                json.dumps(self._templates, indent=2, sort_keys=True)
-            )
-        except Exception:
-            pass
+        self._template_store.save(self._templates)
 
     # ── Drafts ────────────────────────────────────────────────
 
     def _load_drafts(self) -> dict:
-        """Load all drafts from the JSON file.
-
-        Returns a dict of ``{session_id: {text, timestamp, preview}}``
-        (or plain strings for backward-compat with older files).
-        """
-        try:
-            if self.DRAFTS_FILE.exists():
-                return json.loads(self.DRAFTS_FILE.read_text())
-        except Exception:
-            pass
-        return {}
+        """Load all drafts from the JSON file."""
+        return self._draft_store.load()
 
     @staticmethod
     def _draft_text(entry: object) -> str:
@@ -1313,8 +1218,7 @@ class AmplifierChicApp(
                 return  # Nothing to save or clear
 
             self._purge_old_drafts(drafts)
-            self.DRAFTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-            self.DRAFTS_FILE.write_text(json.dumps(drafts, indent=2))
+            self._draft_store.save_all(drafts)
         except Exception:
             pass
 
@@ -1344,11 +1248,7 @@ class AmplifierChicApp(
             session_id = self._get_session_id()
             if not session_id:
                 return
-            drafts = self._load_drafts()
-            if session_id in drafts:
-                del drafts[session_id]
-                self.DRAFTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-                self.DRAFTS_FILE.write_text(json.dumps(drafts, indent=2))
+            self._draft_store.remove(session_id)
             self._last_saved_draft = ""
         except Exception:
             pass
@@ -1559,32 +1459,17 @@ class AmplifierChicApp(
         try:
             input_widget = self.query_one("#chat-input", ChatInput)
             text = input_widget.text.strip()
-            if text:
-                self.CRASH_DRAFT_FILE.parent.mkdir(parents=True, exist_ok=True)
-                self.CRASH_DRAFT_FILE.write_text(text)
-            elif self.CRASH_DRAFT_FILE.exists():
-                self.CRASH_DRAFT_FILE.unlink()
+            self._draft_store.save_crash(text)
         except Exception:
             pass
 
     def _clear_crash_draft(self) -> None:
         """Clear the global crash-recovery draft file."""
-        try:
-            if self.CRASH_DRAFT_FILE.exists():
-                self.CRASH_DRAFT_FILE.unlink()
-        except Exception:
-            pass
+        self._draft_store.clear_crash()
 
     def _load_crash_draft(self) -> str | None:
         """Load crash-recovery draft if it exists and is non-empty."""
-        try:
-            if self.CRASH_DRAFT_FILE.exists():
-                text = self.CRASH_DRAFT_FILE.read_text().strip()
-                if text:
-                    return text
-        except Exception:
-            pass
-        return None
+        return self._draft_store.load_crash()
 
     # ── Bookmarks ─────────────────────────────────────────────
 
@@ -1595,28 +1480,16 @@ class AmplifierChicApp(
 
     def _load_bookmarks(self) -> dict[str, list[dict]]:
         """Load all bookmarks from the JSON file."""
-        try:
-            if self.BOOKMARKS_FILE.exists():
-                return json.loads(self.BOOKMARKS_FILE.read_text())
-        except Exception:
-            pass
-        return {}
+        return self._bookmark_store.load_all()
 
     def _save_bookmark(self, session_id: str, bookmark: dict) -> None:
         """Append a bookmark for the given session."""
-        all_bm = self._load_bookmarks()
-        if session_id not in all_bm:
-            all_bm[session_id] = []
-        all_bm[session_id].append(bookmark)
-        self.BOOKMARKS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        self.BOOKMARKS_FILE.write_text(json.dumps(all_bm, indent=2))
+        self._bookmark_store.add(session_id, bookmark)
 
     def _load_session_bookmarks(self, session_id: str | None = None) -> list[dict]:
         """Load bookmarks for the current (or given) session."""
         sid = session_id or self._get_session_id()
-        if not sid:
-            return []
-        return self._load_bookmarks().get(sid, [])
+        return self._bookmark_store.for_session(sid)
 
     def _apply_bookmark_classes(self) -> None:
         """Re-apply the 'bookmarked' CSS class to bookmarked assistant messages."""
@@ -1632,98 +1505,41 @@ class AmplifierChicApp(
 
     def _load_all_refs(self) -> dict[str, list[dict]]:
         """Load all refs from the JSON file."""
-        try:
-            if self.REFS_FILE.exists():
-                return json.loads(self.REFS_FILE.read_text())
-        except Exception:
-            pass
-        return {}
+        return self._ref_store.load_all()
 
     def _save_refs(self) -> None:
         """Persist the current session's refs to disk."""
         sid = self._get_session_id()
         if not sid:
             return
-        try:
-            all_refs = self._load_all_refs()
-            all_refs[sid] = self._session_refs
-            self.REFS_FILE.parent.mkdir(parents=True, exist_ok=True)
-            self.REFS_FILE.write_text(json.dumps(all_refs, indent=2))
-        except Exception:
-            pass
+        self._ref_store.save(sid, self._session_refs)
 
     def _load_session_refs(self, session_id: str | None = None) -> list[dict]:
         """Load refs for the current (or given) session."""
         sid = session_id or self._get_session_id()
-        if not sid:
-            return []
-        return self._load_all_refs().get(sid, [])
+        return self._ref_store.for_session(sid)
 
     def _load_message_pins(self) -> list[dict]:
         """Load pinned messages for the current session."""
-        try:
-            if self.MESSAGE_PINS_FILE.exists():
-                all_pins = json.loads(self.MESSAGE_PINS_FILE.read_text())
-                sid = self._get_session_id() or "default"
-                return all_pins.get(sid, [])
-        except Exception:
-            pass
-        return []
+        sid = self._get_session_id() or "default"
+        return self._pin_store.load(sid)
 
     def _save_message_pins(self) -> None:
         """Persist message pins keyed by session ID."""
-        try:
-            all_pins: dict[str, list[dict]] = {}
-            if self.MESSAGE_PINS_FILE.exists():
-                all_pins = json.loads(self.MESSAGE_PINS_FILE.read_text())
-            sid = self._get_session_id() or "default"
-            if self._message_pins:
-                all_pins[sid] = self._message_pins
-            elif sid in all_pins:
-                del all_pins[sid]
-            # Keep last 50 sessions worth of pins
-            if len(all_pins) > 50:
-                keys = list(all_pins.keys())
-                for k in keys[:-50]:
-                    del all_pins[k]
-            self.MESSAGE_PINS_FILE.parent.mkdir(parents=True, exist_ok=True)
-            self.MESSAGE_PINS_FILE.write_text(json.dumps(all_pins, indent=2))
-        except Exception:
-            pass
+        sid = self._get_session_id() or "default"
+        self._pin_store.save(sid, self._message_pins)
 
     # ── Session Notes ─────────────────────────────────────────────────
 
     def _load_notes(self) -> list[dict]:
         """Load notes for the current session."""
-        try:
-            if self.NOTES_FILE.exists():
-                all_notes = json.loads(self.NOTES_FILE.read_text())
-                sid = self._get_session_id() or "default"
-                return all_notes.get(sid, [])
-        except Exception:
-            pass
-        return []
+        sid = self._get_session_id() or "default"
+        return self._note_store.load(sid)
 
     def _save_notes(self) -> None:
         """Persist session notes keyed by session ID."""
-        try:
-            all_notes: dict[str, list[dict]] = {}
-            if self.NOTES_FILE.exists():
-                all_notes = json.loads(self.NOTES_FILE.read_text())
-            sid = self._get_session_id() or "default"
-            if self._session_notes:
-                all_notes[sid] = self._session_notes
-            elif sid in all_notes:
-                del all_notes[sid]
-            # Keep last 50 sessions worth of notes
-            if len(all_notes) > 50:
-                keys = list(all_notes.keys())
-                for k in keys[:-50]:
-                    del all_notes[k]
-            self.NOTES_FILE.parent.mkdir(parents=True, exist_ok=True)
-            self.NOTES_FILE.write_text(json.dumps(all_notes, indent=2))
-        except Exception:
-            pass
+        sid = self._get_session_id() or "default"
+        self._note_store.save(sid, self._session_notes)
 
     def _add_message_pin(self, index: int, content: str, label: str = "") -> None:
         """Pin a message by its _search_messages index."""
@@ -4565,14 +4381,7 @@ class AmplifierChicApp(
         self._remove_session_name(session_id)
         self._remove_pinned_session(session_id)
         # Clean up draft for deleted session
-        try:
-            drafts = self._load_drafts()
-            if session_id in drafts:
-                del drafts[session_id]
-                self.DRAFTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-                self.DRAFTS_FILE.write_text(json.dumps(drafts, indent=2))
-        except Exception:
-            pass
+        self._draft_store.remove(session_id)
 
         # Refresh sidebar
         if self._session_list_data:
@@ -4585,13 +4394,7 @@ class AmplifierChicApp(
 
     def _remove_session_name(self, session_id: str) -> None:
         """Remove a custom session name from the JSON file."""
-        try:
-            names = self._load_session_names()
-            if session_id in names:
-                del names[session_id]
-                self.SESSION_NAMES_FILE.write_text(json.dumps(names, indent=2))
-        except Exception:
-            pass
+        self._session_name_store.remove_name(session_id)
 
     # ── Bookmark Commands ─────────────────────────────────────────────
 
@@ -4779,10 +4582,7 @@ class AmplifierChicApp(
 
     def _save_session_bookmarks(self, session_id: str) -> None:
         """Overwrite all bookmarks for the given session (used by remove/clear)."""
-        all_bm = self._load_bookmarks()
-        all_bm[session_id] = list(self._session_bookmarks)
-        self.BOOKMARKS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        self.BOOKMARKS_FILE.write_text(json.dumps(all_bm, indent=2))
+        self._bookmark_store.save_for_session(session_id, self._session_bookmarks)
 
     def _toggle_bookmark_nearest(self) -> None:
         """Toggle bookmark on the last assistant message (Ctrl+B in vim normal)."""
