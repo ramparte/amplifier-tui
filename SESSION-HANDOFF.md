@@ -5,7 +5,7 @@
 **Repo:** https://github.com/ramparte/amplifier-tui
 **Location:** ~/dev/ANext/amplifier-tui
 **Tech:** Python + Textual 7.5 TUI framework
-**Origin:** Adapted from Claude Chic (https://matthewrocklin.com/introducing-claude-chic/), rewritten to use Amplifier's session/bundle/hook system instead of raw Anthropic API.
+**Origin:** Rewritten to use Amplifier's session/bundle/hook system.
 
 ## What It Does
 

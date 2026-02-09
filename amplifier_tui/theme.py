@@ -12,7 +12,7 @@ from textual.theme import Theme
 # Keys match the theme names in preferences.THEMES / THEME_DESCRIPTIONS.
 TEXTUAL_THEMES: dict[str, Theme] = {
     "dark": Theme(
-        name="chic-dark",
+        name="tui-dark",
         primary="#cc7700",
         secondary="#5599dd",
         accent="#445566",
@@ -25,7 +25,7 @@ TEXTUAL_THEMES: dict[str, Theme] = {
         dark=True,
     ),
     "light": Theme(
-        name="chic-light",
+        name="tui-light",
         primary="#cc6600",
         secondary="#4488aa",
         accent="#667788",
@@ -38,7 +38,7 @@ TEXTUAL_THEMES: dict[str, Theme] = {
         dark=False,
     ),
     "solarized": Theme(
-        name="chic-solarized",
+        name="tui-solarized",
         primary="#b58900",
         secondary="#268bd2",
         accent="#6c71c4",
@@ -51,7 +51,7 @@ TEXTUAL_THEMES: dict[str, Theme] = {
         dark=True,
     ),
     "monokai": Theme(
-        name="chic-monokai",
+        name="tui-monokai",
         primary="#fd971f",
         secondary="#66d9ef",
         accent="#ae81ff",
@@ -64,7 +64,7 @@ TEXTUAL_THEMES: dict[str, Theme] = {
         dark=True,
     ),
     "high-contrast": Theme(
-        name="chic-high-contrast",
+        name="tui-high-contrast",
         primary="#ffff00",
         secondary="#00ff00",
         accent="#00ffff",
@@ -77,7 +77,7 @@ TEXTUAL_THEMES: dict[str, Theme] = {
         dark=True,
     ),
     "nord": Theme(
-        name="chic-nord",
+        name="tui-nord",
         primary="#ebcb8b",
         secondary="#88c0d0",
         accent="#b48ead",
@@ -90,7 +90,7 @@ TEXTUAL_THEMES: dict[str, Theme] = {
         dark=True,
     ),
     "dracula": Theme(
-        name="chic-dracula",
+        name="tui-dracula",
         primary="#ffb86c",
         secondary="#8be9fd",
         accent="#bd93f9",
@@ -103,7 +103,7 @@ TEXTUAL_THEMES: dict[str, Theme] = {
         dark=True,
     ),
     "gruvbox": Theme(
-        name="chic-gruvbox",
+        name="tui-gruvbox",
         primary="#d65d0e",
         secondary="#689d6a",
         accent="#b16286",
@@ -116,7 +116,7 @@ TEXTUAL_THEMES: dict[str, Theme] = {
         dark=True,
     ),
     "catppuccin": Theme(
-        name="chic-catppuccin",
+        name="tui-catppuccin",
         primary="#fab387",
         secondary="#89b4fa",
         accent="#cba6f7",
@@ -129,7 +129,7 @@ TEXTUAL_THEMES: dict[str, Theme] = {
         dark=True,
     ),
     "midnight": Theme(
-        name="chic-midnight",
+        name="tui-midnight",
         primary="#536dfe",
         secondary="#64b5f6",
         accent="#7c4dff",
@@ -142,7 +142,7 @@ TEXTUAL_THEMES: dict[str, Theme] = {
         dark=True,
     ),
     "solarized-light": Theme(
-        name="chic-solarized-light",
+        name="tui-solarized-light",
         primary="#b58900",
         secondary="#268bd2",
         accent="#6c71c4",
@@ -157,18 +157,18 @@ TEXTUAL_THEMES: dict[str, Theme] = {
 }
 
 # Backward-compat alias: the default theme object used before multi-theme support.
-CHIC_THEME = TEXTUAL_THEMES["dark"]
+DEFAULT_THEME = TEXTUAL_THEMES["dark"]
 
 
 def make_custom_textual_theme(name: str, base: str = "dark") -> Theme:
     """Create a Textual Theme for a custom color theme, inheriting from a built-in.
 
-    The custom theme gets a unique ``chic-<name>`` identifier and copies all
+    The custom theme gets a unique ``tui-<name>`` identifier and copies all
     design tokens (primary, secondary, accent, background, etc.) from *base*.
     """
     source = TEXTUAL_THEMES.get(base, TEXTUAL_THEMES["dark"])
     return Theme(
-        name=f"chic-{name}",
+        name=f"tui-{name}",
         primary=source.primary,
         secondary=source.secondary,
         accent=source.accent,

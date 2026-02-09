@@ -1,4 +1,4 @@
-# Amplifier Chic - Feature Roadmap
+# Amplifier TUI - Feature Roadmap
 
 ## Phase 1: Core Session Management ⭐ (START HERE)
 - [ ] Start a new Amplifier session
@@ -43,7 +43,7 @@
 - [ ] Session history browser
 - [ ] Export session to markdown
 
-## Phase 7: Git Integration (inspired by Claude Chic)
+## Phase 7: Git Integration
 - [ ] Git status in footer
 - [ ] Worktree management (if we want this)
 - [ ] Commit helper

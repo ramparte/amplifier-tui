@@ -1,4 +1,4 @@
-"""Command handler mixins for AmplifierChicApp."""
+"""Command handler mixins for AmplifierTuiApp."""
 
 from .session_cmds import SessionCommandsMixin
 from .display_cmds import DisplayCommandsMixin

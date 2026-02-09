@@ -115,7 +115,7 @@ from ._utils import _context_color, _copy_to_clipboard, _get_tool_label  # noqa:
 _amp_home = amplifier_home()
 
 
-class AmplifierChicApp(
+class AmplifierTuiApp(
     SessionCommandsMixin,
     DisplayCommandsMixin,
     ContentCommandsMixin,
@@ -5815,7 +5815,7 @@ def run_app(
     initial_prompt: str | None = None,
 ) -> None:
     """Run the Amplifier TUI application."""
-    app = AmplifierChicApp(
+    app = AmplifierTuiApp(
         resume_session_id=resume_session_id,
         initial_prompt=initial_prompt,
     )

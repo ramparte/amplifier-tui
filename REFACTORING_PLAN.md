@@ -2,7 +2,7 @@
 
 **Goal:** Decompose the 13,712-line monolith `amplifier_tui/app.py` (25 classes, 366 methods) into a maintainable package structure. Each phase leaves the app fully functional and is independently committable.
 
-**Current state:** One god file with `AmplifierChicApp` (~11,650 lines, 366 methods). Support modules (`history.py`, `preferences.py`, `session_manager.py`, `transcript_loader.py`, `theme.py`) are clean and tested.
+**Current state:** One god file with `AmplifierTuiApp` (~11,650 lines, 366 methods). Support modules (`history.py`, `preferences.py`, `session_manager.py`, `transcript_loader.py`, `theme.py`) are clean and tested.
 
 **Related bugs fixed by this plan:**
 - #10 P2: `session_manager` typed as `object | None` defeats type checking
@@ -202,7 +202,7 @@ Note: `_PALETTE_COMMANDS` (lines 1786-2020) is a module-level tuple that should 
 
 Two module-level tuples need to be accessible:
 
-1. **`SLASH_COMMANDS`** (line 112-200): Used by `ChatInput` for auto-complete and by `AmplifierChicApp._handle_slash_command`. Move to `amplifier_tui/constants.py` (~100 lines).
+1. **`SLASH_COMMANDS`** (line 112-200): Used by `ChatInput` for auto-complete and by `AmplifierTuiApp._handle_slash_command`. Move to `amplifier_tui/constants.py` (~100 lines).
 
 2. **`_PALETTE_COMMANDS`** (line 1786-2020): Used only by `AmplifierCommandProvider`. Move to `widgets/commands.py`.
 
@@ -264,7 +264,7 @@ python -c "from amplifier_tui.widgets import TabState, ChatInput, AmplifierComma
 # Ensure app still starts
 python -m amplifier_tui
 
-# Verify no class definitions remain in app.py (only AmplifierChicApp)
+# Verify no class definitions remain in app.py (only AmplifierTuiApp)
 grep -c "^class " amplifier_tui/app.py
 # Expected: 1
 
@@ -276,8 +276,8 @@ pyright amplifier_tui/
 
 ## Phase 2: Extract Command Handlers
 
-**Scope:** Move 88 `_cmd_*` methods out of `AmplifierChicApp` into domain-grouped mixin classes.
-**Pattern:** Python mixin classes that `AmplifierChicApp` inherits from. Each mixin is a plain class with methods that reference `self` (which will be the App instance at runtime).
+**Scope:** Move 88 `_cmd_*` methods out of `AmplifierTuiApp` into domain-grouped mixin classes.
+**Pattern:** Python mixin classes that `AmplifierTuiApp` inherits from. Each mixin is a plain class with methods that reference `self` (which will be the App instance at runtime).
 **Estimated effort:** 4-6 hours
 
 ### 2.1 Why mixins (not a registry)
@@ -472,11 +472,11 @@ Also moves: watch helpers (`_start_watch_timer`, `_stop_watch_timer`, `_check_wa
 
 The dispatch dict at line 5281 stays in `app.py` (it's the router). No changes needed since the mixin methods become methods on `self` via inheritance.
 
-### 2.6 Update `AmplifierChicApp` class declaration
+### 2.6 Update `AmplifierTuiApp` class declaration
 
 ```python
 # BEFORE
-class AmplifierChicApp(App):
+class AmplifierTuiApp(App):
 
 # AFTER
 from .commands import (
@@ -494,7 +494,7 @@ from .commands import (
     WatchCommandsMixin,
 )
 
-class AmplifierChicApp(
+class AmplifierTuiApp(
     SessionCommandsMixin,
     DisplayCommandsMixin,
     ContentCommandsMixin,
@@ -688,7 +688,7 @@ State: crash draft path
 
 ### 3.4 Update App initialization
 
-In `AmplifierChicApp.__init__`, replace raw state with store instances:
+In `AmplifierTuiApp.__init__`, replace raw state with store instances:
 
 ```python
 # BEFORE (scattered across __init__)
@@ -1029,9 +1029,9 @@ def tmp_amplifier_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def app():
-    """Create an AmplifierChicApp instance for testing."""
-    from amplifier_tui.app import AmplifierChicApp
-    return AmplifierChicApp()
+    """Create an AmplifierTuiApp instance for testing."""
+    from amplifier_tui.app import AmplifierTuiApp
+    return AmplifierTuiApp()
 
 
 @pytest.fixture
@@ -1192,7 +1192,7 @@ tests/
 
 ### What remains in app.py (~3,600 lines)
 
-- `AmplifierChicApp` class declaration with mixin inheritance
+- `AmplifierTuiApp` class declaration with mixin inheritance
 - `__init__` (instance variables that aren't owned by persistence stores)
 - `compose()` - UI layout
 - `on_mount()` - startup logic

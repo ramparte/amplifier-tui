@@ -24,7 +24,7 @@ from pathlib import Path
 # Ensure we can import the app
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from amplifier_tui.app import AmplifierChicApp
+from amplifier_tui.app import AmplifierTuiApp
 
 # Lazy imports for tools
 svg_parser = None
@@ -876,7 +876,7 @@ async def run_single_test(app, pilot, test_def, output_dir: Path) -> TestResult:
 async def run_batch(batch_name: str, tests: list, output_dir: Path) -> list[TestResult]:
     """Run a batch of tests in a single app instance."""
     results = []
-    app = AmplifierChicApp()
+    app = AmplifierTuiApp()
 
     print(f"\n{'=' * 60}")
     print(f"  BATCH {batch_name}: {len(tests)} tests")

@@ -43,9 +43,9 @@ async def capture_screenshot(
         Path to the saved PNG.
     """
     import cairosvg
-    from amplifier_tui.app import AmplifierChicApp
+    from amplifier_tui.app import AmplifierTuiApp
 
-    app = AmplifierChicApp()
+    app = AmplifierTuiApp()
 
     async with app.run_test(size=(width, height)) as pilot:
         # Let the app settle
