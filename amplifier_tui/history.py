@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from .platform import amplifier_home
 
 
 class PromptHistory:
@@ -12,7 +12,7 @@ class PromptHistory:
     Multiline prompts are flattened to a single line for storage.
     """
 
-    HISTORY_FILE = Path.home() / ".amplifier" / "tui-history.txt"
+    HISTORY_FILE = amplifier_home() / "tui-history.txt"
     MAX_ENTRIES = 1000
 
     def __init__(self) -> None:

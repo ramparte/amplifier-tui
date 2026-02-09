@@ -9,6 +9,7 @@ import json
 import re
 
 from ..log import logger
+from ..platform import amplifier_home, amplifier_projects_dir
 from ..constants import (
     SLASH_COMMANDS,
 )
@@ -123,7 +124,7 @@ class PersistenceCommandsMixin:
             source = ref.get("source", "manual")
             lines.append(f"{i}. [{label}]({url}) -- {ts} ({source})")
 
-        filepath = Path.home() / ".amplifier" / "refs-export.md"
+        filepath = amplifier_home() / "refs-export.md"
         filepath.parent.mkdir(parents=True, exist_ok=True)
         filepath.write_text("\n".join(lines) + "\n")
         self._add_system_message(
@@ -500,7 +501,7 @@ class PersistenceCommandsMixin:
         if not self._snippets:
             self._add_system_message("No snippets to export")
             return
-        export_path = Path.home() / ".amplifier" / "tui-snippets-export.json"
+        export_path = amplifier_home() / "tui-snippets-export.json"
         try:
             export_path.parent.mkdir(parents=True, exist_ok=True)
             export_path.write_text(json.dumps(self._snippets, indent=2, sort_keys=True))
@@ -995,7 +996,7 @@ class PersistenceCommandsMixin:
 
     def _find_session_dir(self, session_id: str) -> Path | None:
         """Find the directory for a session by searching all projects."""
-        sessions_dir = Path.home() / ".amplifier" / "projects"
+        sessions_dir = amplifier_projects_dir()
         if not sessions_dir.exists():
             return None
 

@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-import base64
-import platform
-import shutil
-import subprocess
-import sys
 from pathlib import Path
 
 from .constants import TOOL_LABELS, _MAX_LABEL_LEN
 from .log import logger
+from .platform import copy_to_clipboard as _copy_to_clipboard  # noqa: F401 - re-exported
 
 
 def _context_color(pct: float) -> str:
@@ -133,59 +129,4 @@ def _get_tool_label(name: str, tool_input: dict | str | None) -> str:
     return f"{base}..."
 
 
-def _copy_to_clipboard(text: str) -> bool:
-    """Copy text to system clipboard. Tries OSC 52 first, then native tools."""
-    # OSC 52: works in most modern terminals (WezTerm, iTerm2, kitty, etc.)
-    # and even over SSH sessions.
-    try:
-        encoded = base64.b64encode(text.encode()).decode()
-        sys.stdout.write(f"\033]52;c;{encoded}\a")
-        sys.stdout.flush()
-        return True
-    except OSError:
-        logger.debug("OSC 52 clipboard write failed", exc_info=True)
-
-    # Fallback: native clipboard tools with platform-specific handling
-    try:
-        uname_release = platform.uname().release.lower()
-    except OSError:
-        logger.debug("Failed to detect platform release", exc_info=True)
-        uname_release = ""
-
-    # WSL: clip.exe expects UTF-16LE
-    if "microsoft" in uname_release and shutil.which("clip.exe"):
-        try:
-            proc = subprocess.Popen(
-                ["clip.exe"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            proc.communicate(text.encode("utf-16-le"))
-            if proc.returncode == 0:
-                return True
-        except (subprocess.SubprocessError, OSError):
-            logger.debug("clip.exe clipboard copy failed", exc_info=True)
-
-    # macOS
-    if platform.system() == "Darwin" and shutil.which("pbcopy"):
-        try:
-            subprocess.run(["pbcopy"], input=text.encode(), check=True, timeout=2)
-            return True
-        except (subprocess.SubprocessError, OSError):
-            logger.debug("pbcopy clipboard copy failed", exc_info=True)
-
-    # Linux: try xclip, then xsel
-    for cmd in [
-        ["xclip", "-selection", "clipboard"],
-        ["xsel", "--clipboard", "--input"],
-    ]:
-        if shutil.which(cmd[0]):
-            try:
-                subprocess.run(cmd, input=text.encode(), check=True, timeout=2)
-                return True
-            except (subprocess.SubprocessError, OSError):
-                logger.debug("Clipboard copy via %s failed", cmd[0], exc_info=True)
-                continue
-
-    return False
+# _copy_to_clipboard is imported from .platform (see top of file)

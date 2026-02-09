@@ -10,6 +10,7 @@ from textual import work
 from textual.widgets import Static
 
 from ..log import logger
+from ..platform import amplifier_projects_dir
 
 
 class SearchCommandsMixin:
@@ -120,7 +121,7 @@ class SearchCommandsMixin:
     @work(thread=True)
     def _search_all_sessions_worker(self, query: str) -> None:
         """Search transcript content across all saved sessions in a background thread."""
-        projects_dir = Path.home() / ".amplifier" / "projects"
+        projects_dir = amplifier_projects_dir()
         if not projects_dir.exists():
             self.call_from_thread(self._add_system_message, "No saved sessions found.")
             return

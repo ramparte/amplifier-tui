@@ -16,6 +16,8 @@ from datetime import datetime
 from pathlib import Path
 
 
+from .platform import amplifier_home, no_editor_message
+
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
@@ -110,6 +112,9 @@ from .persistence import (
 from ._utils import _context_color, _copy_to_clipboard, _get_tool_label  # noqa: E402
 
 
+_amp_home = amplifier_home()
+
+
 class AmplifierChicApp(
     SessionCommandsMixin,
     DisplayCommandsMixin,
@@ -133,18 +138,18 @@ class AmplifierChicApp(
     TITLE = "Amplifier TUI"
 
     MAX_STASHES = 5
-    SESSION_NAMES_FILE = Path.home() / ".amplifier" / "tui-session-names.json"
-    BOOKMARKS_FILE = Path.home() / ".amplifier" / "tui-bookmarks.json"
-    PINNED_SESSIONS_FILE = Path.home() / ".amplifier" / "tui-pinned-sessions.json"
-    MESSAGE_PINS_FILE = Path.home() / ".amplifier" / "tui-pins.json"
-    DRAFTS_FILE = Path.home() / ".amplifier" / "tui-drafts.json"
-    ALIASES_FILE = Path.home() / ".amplifier" / "tui-aliases.json"
-    SNIPPETS_FILE = Path.home() / ".amplifier" / "tui-snippets.json"
-    TEMPLATES_FILE = Path.home() / ".amplifier" / "tui-templates.json"
-    SESSION_TITLES_FILE = Path.home() / ".amplifier" / "tui-session-titles.json"
-    REFS_FILE = Path.home() / ".amplifier" / "tui-refs.json"
-    NOTES_FILE = Path.home() / ".amplifier" / "tui-notes.json"
-    CRASH_DRAFT_FILE = Path.home() / ".amplifier" / "tui-draft.txt"
+    SESSION_NAMES_FILE = _amp_home / "tui-session-names.json"
+    BOOKMARKS_FILE = _amp_home / "tui-bookmarks.json"
+    PINNED_SESSIONS_FILE = _amp_home / "tui-pinned-sessions.json"
+    MESSAGE_PINS_FILE = _amp_home / "tui-pins.json"
+    DRAFTS_FILE = _amp_home / "tui-drafts.json"
+    ALIASES_FILE = _amp_home / "tui-aliases.json"
+    SNIPPETS_FILE = _amp_home / "tui-snippets.json"
+    TEMPLATES_FILE = _amp_home / "tui-templates.json"
+    SESSION_TITLES_FILE = _amp_home / "tui-session-titles.json"
+    REFS_FILE = _amp_home / "tui-refs.json"
+    NOTES_FILE = _amp_home / "tui-notes.json"
+    CRASH_DRAFT_FILE = _amp_home / "tui-draft.txt"
 
     DEFAULT_SNIPPETS: dict[str, dict[str, str]] = {
         "review": {
@@ -430,21 +435,23 @@ class AmplifierChicApp(
         self._rsearch_original: str = ""
 
         # ── Persistence stores ──────────────────────────────────────────
-        _amp = Path.home() / ".amplifier"
-        self._alias_store = AliasStore(_amp / "tui-aliases.json")
-        self._bookmark_store = BookmarkStore(_amp / "tui-bookmarks.json")
-        self._draft_store = DraftStore(_amp / "tui-drafts.json", _amp / "tui-draft.txt")
-        self._note_store = NoteStore(_amp / "tui-notes.json")
-        self._pin_store = MessagePinStore(_amp / "tui-pins.json")
+        self._alias_store = AliasStore(_amp_home / "tui-aliases.json")
+        self._bookmark_store = BookmarkStore(_amp_home / "tui-bookmarks.json")
+        self._draft_store = DraftStore(
+            _amp_home / "tui-drafts.json", _amp_home / "tui-draft.txt"
+        )
+        self._note_store = NoteStore(_amp_home / "tui-notes.json")
+        self._pin_store = MessagePinStore(_amp_home / "tui-pins.json")
         self._pinned_session_store = PinnedSessionStore(
-            _amp / "tui-pinned-sessions.json"
+            _amp_home / "tui-pinned-sessions.json"
         )
-        self._ref_store = RefStore(_amp / "tui-refs.json")
+        self._ref_store = RefStore(_amp_home / "tui-refs.json")
         self._session_name_store = SessionNameStore(
-            _amp / "tui-session-names.json", _amp / "tui-session-titles.json"
+            _amp_home / "tui-session-names.json",
+            _amp_home / "tui-session-titles.json",
         )
-        self._snippet_store = SnippetStore(_amp / "tui-snippets.json")
-        self._template_store = TemplateStore(_amp / "tui-templates.json")
+        self._snippet_store = SnippetStore(_amp_home / "tui-snippets.json")
+        self._template_store = TemplateStore(_amp_home / "tui-templates.json")
 
     # ── Layout ──────────────────────────────────────────────────
 
@@ -593,7 +600,10 @@ class AmplifierChicApp(
                     "Press Enter to send, or edit as needed."
                 )
             except NoMatches:
-                logger.debug("Chat input widget not found for crash draft recovery", exc_info=True)
+                logger.debug(
+                    "Chat input widget not found for crash draft recovery",
+                    exc_info=True,
+                )
 
         # Check for auto-save recovery from a previous crash
         self._check_autosave_recovery()
@@ -609,7 +619,9 @@ class AmplifierChicApp(
             self.session_manager = SessionManager()
             self._amplifier_ready = True
         except Exception:
-            logger.debug("Failed to initialize Amplifier session manager", exc_info=True)
+            logger.debug(
+                "Failed to initialize Amplifier session manager", exc_info=True
+            )
             self._amplifier_available = False
             self.call_from_thread(
                 self._show_welcome,
@@ -699,7 +711,9 @@ class AmplifierChicApp(
         try:
             tab.input_text = self.query_one("#chat-input", ChatInput).text
         except NoMatches:
-            logger.debug("Chat input widget not found when saving tab state", exc_info=True)
+            logger.debug(
+                "Chat input widget not found when saving tab state", exc_info=True
+            )
 
     def _load_tab_state(self, tab: TabState) -> None:
         """Load a TabState's data into current app state."""
@@ -754,7 +768,9 @@ class AmplifierChicApp(
             )
             old_container.add_class("tab-chat-hidden")
         except NoMatches:
-            logger.debug("Old tab container not found when switching tabs", exc_info=True)
+            logger.debug(
+                "Old tab container not found when switching tabs", exc_info=True
+            )
 
         # Switch index
         self._active_tab_index = index
@@ -767,7 +783,9 @@ class AmplifierChicApp(
             )
             new_container.remove_class("tab-chat-hidden")
         except NoMatches:
-            logger.debug("New tab container not found when switching tabs", exc_info=True)
+            logger.debug(
+                "New tab container not found when switching tabs", exc_info=True
+            )
 
         # Load new tab state
         self._load_tab_state(new_tab)
@@ -780,7 +798,9 @@ class AmplifierChicApp(
                 input_widget.insert(new_tab.input_text)
             self._last_saved_draft = new_tab.input_text
         except NoMatches:
-            logger.debug("Chat input widget not found when restoring tab input", exc_info=True)
+            logger.debug(
+                "Chat input widget not found when restoring tab input", exc_info=True
+            )
 
         # Update UI
         self._update_tab_bar()
@@ -833,7 +853,9 @@ class AmplifierChicApp(
             )
             old_container.add_class("tab-chat-hidden")
         except NoMatches:
-            logger.debug("Old tab container not found when creating new tab", exc_info=True)
+            logger.debug(
+                "Old tab container not found when creating new tab", exc_info=True
+            )
 
         # Create new container and mount it
         new_container = ScrollableContainer(id=container_id, classes="tab-chat-view")
@@ -843,7 +865,10 @@ class AmplifierChicApp(
             split_panel = self.query_one("#split-panel", ScrollableContainer)
             split_container.mount(new_container, before=split_panel)
         except NoMatches:
-            logger.debug("Split container or panel not found when mounting new tab", exc_info=True)
+            logger.debug(
+                "Split container or panel not found when mounting new tab",
+                exc_info=True,
+            )
 
         # Add tab and switch to it
         self._tabs.append(tab)
@@ -929,7 +954,10 @@ class AmplifierChicApp(
                 )
                 new_container.remove_class("tab-chat-hidden")
             except NoMatches:
-                logger.debug("New active tab container not found after closing tab", exc_info=True)
+                logger.debug(
+                    "New active tab container not found after closing tab",
+                    exc_info=True,
+                )
             self._load_tab_state(new_tab)
         elif index < self._active_tab_index:
             self._active_tab_index -= 1
@@ -996,7 +1024,9 @@ class AmplifierChicApp(
             container = self.query_one(f"#{tab.container_id}", ScrollableContainer)
             has_content = len(list(container.children)) > 0
         except NoMatches:
-            logger.debug("Tab container not found when checking for content", exc_info=True)
+            logger.debug(
+                "Tab container not found when checking for content", exc_info=True
+            )
             has_content = False
         if has_content:
             self._close_tab()
@@ -2460,14 +2490,10 @@ class AmplifierChicApp(
             chat_input.focus()
 
     def _resolve_editor(self) -> str | None:
-        """Return the first available editor ($VISUAL > $EDITOR > nano > vim > vi)."""
-        for candidate in (
-            os.environ.get("VISUAL"),
-            os.environ.get("EDITOR"),
-            "nano",
-            "vim",
-            "vi",
-        ):
+        """Return the first available editor, platform-aware."""
+        from .platform import editor_candidates
+
+        for candidate in editor_candidates():
             if candidate and shutil.which(candidate):
                 return candidate
         return None
@@ -2476,9 +2502,7 @@ class AmplifierChicApp(
         """Open $EDITOR for composing a longer prompt (Ctrl+G)."""
         editor = self._resolve_editor()
         if not editor:
-            self._add_system_message(
-                "No editor found. Set $EDITOR or install vim/nano."
-            )
+            self._add_system_message(no_editor_message())
             return
 
         inp = self.query_one("#chat-input", ChatInput)
@@ -3000,7 +3024,9 @@ class AmplifierChicApp(
             chunk = path.read_bytes()[:8192]
             return b"\x00" in chunk
         except OSError:
-            logger.debug("Failed to read file for binary check: %s", path, exc_info=True)
+            logger.debug(
+                "Failed to read file for binary check: %s", path, exc_info=True
+            )
             return True
 
     def _read_file_for_include(self, path: Path) -> str | None:
@@ -3074,8 +3100,10 @@ class AmplifierChicApp(
                     return content
             return match.group(0)  # Keep original if file not found
 
-        # Match @path/to/file.ext — only paths starting with ./ ../ ~/ or /
-        return re.sub(r"@((?:\.\.?/|~/|/)\S+)", _replace_at_file, text)
+        # Match @path/to/file.ext — platform-aware (includes C:\ on Windows)
+        from .platform import AT_MENTION_RE
+
+        return AT_MENTION_RE.sub(_replace_at_file, text)
 
     def _expand_snippet_mentions(self, text: str) -> str:
         """Expand @@name references to snippet content.
@@ -3212,9 +3240,7 @@ class AmplifierChicApp(
         """Edit a snippet in $EDITOR, reusing the Ctrl+G infrastructure."""
         editor = self._resolve_editor()
         if not editor:
-            self._add_system_message(
-                "No editor found. Set $EDITOR or install vim/nano."
-            )
+            self._add_system_message(no_editor_message())
             return
 
         with tempfile.NamedTemporaryFile(
@@ -3412,7 +3438,9 @@ class AmplifierChicApp(
             try:
                 meta = json.loads(metadata_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
-                logger.debug("Failed to read session metadata: %s", metadata_path, exc_info=True)
+                logger.debug(
+                    "Failed to read session metadata: %s", metadata_path, exc_info=True
+                )
 
         # Count messages from transcript
         transcript_path = session_dir / "transcript.jsonl"
@@ -5014,30 +5042,18 @@ class AmplifierChicApp(
     def _flash_title_bar(self) -> None:
         """Briefly change the terminal title to signal response completion.
 
-        Uses OSC 2 (Set Window Title) to show "[✓ Ready] Amplifier TUI",
-        then schedules a restore after 3 seconds.  Writes to ``sys.__stdout__``
-        to bypass Textual's stdout capture.
+        Uses the platform module's OSC 2 helper, then restores after 3 s.
         """
-        out = sys.__stdout__
-        if out is None:
-            return
-        try:
-            out.write("\033]2;[\u2713 Ready] Amplifier TUI\a")
-            out.flush()
-        except OSError:
-            logger.debug("failed to write flash title to stdout", exc_info=True)
+        from .platform import set_terminal_title
+
+        set_terminal_title("[\u2713 Ready] Amplifier TUI")
         self.set_timer(3.0, self._restore_title)
 
     def _restore_title(self) -> None:
         """Restore the normal terminal title after a title-bar flash."""
-        out = sys.__stdout__
-        if out is None:
-            return
-        try:
-            out.write("\033]2;Amplifier TUI\a")
-            out.flush()
-        except OSError:
-            logger.debug("failed to restore terminal title", exc_info=True)
+        from .platform import set_terminal_title
+
+        set_terminal_title("Amplifier TUI")
 
     def _notify_sound(
         self,
@@ -5504,7 +5520,10 @@ class AmplifierChicApp(
 
                 self._stream_widget.update(RichMarkdown(display_text))
             except Exception:
-                logger.debug("Rich Markdown rendering failed, falling back to plain text", exc_info=True)
+                logger.debug(
+                    "Rich Markdown rendering failed, falling back to plain text",
+                    exc_info=True,
+                )
                 self._stream_widget.update(display_text)
         else:
             self._stream_widget.update(display_text)

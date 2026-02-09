@@ -10,38 +10,32 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from .log import logger
+from .platform import (
+    amplifier_projects_dir,
+    amplifier_uv_site_packages,
+    reconstruct_project_path,
+)
 
-# Add the global Amplifier installation to sys.path if it exists
-# This allows us to import from amplifier_core/foundation even though they're not in our venv
-_amplifier_site_packages = Path.home() / ".local/share/uv/tools/amplifier/lib"
-if _amplifier_site_packages.exists():
-    # Find the python3.x directory
-    for python_dir in _amplifier_site_packages.iterdir():
-        if python_dir.name.startswith("python3"):
-            site_packages = python_dir / "site-packages"
-            if site_packages.exists() and str(site_packages) not in sys.path:
-                sys.path.insert(0, str(site_packages))
+# Add the global Amplifier installation to sys.path if it exists.
+# This allows us to import from amplifier_core/foundation even though
+# they're not in our venv.  Uses platform-aware path discovery.
+_site_packages = amplifier_uv_site_packages()
+if _site_packages and str(_site_packages) not in sys.path:
+    sys.path.insert(0, str(_site_packages))
 
-                # Also process .pth files to find amplifier packages
-                # (amplifier_foundation and others are installed via .pth files)
-                for pth_file in site_packages.glob("*.pth"):
-                    try:
-                        with open(pth_file, "r", encoding="utf-8") as f:
-                            for line in f:
-                                line = line.strip()
-                                # Skip comments and empty lines
-                                if line and not line.startswith("#"):
-                                    pth_path = Path(line)
-                                    if (
-                                        pth_path.exists()
-                                        and str(pth_path) not in sys.path
-                                    ):
-                                        sys.path.insert(0, str(pth_path))
-                    except OSError:
-                        logger.debug(
-                            "Failed to process .pth file %s", pth_file, exc_info=True
-                        )
-                break
+    # Also process .pth files to find amplifier packages
+    # (amplifier_foundation and others are installed via .pth files)
+    for _pth_file in _site_packages.glob("*.pth"):
+        try:
+            with open(_pth_file, "r", encoding="utf-8") as _f:
+                for _line in _f:
+                    _line = _line.strip()
+                    if _line and not _line.startswith("#"):
+                        _pth_path = Path(_line)
+                        if _pth_path.exists() and str(_pth_path) not in sys.path:
+                            sys.path.insert(0, str(_pth_path))
+        except OSError:
+            logger.debug("Failed to process .pth file %s", _pth_file, exc_info=True)
 
 if TYPE_CHECKING:
     from amplifier_core import AmplifierSession
@@ -389,7 +383,7 @@ class SessionManager:
         A session dir may exist in multiple projects (e.g. sub-sessions),
         so we verify transcript.jsonl actually exists before returning.
         """
-        sessions_dir = Path.home() / ".amplifier" / "projects"
+        sessions_dir = amplifier_projects_dir()
 
         for project_dir in sessions_dir.iterdir():
             if not project_dir.is_dir():
@@ -443,7 +437,7 @@ class SessionManager:
         Sorted by mtime descending (most recent first).
         Only includes root sessions (skips sub-sessions with _ in ID).
         """
-        sessions_dir = Path.home() / ".amplifier" / "projects"
+        sessions_dir = amplifier_projects_dir()
         if not sessions_dir.exists():
             return []
 
@@ -456,12 +450,11 @@ class SessionManager:
                 continue
 
             # Reconstruct the original path from the directory name
-            # e.g. -home-samschillace-dev-ANext-MyProject -> /home/samschillace/dev/ANext/MyProject
+            # Uses platform-aware decoding (handles Unix and Windows path encodings)
             raw_name = project_dir.name
             try:
-                path_str = "/" + raw_name[1:].replace("-", "/")
-                project_path = path_str
-                project_label = Path(path_str).name
+                project_path = reconstruct_project_path(raw_name)
+                project_label = Path(project_path).name
             except (ValueError, IndexError):
                 logger.debug(
                     "Failed to parse project path from %s", raw_name, exc_info=True

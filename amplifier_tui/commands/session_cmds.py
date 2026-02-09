@@ -9,6 +9,7 @@ import json
 from textual import work
 from textual.widgets import Tree
 
+from ..platform import amplifier_projects_dir
 from ..preferences import (
     save_session_sort,
 )
@@ -167,7 +168,7 @@ class SessionCommandsMixin:
 
     def _sessions_search(self, query: str) -> None:
         """Search across all saved sessions for matching text."""
-        projects_dir = Path.home() / ".amplifier" / "projects"
+        projects_dir = amplifier_projects_dir()
         if not projects_dir.exists():
             self._add_system_message("No saved sessions found.")
             return

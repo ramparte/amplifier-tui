@@ -9,12 +9,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-
 import yaml
 
 from .log import logger
+from .platform import amplifier_home
 
-PREFS_PATH = Path.home() / ".amplifier" / "tui-preferences.yaml"
+PREFS_PATH = amplifier_home() / "tui-preferences.yaml"
 
 # Named color map: user-friendly names -> hex values.
 # Supports standard terminal colors plus a few useful extras.

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from .platform import DANGEROUS_PATTERNS as _DANGEROUS_PATTERNS  # noqa: F401 - re-exported
+from .platform import amplifier_home
 
 # Tool name -> human-friendly status label (without trailing "...")
 TOOL_LABELS: dict[str, str] = {
@@ -26,20 +27,12 @@ TOOL_LABELS: dict[str, str] = {
 _MAX_LABEL_LEN = 38  # Keep status labels under ~40 chars total
 
 # /run shell execution settings
-_DANGEROUS_PATTERNS: tuple[str, ...] = (
-    "rm -rf /",
-    "rm -rf /*",
-    "sudo rm",
-    "mkfs",
-    "dd if=",
-    ":(){:|:&};:",
-    "> /dev/sda",
-)
+# _DANGEROUS_PATTERNS is imported from .platform (platform-aware)
 _MAX_RUN_OUTPUT_LINES = 100
 _RUN_TIMEOUT = 30
 
 # Auto-save directory and defaults
-AUTOSAVE_DIR = Path.home() / ".amplifier-tui" / "autosave"
+AUTOSAVE_DIR = amplifier_home() / "tui-autosave"
 MAX_AUTOSAVES_PER_TAB = 5
 
 # Canonical list of slash commands – used by both _handle_slash_command and

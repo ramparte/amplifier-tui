@@ -63,7 +63,7 @@ class TestPaths:
         assert isinstance(AUTOSAVE_DIR, Path)
 
     def test_autosave_dir_under_home(self):
-        assert ".amplifier-tui" in str(AUTOSAVE_DIR)
+        assert ".amplifier" in str(AUTOSAVE_DIR)
 
 
 class TestNumericConstants:
