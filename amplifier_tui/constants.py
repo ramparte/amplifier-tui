@@ -125,6 +125,8 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/progress",
     "/mode",
     "/modes",
+    "/tag",
+    "/tags",
 )
 
 # -- Amplifier mode definitions ------------------------------------------------

@@ -173,6 +173,11 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/attach", "Attach file(s) to next message", "/attach "),
     ("/attach clear", "Remove all attachments", "/attach clear"),
     ("/attach remove", "Remove a specific attachment by number", "/attach remove "),
+    ("/tag", "Session tags (add, remove, list)", "/tag"),
+    ("/tag add", "Add a tag to current session", "/tag add "),
+    ("/tag remove", "Remove a tag from current session", "/tag remove "),
+    ("/tag list", "Show tags on current session", "/tag list"),
+    ("/tags", "List all tags across all sessions", "/tags"),
     ("/cat", "Display file contents in chat", "/cat "),
     # ── Keyboard-shortcut actions ───────────────────────────────────────────
     ("New Session  Ctrl+N", "Start a new conversation", "action:new_session"),

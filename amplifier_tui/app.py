@@ -107,6 +107,7 @@ from .persistence import (
     RefStore,
     SessionNameStore,
     SnippetStore,
+    TagStore,
     TemplateStore,
 )
 from ._utils import _context_color, _copy_to_clipboard, _get_tool_label  # noqa: E402
@@ -452,6 +453,7 @@ class AmplifierTuiApp(
         )
         self._snippet_store = SnippetStore(_amp_home / "tui-snippets.json")
         self._template_store = TemplateStore(_amp_home / "tui-templates.json")
+        self._tag_store = TagStore(_amp_home / "tui-session-tags.json")
 
     # ── Layout ──────────────────────────────────────────────────
 
@@ -2878,6 +2880,8 @@ class AmplifierTuiApp(
             "/progress": lambda: self._cmd_progress(args),
             "/mode": lambda: self._cmd_mode(args),
             "/modes": lambda: self._cmd_mode(""),
+            "/tag": lambda: self._cmd_tag(args),
+            "/tags": lambda: self._cmd_tag("list-all"),
         }
 
         handler = handlers.get(cmd)
@@ -2947,6 +2951,8 @@ class AmplifierTuiApp(
             "  /snippet      Prompt snippets (/snippet save|use|delete|search|cat|tag|export|import|<name>)\n"
             "  /snip         Alias for /snippet (/snip save, /snip use, /snip <name>)\n"
             "  /template     Prompt templates with {{variables}} (/template save|use|remove|clear|<name>)\n"
+            "  /tag          Session tags (/tag add|remove|list <tag>)\n"
+            "  /tags         List all tags across all sessions with counts\n"
             "  /alias        List/create/remove custom shortcuts\n"
             "  /compact      Toggle compact view mode (/compact on, /compact off)\n"
             "  /history      Browse input history (/history <N>, /history search <query>, /history clear)\n"

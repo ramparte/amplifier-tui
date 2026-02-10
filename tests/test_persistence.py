@@ -23,6 +23,7 @@ from amplifier_tui.persistence import (
     RefStore,
     SessionNameStore,
     SnippetStore,
+    TagStore,
     TemplateStore,
 )
 from amplifier_tui.persistence._base import JsonStore
@@ -546,3 +547,84 @@ class TestSessionNameStore:
         store.titles_path.parent.mkdir(parents=True, exist_ok=True)
         store.titles_path.write_text("{bad json")
         assert store.load_titles() == {}
+
+
+# ---------------------------------------------------------------------------
+# TagStore
+# ---------------------------------------------------------------------------
+
+
+class TestTagStore:
+    def test_tag_store_add_and_get(self, tmp_path):
+        store = TagStore(tmp_path / "tags.json")
+        assert store.add_tag("sess1", "debugging") is True
+        assert store.add_tag("sess1", "auth-work") is True
+        tags = store.get_tags("sess1")
+        assert tags == ["debugging", "auth-work"]
+
+    def test_tag_store_remove(self, tmp_path):
+        store = TagStore(tmp_path / "tags.json")
+        store.add_tag("sess1", "debugging")
+        store.add_tag("sess1", "research")
+        assert store.remove_tag("sess1", "debugging") is True
+        assert store.get_tags("sess1") == ["research"]
+
+    def test_tag_store_remove_not_found(self, tmp_path):
+        store = TagStore(tmp_path / "tags.json")
+        store.add_tag("sess1", "debugging")
+        assert store.remove_tag("sess1", "nope") is False
+        assert store.remove_tag("sess2", "debugging") is False
+
+    def test_tag_store_duplicate_add(self, tmp_path):
+        store = TagStore(tmp_path / "tags.json")
+        assert store.add_tag("sess1", "debugging") is True
+        assert store.add_tag("sess1", "debugging") is False
+        assert store.get_tags("sess1") == ["debugging"]
+
+    def test_tag_store_all_tags(self, tmp_path):
+        store = TagStore(tmp_path / "tags.json")
+        store.add_tag("sess1", "debugging")
+        store.add_tag("sess1", "research")
+        store.add_tag("sess2", "debugging")
+        store.add_tag("sess3", "debugging")
+        all_tags = store.all_tags()
+        assert all_tags["debugging"] == 3
+        assert all_tags["research"] == 1
+        # Most common first
+        assert list(all_tags.keys())[0] == "debugging"
+
+    def test_tag_store_sessions_with_tag(self, tmp_path):
+        store = TagStore(tmp_path / "tags.json")
+        store.add_tag("sess1", "debugging")
+        store.add_tag("sess2", "debugging")
+        store.add_tag("sess3", "research")
+        result = store.sessions_with_tag("debugging")
+        assert sorted(result) == ["sess1", "sess2"]
+        assert store.sessions_with_tag("nope") == []
+
+    def test_tag_store_normalize(self, tmp_path):
+        store = TagStore(tmp_path / "tags.json")
+        store.add_tag("sess1", "  #Debugging  ")
+        assert store.get_tags("sess1") == ["debugging"]
+        # Duplicate with different casing / prefix
+        assert store.add_tag("sess1", "#DEBUGGING") is False
+        assert store.remove_tag("sess1", " #Debugging") is True
+        assert store.get_tags("sess1") == []
+
+    def test_tag_store_remove_cleans_empty_session(self, tmp_path):
+        store = TagStore(tmp_path / "tags.json")
+        store.add_tag("sess1", "only-tag")
+        store.remove_tag("sess1", "only-tag")
+        # Session key should be removed from the data entirely
+        assert store.load() == {}
+
+    def test_tag_store_load_empty(self, tmp_path):
+        store = TagStore(tmp_path / "tags.json")
+        assert store.load() == {}
+        assert store.get_tags("nonexistent") == []
+
+    def test_tag_store_load_corrupt(self, tmp_path):
+        path = tmp_path / "tags.json"
+        path.write_text("{bad json")
+        store = TagStore(path)
+        assert store.load() == {}

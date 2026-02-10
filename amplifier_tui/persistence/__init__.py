@@ -9,6 +9,7 @@ from .pins import MessagePinStore
 from .refs import RefStore
 from .session_names import SessionNameStore
 from .snippets import SnippetStore
+from .tags import TagStore
 from .templates import TemplateStore
 
 __all__ = [
@@ -21,5 +22,6 @@ __all__ = [
     "RefStore",
     "SessionNameStore",
     "SnippetStore",
+    "TagStore",
     "TemplateStore",
 ]

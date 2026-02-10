@@ -120,6 +120,9 @@ class TestPersistenceCommandsMixin:
     def test_has_cmd_snippet(self):
         assert hasattr(PersistenceCommandsMixin, "_cmd_snippet")
 
+    def test_has_cmd_tag(self):
+        assert hasattr(PersistenceCommandsMixin, "_cmd_tag")
+
 
 class TestThemeCommandsMixin:
     def test_has_cmd_theme(self):

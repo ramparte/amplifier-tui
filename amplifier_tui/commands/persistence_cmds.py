@@ -1009,4 +1009,85 @@ class PersistenceCommandsMixin:
 
         return None
 
+    # ── Session Tags ─────────────────────────────────────────────────────
+
+    def _cmd_tag(self, text: str) -> None:
+        """Handle /tag and /tags commands."""
+        parts = text.strip().split(None, 1) if text.strip() else []
+        sub = parts[0].lower() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+
+        # /tags or /tag list-all -- show all tags across all sessions
+        if sub == "list-all" or (not sub and not rest):
+            all_tags = self._tag_store.all_tags()
+            if not all_tags:
+                self._add_system_message(
+                    "No tags found.\nAdd: /tag add <tag>\nExample: /tag add debugging"
+                )
+                return
+            lines = ["All Session Tags:"]
+            for tag, count in all_tags.items():
+                lines.append(f"  #{tag}  ({count} session{'s' if count != 1 else ''})")
+            lines.append("")
+            lines.append("  /tag add <tag> | /tag remove <tag> | /tag list")
+            self._add_system_message("\n".join(lines))
+            return
+
+        # Get current session ID
+        sid = ""
+        if self.session_manager and self.session_manager.session_id:
+            sid = self.session_manager.session_id
+        if not sid:
+            self._add_system_message("No active session for tagging.")
+            return
+
+        # /tag add <tag>
+        if sub == "add":
+            if not rest:
+                self._add_system_message("Usage: /tag add <tag>")
+                return
+            tag = rest.strip().lstrip("#").lower()
+            if self._tag_store.add_tag(sid, tag):
+                self._add_system_message(f"Tagged session with #{tag}")
+            else:
+                self._add_system_message(f"Session already has tag #{tag}")
+            return
+
+        # /tag remove <tag>
+        if sub in ("remove", "rm", "delete"):
+            if not rest:
+                self._add_system_message("Usage: /tag remove <tag>")
+                return
+            tag = rest.strip().lstrip("#").lower()
+            if self._tag_store.remove_tag(sid, tag):
+                self._add_system_message(f"Removed tag #{tag}")
+            else:
+                self._add_system_message(f"Tag #{tag} not found on this session")
+            return
+
+        # /tag list -- show tags on current session
+        if sub == "list":
+            tags = self._tag_store.get_tags(sid)
+            if not tags:
+                self._add_system_message(
+                    "No tags on this session.\nAdd: /tag add <tag>"
+                )
+            else:
+                tag_str = "  ".join(f"#{t}" for t in tags)
+                self._add_system_message(f"Session tags: {tag_str}")
+            return
+
+        # Bare /tag <word> -- treat as /tag add <word> for convenience
+        tag = sub.strip().lstrip("#").lower()
+        if tag:
+            if self._tag_store.add_tag(sid, tag):
+                self._add_system_message(f"Tagged session with #{tag}")
+            else:
+                self._add_system_message(f"Session already has tag #{tag}")
+            return
+
+        self._add_system_message(
+            "Usage: /tag add|remove|list <tag>\n  /tags to see all tags"
+        )
+
     # ── Bookmark helpers ──────────────────────────────────────────
