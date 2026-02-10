@@ -98,9 +98,11 @@ from .commands import (
     SplitCommandsMixin,
     WatchCommandsMixin,
     ToolCommandsMixin,
+    RecipeCommandsMixin,
 )
 from .features.agent_tracker import AgentTracker, is_delegate_tool, make_delegate_key
 from .features.tool_log import ToolLog
+from .features.recipe_tracker import RecipeTracker
 from .persistence import (
     AliasStore,
     BookmarkStore,
@@ -124,6 +126,7 @@ _amp_home = amplifier_home()
 class AmplifierTuiApp(
     AgentCommandsMixin,
     ToolCommandsMixin,
+    RecipeCommandsMixin,
     SessionCommandsMixin,
     DisplayCommandsMixin,
     ContentCommandsMixin,
@@ -468,6 +471,9 @@ class AmplifierTuiApp(
 
         # Live tool introspection log (/tools command)
         self._tool_log = ToolLog()
+
+        # Recipe pipeline tracking (/recipe command)
+        self._recipe_tracker = RecipeTracker()
 
         # Context window profiler history (/context history)
         from .features.context_profiler import ContextHistory
@@ -2909,6 +2915,7 @@ class AmplifierTuiApp(
             "/clip": lambda: self._cmd_clipboard(args),
             "/agents": lambda: self._cmd_agents(args),
             "/tools": lambda: self._cmd_tools(args),
+            "/recipe": lambda: self._cmd_recipe(args),
         }
 
         handler = handlers.get(cmd)
@@ -3009,6 +3016,7 @@ class AmplifierTuiApp(
             "  /autosave     Auto-save status, toggle, force save, restore (/autosave on|off|now|restore)\n"
             "  /agents       Show agent delegation tree (/agents history, /agents clear)\n"
             "  /tools        Live tool call log (/tools live|log|stats|clear)\n"
+            "  /recipe       Recipe pipeline view (/recipe status|history|clear)\n"
             "  /system       Set/view system prompt (/system <text>, clear, presets, use <preset>, append)\n"
             "  /keys         Keyboard shortcut overlay\n"
             "  /palette      Command palette (Ctrl+P) – fuzzy search all commands\n"
@@ -5553,6 +5561,19 @@ class AmplifierTuiApp(
                         agent=tool_input.get("agent", ""),
                         instruction=tool_input.get("instruction", ""),
                     )
+            # Track recipe executions
+            if name == "recipes" and isinstance(tool_input, dict):
+                op = tool_input.get("operation", "")
+                if op == "execute":
+                    recipe_path = tool_input.get("recipe_path", "")
+                    recipe_name = (
+                        recipe_path.rsplit("/", 1)[-1].replace(".yaml", "")
+                        if recipe_path
+                        else "unknown"
+                    )
+                    self._recipe_tracker.on_recipe_start(
+                        recipe_name, [], source_file=recipe_path
+                    )
             if self._prefs.display.progress_labels:
                 label = _get_tool_label(name, tool_input)
                 bare = label.rstrip(".")
@@ -5583,6 +5604,12 @@ class AmplifierTuiApp(
                         result=result,
                         status=status,
                     )
+            # Complete recipe tracking
+            if name == "recipes" and isinstance(tool_input, dict):
+                op = tool_input.get("operation", "")
+                if op == "execute":
+                    r_status = "failed" if result.startswith("Error") else "completed"
+                    self._recipe_tracker.on_recipe_complete(status=r_status)
             self._processing_label = "Thinking"
             self._status_activity_label = "Thinking..."
             self.call_from_thread(self._add_tool_use, name, tool_input, result)

@@ -195,6 +195,10 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/tools log", "Full session tool log", "/tools log"),
     ("/tools stats", "Aggregate tool statistics", "/tools stats"),
     ("/tools clear", "Clear tool log", "/tools clear"),
+    ("/recipe", "Recipe pipeline status (step-by-step view)", "/recipe"),
+    ("/recipe status", "Current recipe pipeline with timing", "/recipe status"),
+    ("/recipe history", "Past recipe runs in this session", "/recipe history"),
+    ("/recipe clear", "Clear recipe tracking", "/recipe clear"),
     # ── Keyboard-shortcut actions ───────────────────────────────────────────
     ("New Session  Ctrl+N", "Start a new conversation", "action:new_session"),
     ("New Tab  Ctrl+T", "Open a new conversation tab", "action:new_tab"),

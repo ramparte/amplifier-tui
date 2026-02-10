@@ -58,6 +58,7 @@ from .context_profiler import (
     format_top_consumers,
 )
 from .tool_log import ToolEntry, ToolLog, tool_color, summarize_tool_input
+from .recipe_tracker import RecipeStep, RecipeRun, RecipeTracker
 
 __all__ = [
     # diff_view
@@ -103,4 +104,8 @@ __all__ = [
     "ToolLog",
     "tool_color",
     "summarize_tool_input",
+    # recipe tracker
+    "RecipeStep",
+    "RecipeRun",
+    "RecipeTracker",
 ]

@@ -139,6 +139,10 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/tools log",
     "/tools stats",
     "/tools clear",
+    "/recipe",
+    "/recipe status",
+    "/recipe history",
+    "/recipe clear",
 )
 
 # -- Amplifier mode definitions ------------------------------------------------

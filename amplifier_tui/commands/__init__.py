@@ -14,6 +14,7 @@ from .export_cmds import ExportCommandsMixin
 from .split_cmds import SplitCommandsMixin
 from .watch_cmds import WatchCommandsMixin
 from .tool_cmds import ToolCommandsMixin
+from .recipe_cmds import RecipeCommandsMixin
 
 __all__ = [
     "AgentCommandsMixin",
@@ -30,4 +31,5 @@ __all__ = [
     "SplitCommandsMixin",
     "WatchCommandsMixin",
     "ToolCommandsMixin",
+    "RecipeCommandsMixin",
 ]
