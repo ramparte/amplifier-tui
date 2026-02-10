@@ -8,6 +8,9 @@ version = "0.1.0"
 description = "Proof of concept: Textual TUI for Amplifier"
 requires-python = ">=3.10"
 dependencies = [
+    "amplifier-core @ git+https://github.com/microsoft/amplifier-core",
+    "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation",
+    "pyyaml>=6.0",
     "textual>=0.47.0",
 ]
 
