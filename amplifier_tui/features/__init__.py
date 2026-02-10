@@ -65,6 +65,7 @@ from .include_helpers import (
 )
 from .recipe_tracker import RecipeStep, RecipeRun, RecipeTracker
 from .branch_manager import BranchManager, ConversationBranch
+from .compare_manager import CompareManager, ComparisonResult
 
 __all__ = [
     # diff_view
@@ -121,4 +122,7 @@ __all__ = [
     # branch manager
     "BranchManager",
     "ConversationBranch",
+    # compare manager
+    "CompareManager",
+    "ComparisonResult",
 ]

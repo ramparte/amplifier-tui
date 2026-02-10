@@ -16,6 +16,7 @@ from .watch_cmds import WatchCommandsMixin
 from .tool_cmds import ToolCommandsMixin
 from .recipe_cmds import RecipeCommandsMixin
 from .branch_cmds import BranchCommandsMixin
+from .compare_cmds import CompareCommandsMixin
 
 __all__ = [
     "AgentCommandsMixin",
@@ -34,4 +35,5 @@ __all__ = [
     "ToolCommandsMixin",
     "RecipeCommandsMixin",
     "BranchCommandsMixin",
+    "CompareCommandsMixin",
 ]

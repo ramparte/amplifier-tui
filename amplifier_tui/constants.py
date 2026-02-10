@@ -153,6 +153,13 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/recipe status",
     "/recipe history",
     "/recipe clear",
+    "/compare",
+    "/compare off",
+    "/compare status",
+    "/compare pick",
+    "/compare show",
+    "/compare history",
+    "/compare clear",
 )
 
 # -- Amplifier mode definitions ------------------------------------------------

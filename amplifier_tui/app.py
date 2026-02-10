@@ -101,10 +101,12 @@ from .commands import (
     RecipeCommandsMixin,
 )
 from .commands.branch_cmds import BranchCommandsMixin
+from .commands.compare_cmds import CompareCommandsMixin
 from .features.agent_tracker import AgentTracker, is_delegate_tool, make_delegate_key
 from .features.tool_log import ToolLog
 from .features.recipe_tracker import RecipeTracker
 from .features.branch_manager import BranchManager
+from .features.compare_manager import CompareManager
 from .persistence import (
     AliasStore,
     BookmarkStore,
@@ -126,6 +128,7 @@ _amp_home = amplifier_home()
 
 
 class AmplifierTuiApp(
+    CompareCommandsMixin,
     BranchCommandsMixin,
     AgentCommandsMixin,
     ToolCommandsMixin,
@@ -483,6 +486,9 @@ class AmplifierTuiApp(
 
         # Conversation branch manager (/fork, /branches, /branch commands)
         self._branch_manager = BranchManager()
+
+        # Model A/B testing manager (/compare command)
+        self._compare_manager = CompareManager()
 
         # Context window profiler history (/context history)
         from .features.context_profiler import ContextHistory
@@ -2926,6 +2932,7 @@ class AmplifierTuiApp(
             "/agents": lambda: self._cmd_agents(args),
             "/tools": lambda: self._cmd_tools(args),
             "/recipe": lambda: self._cmd_recipe(args),
+            "/compare": lambda: self._cmd_compare(args),
         }
 
         handler = handlers.get(cmd)
@@ -3031,6 +3038,7 @@ class AmplifierTuiApp(
             "  /agents       Show agent delegation tree (/agents history, /agents clear)\n"
             "  /tools        Live tool call log (/tools live|log|stats|clear)\n"
             "  /recipe       Recipe pipeline view (/recipe status|history|clear)\n"
+            "  /compare      Model A/B testing (/compare <a> <b>, off, pick, status, history)\n"
             "  /system       Set/view system prompt (/system <text>, clear, presets, use <preset>, append)\n"
             "  /keys         Keyboard shortcut overlay\n"
             "  /palette      Command palette (Ctrl+P) – fuzzy search all commands\n"
