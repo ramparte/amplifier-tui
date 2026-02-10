@@ -68,7 +68,11 @@ class TestAppMount:
 
 
 class TestSidebarToggle:
-    """Ctrl+B toggles the session sidebar."""
+    """Ctrl+B toggles the session sidebar.
+
+    Regression tests for bugs #17 (second invocation fails) and
+    #19 (toggle-back corrupts layout).
+    """
 
     @pytest.mark.asyncio
     async def test_toggle_sidebar_on(self, app):
@@ -85,6 +89,46 @@ class TestSidebarToggle:
             await pilot.press("ctrl+b")  # on
             await pilot.press("ctrl+b")  # off
             assert sidebar.display is False
+
+    @pytest.mark.asyncio
+    async def test_toggle_sidebar_three_cycles(self, app):
+        """Bug #17 regression: second+ invocation must still work."""
+        async with app.run_test(size=(120, 40)) as pilot:
+            sidebar = app.query_one("#session-sidebar")
+            for _ in range(3):
+                await pilot.press("ctrl+b")
+                assert sidebar.display is True
+                await pilot.press("ctrl+b")
+                assert sidebar.display is False
+
+    @pytest.mark.asyncio
+    async def test_sidebar_toggle_preserves_layout(self, app):
+        """Bug #19 regression: status bar must keep all children after toggle."""
+        async with app.run_test(size=(120, 40)) as pilot:
+            status_bar = app.query_one("#status-bar")
+            initial_children = len(status_bar.children)
+            assert initial_children > 0
+            # Toggle on then off
+            await pilot.press("ctrl+b")
+            await pilot.press("ctrl+b")
+            assert len(status_bar.children) == initial_children
+            # Chat input must still be accessible
+            assert app.query_one("#chat-input") is not None
+
+    @pytest.mark.asyncio
+    async def test_focus_mode_restores_sidebar(self, app):
+        """Focus mode must restore sidebar visibility when exited."""
+        async with app.run_test(size=(120, 40)) as pilot:
+            sidebar = app.query_one("#session-sidebar")
+            # Open sidebar
+            await pilot.press("ctrl+b")
+            assert sidebar.display is True
+            # Enter focus mode - sidebar hidden
+            await pilot.press("f11")
+            assert sidebar.display is False
+            # Exit focus mode - sidebar restored
+            await pilot.press("f11")
+            assert sidebar.display is True
 
 
 class TestFocusMode:
