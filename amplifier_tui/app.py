@@ -100,6 +100,7 @@ from .commands import (
 from .persistence import (
     AliasStore,
     BookmarkStore,
+    ClipboardStore,
     DraftStore,
     MessagePinStore,
     NoteStore,
@@ -454,6 +455,7 @@ class AmplifierTuiApp(
         self._snippet_store = SnippetStore(_amp_home / "tui-snippets.json")
         self._template_store = TemplateStore(_amp_home / "tui-templates.json")
         self._tag_store = TagStore(_amp_home / "tui-session-tags.json")
+        self._clipboard_store = ClipboardStore(_amp_home / "tui-clipboard-ring.json")
 
     # ── Layout ──────────────────────────────────────────────────
 
@@ -2608,6 +2610,10 @@ class AmplifierTuiApp(
             self._add_system_message("No assistant messages to copy")
             return
         if _copy_to_clipboard(text):
+            try:
+                self._clipboard_store.add(text, source="copy response")
+            except Exception:
+                pass
             preview = self._copy_preview(text)
             self._add_system_message(
                 f"Copied last assistant message ({len(text)} chars)\nPreview: {preview}"
@@ -2882,6 +2888,8 @@ class AmplifierTuiApp(
             "/modes": lambda: self._cmd_mode(""),
             "/tag": lambda: self._cmd_tag(args),
             "/tags": lambda: self._cmd_tag("list-all"),
+            "/clipboard": lambda: self._cmd_clipboard(args),
+            "/clip": lambda: self._cmd_clipboard(args),
         }
 
         handler = handlers.get(cmd)
@@ -2909,6 +2917,8 @@ class AmplifierTuiApp(
             "  /contextwindow Set context window size (/contextwindow 128k, auto)\n"
             "  /info         Show session details (ID, model, project, counts)\n"
             "  /copy         Copy last response | /copy last | /copy N | /copy all | /copy code\n"
+            "  /clipboard    Clipboard ring (/clip N|search|clear)\n"
+            "  /clip         Alias for /clipboard\n"
             "  /bookmark     Bookmark last response (/bm alias) | /bookmark N (toggle Nth from bottom)\n"
             "  /bookmark     list | jump N | remove N | clear | <label>\n"
             "  /bookmarks    List bookmarks | /bookmarks <N> to jump\n"

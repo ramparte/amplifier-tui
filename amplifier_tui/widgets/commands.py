@@ -179,6 +179,10 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/tag list", "Show tags on current session", "/tag list"),
     ("/tags", "List all tags across all sessions", "/tags"),
     ("/cat", "Display file contents in chat", "/cat "),
+    ("/clipboard", "Show clipboard ring history", "/clipboard"),
+    ("/clip", "Clipboard ring (alias)", "/clip"),
+    ("/clip search", "Search clipboard ring", "/clip search "),
+    ("/clip clear", "Clear clipboard ring", "/clip clear"),
     # ── Keyboard-shortcut actions ───────────────────────────────────────────
     ("New Session  Ctrl+N", "Start a new conversation", "action:new_session"),
     ("New Tab  Ctrl+T", "Open a new conversation tab", "action:new_tab"),

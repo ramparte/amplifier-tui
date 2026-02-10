@@ -2,6 +2,7 @@
 
 from .aliases import AliasStore
 from .bookmarks import BookmarkStore
+from .clipboard import ClipboardStore
 from .drafts import DraftStore
 from .notes import NoteStore
 from .pinned_sessions import PinnedSessionStore
@@ -15,6 +16,7 @@ from .templates import TemplateStore
 __all__ = [
     "AliasStore",
     "BookmarkStore",
+    "ClipboardStore",
     "DraftStore",
     "MessagePinStore",
     "NoteStore",

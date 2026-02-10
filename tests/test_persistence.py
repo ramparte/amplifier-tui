@@ -16,6 +16,7 @@ import pytest
 from amplifier_tui.persistence import (
     AliasStore,
     BookmarkStore,
+    ClipboardStore,
     DraftStore,
     MessagePinStore,
     NoteStore,
@@ -628,3 +629,87 @@ class TestTagStore:
         path.write_text("{bad json")
         store = TagStore(path)
         assert store.load() == {}
+
+
+# ---------------------------------------------------------------------------
+# ClipboardStore
+# ---------------------------------------------------------------------------
+
+
+class TestClipboardStore:
+    def test_clipboard_add_and_load(self, tmp_path):
+        store = ClipboardStore(tmp_path / "clip.json")
+        store.add("hello world", source="test")
+        store.add("second entry", source="test2")
+        entries = store.load()
+        assert len(entries) == 2
+        assert entries[0]["content"] == "second entry"
+        assert entries[1]["content"] == "hello world"
+        assert entries[0]["source"] == "test2"
+        assert "timestamp" in entries[0]
+
+    def test_clipboard_max_50(self, tmp_path):
+        store = ClipboardStore(tmp_path / "clip.json")
+        for i in range(55):
+            store.add(f"entry {i}", source="bulk")
+        entries = store.load()
+        assert len(entries) == 50
+        # Newest entry should be first
+        assert entries[0]["content"] == "entry 54"
+
+    def test_clipboard_clear(self, tmp_path):
+        store = ClipboardStore(tmp_path / "clip.json")
+        store.add("one")
+        store.add("two")
+        store.add("three")
+        count = store.clear()
+        assert count == 3
+        assert store.load() == []
+
+    def test_clipboard_search(self, tmp_path):
+        store = ClipboardStore(tmp_path / "clip.json")
+        store.add("hello world", source="a")
+        store.add("goodbye world", source="b")
+        store.add("hello again", source="c")
+        matches = store.search("hello")
+        assert len(matches) == 2
+        # Results are (1-based-index, entry) tuples
+        indices = [idx for idx, _entry in matches]
+        assert 1 in indices  # "hello again" is newest (index 1)
+        assert 3 in indices  # "hello world" is oldest (index 3)
+
+    def test_clipboard_search_case_insensitive(self, tmp_path):
+        store = ClipboardStore(tmp_path / "clip.json")
+        store.add("Hello World")
+        matches = store.search("hello")
+        assert len(matches) == 1
+
+    def test_clipboard_search_no_matches(self, tmp_path):
+        store = ClipboardStore(tmp_path / "clip.json")
+        store.add("hello world")
+        matches = store.search("xyz")
+        assert matches == []
+
+    def test_clipboard_prepend_order(self, tmp_path):
+        store = ClipboardStore(tmp_path / "clip.json")
+        store.add("first")
+        store.add("second")
+        store.add("third")
+        entries = store.load()
+        assert entries[0]["content"] == "third"
+        assert entries[1]["content"] == "second"
+        assert entries[2]["content"] == "first"
+
+    def test_clipboard_load_empty(self, tmp_path):
+        store = ClipboardStore(tmp_path / "clip.json")
+        assert store.load() == []
+
+    def test_clipboard_load_corrupt(self, tmp_path):
+        path = tmp_path / "clip.json"
+        path.write_text("{bad json")
+        store = ClipboardStore(path)
+        assert store.load() == []
+
+    def test_clipboard_default_returns_list(self, tmp_path):
+        store = ClipboardStore(tmp_path / "clip.json")
+        assert store._default() == []

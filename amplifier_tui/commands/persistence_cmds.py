@@ -1090,4 +1090,91 @@ class PersistenceCommandsMixin:
             "Usage: /tag add|remove|list <tag>\n  /tags to see all tags"
         )
 
+    # -- Clipboard Ring -------------------------------------------------
+
+    def _cmd_clipboard(self, text: str) -> None:
+        """Handle /clipboard and /clip commands."""
+        args = text.strip() if text else ""
+
+        # /clipboard or /clip -- show ring
+        if not args:
+            entries = self._clipboard_store.load()
+            if not entries:
+                self._add_system_message(
+                    "Clipboard ring is empty.\n"
+                    "Copies from /copy and Ctrl+Y are saved here automatically."
+                )
+                return
+            lines = [f"Clipboard Ring ({len(entries)} entries):"]
+            for i, entry in enumerate(entries[:20], 1):  # Show max 20
+                preview = entry.get("content", "")[:80]
+                preview = preview.replace("\n", " ")
+                if len(entry.get("content", "")) > 80:
+                    preview += "..."
+                ts = entry.get("timestamp", "")[:16]  # YYYY-MM-DDTHH:MM
+                source = entry.get("source", "")
+                lines.append(f"  {i}. [{ts}] ({source}) {preview}")
+            if len(entries) > 20:
+                lines.append(f"  ... and {len(entries) - 20} more")
+            lines.append("")
+            lines.append("  /clip N to re-copy | /clip search <query> | /clip clear")
+            self._add_system_message("\n".join(lines))
+            return
+
+        # /clip clear
+        if args == "clear":
+            count = self._clipboard_store.clear()
+            self._add_system_message(f"Cleared {count} clipboard entries")
+            return
+
+        # /clip search <query>
+        if args.startswith("search "):
+            query = args[7:].strip()
+            if not query:
+                self._add_system_message("Usage: /clip search <query>")
+                return
+            matches = self._clipboard_store.search(query)
+            if not matches:
+                self._add_system_message(f"No clipboard entries matching '{query}'")
+                return
+            lines = [f"Clipboard matches for '{query}':"]
+            for idx, entry in matches[:10]:
+                preview = entry.get("content", "")[:80].replace("\n", " ")
+                lines.append(f"  {idx}. {preview}")
+            self._add_system_message("\n".join(lines))
+            return
+
+        # /clip N -- re-copy entry N
+        if args.isdigit():
+            n = int(args)
+            entries = self._clipboard_store.load()
+            if n < 1 or n > len(entries):
+                self._add_system_message(
+                    f"Invalid entry number. Range: 1-{len(entries)}"
+                )
+                return
+            content = entries[n - 1].get("content", "")
+            try:
+                from .._utils import _copy_to_clipboard
+
+                if _copy_to_clipboard(content):
+                    preview = content[:60].replace("\n", " ")
+                    self._add_system_message(f"Re-copied entry {n}: {preview}...")
+                else:
+                    self._add_system_message(
+                        "Failed to copy -- no clipboard tool available"
+                        " (install xclip or xsel)"
+                    )
+            except Exception as e:
+                self._add_system_message(f"Copy failed: {e}")
+            return
+
+        self._add_system_message(
+            "Usage: /clip [N|search <query>|clear]\n"
+            "  /clip       Show clipboard ring\n"
+            "  /clip N     Re-copy entry N\n"
+            "  /clip search <q>  Search entries\n"
+            "  /clip clear  Clear all entries"
+        )
+
     # ── Bookmark helpers ──────────────────────────────────────────

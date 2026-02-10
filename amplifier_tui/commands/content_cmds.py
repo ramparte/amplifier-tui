@@ -381,6 +381,10 @@ class ContentCommandsMixin:
                 lines.append("")
             full_text = "\n".join(lines)
             if _copy_to_clipboard(full_text):
+                try:
+                    self._clipboard_store.add(full_text, source="copy all")
+                except Exception:
+                    pass
                 preview = self._copy_preview(full_text)
                 self._add_system_message(
                     f"Copied entire conversation"
@@ -402,6 +406,10 @@ class ContentCommandsMixin:
                 if blocks:
                     code = blocks[-1].strip()
                     if _copy_to_clipboard(code):
+                        try:
+                            self._clipboard_store.add(code, source="copy code")
+                        except Exception:
+                            pass
                         preview = self._copy_preview(code)
                         self._add_system_message(
                             f"Copied code block ({len(code)} chars)\nPreview: {preview}"
@@ -423,6 +431,10 @@ class ContentCommandsMixin:
             if 0 <= idx < total:
                 role, msg_text, _widget = self._search_messages[idx]
                 if _copy_to_clipboard(msg_text):
+                    try:
+                        self._clipboard_store.add(msg_text, source=f"copy #{arg}")
+                    except Exception:
+                        pass
                     preview = self._copy_preview(msg_text)
                     self._add_system_message(
                         f"Copied message #{arg} [{role}]"
