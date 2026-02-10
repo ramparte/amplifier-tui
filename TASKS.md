@@ -16,6 +16,7 @@
 - Add `[tool.coverage.run]` with `source = ["amplifier_tui"]`
 - Add `[tool.coverage.report]` with `fail_under = 25` (realistic starting floor)
 - Run once, record the baseline number in this file
+- **Baseline**: 26.77% (925 tests, recorded 2026-02-10)
 - **Acceptance**: `pytest` output includes coverage report; CI-ready config exists
 
 ### TUI-002: Replace test_commands.py with real behavioral tests

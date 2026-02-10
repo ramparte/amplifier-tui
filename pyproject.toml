@@ -24,5 +24,17 @@ capture = [
 [project.scripts]
 amplifier-tui = "amplifier_tui.__main__:main"
 
+[project.optional-dependencies.dev]
+pytest-cov = ">=7.0"
+
+[tool.pytest.ini_options]
+addopts = "--cov=amplifier_tui --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["amplifier_tui"]
+
+[tool.coverage.report]
+fail_under = 25
+
 [tool.uv]
 package = true
