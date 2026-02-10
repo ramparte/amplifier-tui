@@ -146,6 +146,37 @@ Screen {
     width: 2fr;
 }
 
+/* -- Embedded Terminal Panel --------------------------- */
+
+#terminal-panel {
+    display: none;
+    height: 12;
+    border-top: solid $primary;
+    background: $surface;
+}
+
+#terminal-panel.visible {
+    display: block;
+}
+
+#terminal-panel Terminal {
+    width: 100%;
+    height: 1fr;
+}
+
+#terminal-panel .terminal-header {
+    width: 100%;
+    height: 1;
+    background: $primary-background;
+    color: $text-muted;
+    padding: 0 1;
+    text-style: bold;
+}
+
+#terminal-panel.terminal-large {
+    height: 24;
+}
+
 /* -- Chat View ---------------------------------------- */
 
 .tab-chat-view {

@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Proof of concept: Textual TUI for Amplifier"
 requires-python = ">=3.10"
 dependencies = [
+    "pyte>=0.8.2",
     "textual>=0.47.0",
 ]
 

@@ -21,6 +21,7 @@ from .replay_cmds import ReplayCommandsMixin
 from .plugin_cmds import PluginCommandsMixin
 from .dashboard_cmds import DashboardCommandsMixin
 from .shell_cmds import ShellCommandsMixin
+from .terminal_cmds import TerminalCommandsMixin
 
 __all__ = [
     "AgentCommandsMixin",
@@ -44,4 +45,5 @@ __all__ = [
     "PluginCommandsMixin",
     "DashboardCommandsMixin",
     "ShellCommandsMixin",
+    "TerminalCommandsMixin",
 ]
