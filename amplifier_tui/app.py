@@ -2949,7 +2949,8 @@ class AmplifierTuiApp(
             "  /search       Search across all sessions | /search here <q> for current chat\n"
             "  /search open  Open result N from last search (/search open 3)\n"
             "  /grep         Search with options (/grep <pattern>, /grep -c <pattern> for case-sensitive)\n"
-            "  /diff         Show git diff (/diff staged|all|last|<file>|<f1> <f2>|HEAD~N)\n"
+            "  /diff         Show git diff (/diff staged|all|<file>|<f1> <f2>|HEAD~N)\n"
+            "  /diff last    Re-show the most recent inline file-edit diff\n"
             "  /diff msgs    Compare assistant messages (/diff msgs, /diff msgs N M)\n"
             "  /git          Quick git operations (/git status|log|diff|branch|stash|blame)\n"
             "  /watch        Watch files for changes (/watch <path>, stop, diff)\n"
@@ -4862,6 +4863,23 @@ class AmplifierTuiApp(
         self._tool_usage[tool_name] = self._tool_usage.get(tool_name, 0) + 1
         chat_view = self._active_chat_view()
 
+        # --- Inline diff for file-edit tools ---
+        if tool_name in ("edit_file", "write_file") and isinstance(tool_input, dict):
+            rendered = self._render_file_edit_diff(tool_name, tool_input)
+            if rendered is not None:
+                title, diff_text = rendered
+                inner = Static(diff_text, markup=True, classes="tool-detail tool-diff")
+                collapsible = Collapsible(
+                    inner,
+                    title=title,
+                    collapsed=True,
+                )
+                collapsible.add_class("tool-use")
+                chat_view.mount(collapsible)
+                self._style_tool(collapsible, inner)
+                self._scroll_if_auto(collapsible)
+                return
+
         detail_parts: list[str] = []
         if tool_input:
             input_str = (
@@ -4889,6 +4907,43 @@ class AmplifierTuiApp(
         chat_view.mount(collapsible)
         self._style_tool(collapsible, inner)
         self._scroll_if_auto(collapsible)
+
+    def _render_file_edit_diff(
+        self, tool_name: str, tool_input: dict
+    ) -> tuple[str, str] | None:
+        """Build an inline diff for edit_file / write_file.
+
+        Returns ``(title, rich_markup_text)`` or *None* if the input
+        doesn't contain the expected keys.
+        """
+        from .features.diff_view import (
+            diff_summary,
+            format_edit_diff,
+            format_new_file_diff,
+            new_file_summary,
+        )
+
+        file_path = tool_input.get("file_path", "")
+        if not file_path:
+            return None
+
+        if tool_name == "edit_file":
+            old = tool_input.get("old_string")
+            new = tool_input.get("new_string")
+            if old is None or new is None:
+                return None
+            diff_text = format_edit_diff(file_path, old, new)
+            title = f"\u25b6 {diff_summary(file_path, old, new)}"
+        else:  # write_file
+            content = tool_input.get("content")
+            if content is None:
+                return None
+            diff_text = format_new_file_diff(file_path, content)
+            title = f"\u25b6 {new_file_summary(file_path, content)}"
+
+        # Store for /diff last
+        self._last_file_edit_diff = (title, diff_text)  # type: ignore[attr-defined]
+        return title, diff_text
 
     def _show_error(self, error_text: str) -> None:
         chat_view = self._active_chat_view()

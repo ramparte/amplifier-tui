@@ -81,6 +81,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/grep", "Search chat with regex", "/grep"),
     ("/find", "Interactive find-in-chat (Ctrl+F)", "/find"),
     ("/diff", "Show git diff (staged, all, file)", "/diff"),
+    ("/diff last", "Re-show last inline file-edit diff", "/diff last"),
     ("/diff msgs", "Compare assistant messages (last two, or N M)", "/diff msgs"),
     ("/git", "Quick git info (status, log, diff, branch, stash, blame)", "/git"),
     ("/watch", "Watch files for changes", "/watch"),

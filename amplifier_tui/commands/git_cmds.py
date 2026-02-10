@@ -193,7 +193,7 @@ class GitCommandsMixin:
         /diff              Unstaged changes (or file summary when clean)
         /diff staged       Staged changes
         /diff all          All unstaged (+ staged fallback)
-        /diff last         Changes in last commit
+        /diff last         Re-show last file-edit diff from tool calls
         /diff <file>       Diff for one file (tries staged too)
         /diff <f1> <f2>    Compare two files
         /diff HEAD~N       Changes since N commits ago
@@ -261,19 +261,17 @@ class GitCommandsMixin:
             self._add_system_message(_show_diff_text(output))
             return
 
-        # --- /diff last ---
+        # --- /diff last  (most recent file-edit diff from tool calls) ---
         if text == "last":
-            ok, output = self._run_git("diff", "HEAD~1", "HEAD", "--color=never")
-            if not ok:
-                self._add_system_message(f"git error: {output}")
-                return
-            if not output:
-                self._add_system_message("No changes in last commit")
-                return
-            # Prepend the commit summary line when available
-            ok2, msg = self._run_git("log", "-1", "--oneline")
-            header = f"Last commit: {msg}\n\n" if ok2 and msg else ""
-            self._add_system_message(_show_diff_text(output, header=header))
+            last_diff = getattr(self, "_last_file_edit_diff", None)
+            if last_diff is not None:
+                _title, diff_text = last_diff
+                self._add_system_message(diff_text)
+            else:
+                self._add_system_message(
+                    "No file-edit diffs in this session.\n"
+                    "Use /diff HEAD~1 for the last git commit diff."
+                )
             return
 
         # --- /diff <file1> <file2> (two paths) ---

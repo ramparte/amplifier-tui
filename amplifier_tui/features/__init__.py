@@ -28,6 +28,12 @@ from .export import (
     md_to_html,
 )
 from .file_watch import FileWatcher
+from .diff_view import (
+    diff_summary,
+    format_edit_diff,
+    format_new_file_diff,
+    new_file_summary,
+)
 from .git_integration import (
     colorize_diff,
     looks_like_commit_ref,
@@ -41,6 +47,11 @@ from .notifications import (
 from .reverse_search import ReverseSearchManager
 
 __all__ = [
+    # diff_view
+    "format_edit_diff",
+    "format_new_file_diff",
+    "diff_summary",
+    "new_file_summary",
     # git
     "run_git",
     "looks_like_commit_ref",

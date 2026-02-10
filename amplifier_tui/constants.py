@@ -97,6 +97,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/templates",
     "/title",
     "/diff",
+    "/diff last",
     "/git",
     "/ref",
     "/refs",
