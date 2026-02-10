@@ -103,9 +103,11 @@ from .commands import (
 from .commands.branch_cmds import BranchCommandsMixin
 from .commands.compare_cmds import CompareCommandsMixin
 from .commands.replay_cmds import ReplayCommandsMixin
+from .commands.plugin_cmds import PluginCommandsMixin
 from .features.agent_tracker import AgentTracker, is_delegate_tool, make_delegate_key
 from .features.tool_log import ToolLog
 from .features.recipe_tracker import RecipeTracker
+from .features.plugin_loader import PluginLoader
 from .features.branch_manager import BranchManager
 from .features.compare_manager import CompareManager
 from .features.replay_engine import ReplayEngine
@@ -133,6 +135,7 @@ class AmplifierTuiApp(
     ReplayCommandsMixin,
     CompareCommandsMixin,
     BranchCommandsMixin,
+    PluginCommandsMixin,
     AgentCommandsMixin,
     ToolCommandsMixin,
     RecipeCommandsMixin,
@@ -495,6 +498,10 @@ class AmplifierTuiApp(
 
         # Session replay engine (/replay command)
         self._replay_engine = ReplayEngine()
+
+        # Plugin system (/plugins command)
+        self._plugin_loader = PluginLoader()
+        self._plugin_loader.load_all()
 
         # Context window profiler history (/context history)
         from .features.context_profiler import ContextHistory
@@ -2940,11 +2947,14 @@ class AmplifierTuiApp(
             "/recipe": lambda: self._cmd_recipe(args),
             "/compare": lambda: self._cmd_compare(args),
             "/replay": lambda: self._cmd_replay(args),
+            "/plugins": lambda: self._cmd_plugins(args),
         }
 
         handler = handlers.get(cmd)
         if handler:
             handler()
+        elif self._plugin_loader.execute_command(cmd.lstrip("/"), self, args):
+            pass  # Plugin command handled
         else:
             self._add_system_message(
                 f"Unknown command: {cmd}\nType /help for available commands."
@@ -3047,6 +3057,7 @@ class AmplifierTuiApp(
             "  /recipe       Recipe pipeline view (/recipe status|history|clear)\n"
             "  /compare      Model A/B testing (/compare <a> <b>, off, pick, status, history)\n"
             "  /replay       Session replay (/replay [id], pause, resume, skip, stop, speed, timeline)\n"
+            "  /plugins      List loaded plugins (/plugins reload, /plugins help)\n"
             "  /system       Set/view system prompt (/system <text>, clear, presets, use <preset>, append)\n"
             "  /keys         Keyboard shortcut overlay\n"
             "  /palette      Command palette (Ctrl+P) – fuzzy search all commands\n"

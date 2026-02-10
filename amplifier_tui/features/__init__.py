@@ -67,6 +67,7 @@ from .recipe_tracker import RecipeStep, RecipeRun, RecipeTracker
 from .branch_manager import BranchManager, ConversationBranch
 from .compare_manager import CompareManager, ComparisonResult
 from .replay_engine import ReplayEngine, ReplayMessage, ReplayState
+from .plugin_loader import PluginLoader, LoadedPlugin
 
 __all__ = [
     # diff_view
@@ -130,4 +131,7 @@ __all__ = [
     "ReplayEngine",
     "ReplayMessage",
     "ReplayState",
+    # plugin loader
+    "PluginLoader",
+    "LoadedPlugin",
 ]

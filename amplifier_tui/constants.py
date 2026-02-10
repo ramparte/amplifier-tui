@@ -169,6 +169,9 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/replay status",
     "/replay timeline",
     "/replay clear",
+    "/plugins",
+    "/plugins reload",
+    "/plugins help",
 )
 
 # -- Amplifier mode definitions ------------------------------------------------

@@ -18,6 +18,7 @@ from .recipe_cmds import RecipeCommandsMixin
 from .branch_cmds import BranchCommandsMixin
 from .compare_cmds import CompareCommandsMixin
 from .replay_cmds import ReplayCommandsMixin
+from .plugin_cmds import PluginCommandsMixin
 
 __all__ = [
     "AgentCommandsMixin",
@@ -38,4 +39,5 @@ __all__ = [
     "BranchCommandsMixin",
     "CompareCommandsMixin",
     "ReplayCommandsMixin",
+    "PluginCommandsMixin",
 ]

@@ -235,6 +235,10 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
         "/replay timeline",
     ),
     ("/replay clear", "Clear replay state", "/replay clear"),
+    # ── Plugin commands ─────────────────────────────────────────────────────
+    ("/plugins", "List loaded plugins", "/plugins"),
+    ("/plugins reload", "Hot-reload all plugins", "/plugins reload"),
+    ("/plugins help", "Plugin authoring guide", "/plugins help"),
     # ── Keyboard-shortcut actions ───────────────────────────────────────────
     ("New Session  Ctrl+N", "Start a new conversation", "action:new_session"),
     ("New Tab  Ctrl+T", "Open a new conversation tab", "action:new_tab"),
