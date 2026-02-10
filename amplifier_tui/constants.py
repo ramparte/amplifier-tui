@@ -130,6 +130,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/tags",
     "/clipboard",
     "/clip",
+    "/agents",
 )
 
 # -- Amplifier mode definitions ------------------------------------------------

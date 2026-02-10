@@ -1,5 +1,6 @@
 """Command handler mixins for AmplifierTuiApp."""
 
+from .agent_cmds import AgentCommandsMixin
 from .session_cmds import SessionCommandsMixin
 from .display_cmds import DisplayCommandsMixin
 from .content_cmds import ContentCommandsMixin
@@ -14,6 +15,7 @@ from .split_cmds import SplitCommandsMixin
 from .watch_cmds import WatchCommandsMixin
 
 __all__ = [
+    "AgentCommandsMixin",
     "SessionCommandsMixin",
     "DisplayCommandsMixin",
     "ContentCommandsMixin",

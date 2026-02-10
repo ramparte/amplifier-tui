@@ -84,6 +84,7 @@ from .widgets import (
 )
 
 from .commands import (
+    AgentCommandsMixin,
     SessionCommandsMixin,
     DisplayCommandsMixin,
     ContentCommandsMixin,
@@ -97,6 +98,7 @@ from .commands import (
     SplitCommandsMixin,
     WatchCommandsMixin,
 )
+from .features.agent_tracker import AgentTracker, is_delegate_tool, make_delegate_key
 from .persistence import (
     AliasStore,
     BookmarkStore,
@@ -118,6 +120,7 @@ _amp_home = amplifier_home()
 
 
 class AmplifierTuiApp(
+    AgentCommandsMixin,
     SessionCommandsMixin,
     DisplayCommandsMixin,
     ContentCommandsMixin,
@@ -456,6 +459,9 @@ class AmplifierTuiApp(
         self._template_store = TemplateStore(_amp_home / "tui-templates.json")
         self._tag_store = TagStore(_amp_home / "tui-session-tags.json")
         self._clipboard_store = ClipboardStore(_amp_home / "tui-clipboard-ring.json")
+
+        # Agent delegation tracking (/agents command)
+        self._agent_tracker = AgentTracker()
 
     # ── Layout ──────────────────────────────────────────────────
 
@@ -2890,6 +2896,7 @@ class AmplifierTuiApp(
             "/tags": lambda: self._cmd_tag("list-all"),
             "/clipboard": lambda: self._cmd_clipboard(args),
             "/clip": lambda: self._cmd_clipboard(args),
+            "/agents": lambda: self._cmd_agents(args),
         }
 
         handler = handlers.get(cmd)
@@ -2988,6 +2995,7 @@ class AmplifierTuiApp(
             "  /attach       Attach file(s) to next message (/attach *.py, clear, remove N)\n"
             "  /cat          Display file contents in chat (/cat src/main.py)\n"
             "  /autosave     Auto-save status, toggle, force save, restore (/autosave on|off|now|restore)\n"
+            "  /agents       Show agent delegation tree (/agents history, /agents clear)\n"
             "  /system       Set/view system prompt (/system <text>, clear, presets, use <preset>, append)\n"
             "  /keys         Keyboard shortcut overlay\n"
             "  /palette      Command palette (Ctrl+P) – fuzzy search all commands\n"
@@ -5498,6 +5506,15 @@ class AmplifierTuiApp(
 
         def on_tool_start(name: str, tool_input: dict) -> None:
             self._tool_count_this_turn += 1
+            # Track agent delegations
+            if is_delegate_tool(name) and isinstance(tool_input, dict):
+                key = make_delegate_key(tool_input)
+                if key:
+                    self._agent_tracker.on_delegate_start(
+                        tool_use_id=key,
+                        agent=tool_input.get("agent", ""),
+                        instruction=tool_input.get("instruction", ""),
+                    )
             if self._prefs.display.progress_labels:
                 label = _get_tool_label(name, tool_input)
                 bare = label.rstrip(".")
@@ -5515,6 +5532,16 @@ class AmplifierTuiApp(
             self.call_from_thread(self._update_status, label)
 
         def on_tool_end(name: str, tool_input: dict, result: str) -> None:
+            # Complete agent delegation tracking
+            if is_delegate_tool(name) and isinstance(tool_input, dict):
+                key = make_delegate_key(tool_input)
+                if key:
+                    status = "failed" if result.startswith("Error") else "completed"
+                    self._agent_tracker.on_delegate_complete(
+                        tool_use_id=key,
+                        result=result,
+                        status=status,
+                    )
             self._processing_label = "Thinking"
             self._status_activity_label = "Thinking..."
             self.call_from_thread(self._add_tool_use, name, tool_input, result)

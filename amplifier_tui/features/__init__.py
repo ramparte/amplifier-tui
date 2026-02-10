@@ -45,6 +45,7 @@ from .notifications import (
     send_terminal_notification,
 )
 from .reverse_search import ReverseSearchManager
+from .agent_tracker import AgentTracker, AgentNode, is_delegate_tool, make_delegate_key
 
 __all__ = [
     # diff_view
@@ -71,4 +72,8 @@ __all__ = [
     # stateful managers
     "FileWatcher",
     "ReverseSearchManager",
+    "AgentTracker",
+    "AgentNode",
+    "is_delegate_tool",
+    "make_delegate_key",
 ]

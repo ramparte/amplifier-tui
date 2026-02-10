@@ -184,6 +184,9 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/clip", "Clipboard ring (alias)", "/clip"),
     ("/clip search", "Search clipboard ring", "/clip search "),
     ("/clip clear", "Clear clipboard ring", "/clip clear"),
+    ("/agents", "Show agent delegation tree", "/agents"),
+    ("/agents history", "Show past agent delegations", "/agents history"),
+    ("/agents clear", "Clear agent delegation history", "/agents clear"),
     # ── Keyboard-shortcut actions ───────────────────────────────────────────
     ("New Session  Ctrl+N", "Start a new conversation", "action:new_session"),
     ("New Tab  Ctrl+T", "Open a new conversation tab", "action:new_tab"),
