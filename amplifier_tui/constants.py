@@ -172,6 +172,12 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/plugins",
     "/plugins reload",
     "/plugins help",
+    "/dashboard",
+    "/dashboard refresh",
+    "/dashboard export",
+    "/dashboard heatmap",
+    "/dashboard summary",
+    "/dashboard clear",
 )
 
 # -- Amplifier mode definitions ------------------------------------------------

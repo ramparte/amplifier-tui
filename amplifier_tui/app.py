@@ -104,6 +104,7 @@ from .commands.branch_cmds import BranchCommandsMixin
 from .commands.compare_cmds import CompareCommandsMixin
 from .commands.replay_cmds import ReplayCommandsMixin
 from .commands.plugin_cmds import PluginCommandsMixin
+from .commands.dashboard_cmds import DashboardCommandsMixin
 from .features.agent_tracker import AgentTracker, is_delegate_tool, make_delegate_key
 from .features.tool_log import ToolLog
 from .features.recipe_tracker import RecipeTracker
@@ -111,6 +112,7 @@ from .features.plugin_loader import PluginLoader
 from .features.branch_manager import BranchManager
 from .features.compare_manager import CompareManager
 from .features.replay_engine import ReplayEngine
+from .features.dashboard_stats import DashboardStats
 from .persistence import (
     AliasStore,
     BookmarkStore,
@@ -132,6 +134,7 @@ _amp_home = amplifier_home()
 
 
 class AmplifierTuiApp(
+    DashboardCommandsMixin,
     ReplayCommandsMixin,
     CompareCommandsMixin,
     BranchCommandsMixin,
@@ -507,6 +510,9 @@ class AmplifierTuiApp(
         from .features.context_profiler import ContextHistory
 
         self._context_history = ContextHistory()
+
+        # Session dashboard stats (/dashboard command)
+        self._dashboard_stats = DashboardStats()
 
     # ── Layout ──────────────────────────────────────────────────
 
@@ -2948,6 +2954,7 @@ class AmplifierTuiApp(
             "/compare": lambda: self._cmd_compare(args),
             "/replay": lambda: self._cmd_replay(args),
             "/plugins": lambda: self._cmd_plugins(args),
+            "/dashboard": lambda: self._cmd_dashboard(args),
         }
 
         handler = handlers.get(cmd)
@@ -3058,6 +3065,7 @@ class AmplifierTuiApp(
             "  /compare      Model A/B testing (/compare <a> <b>, off, pick, status, history)\n"
             "  /replay       Session replay (/replay [id], pause, resume, skip, stop, speed, timeline)\n"
             "  /plugins      List loaded plugins (/plugins reload, /plugins help)\n"
+            "  /dashboard    Session heatmap dashboard (/dashboard refresh|export|heatmap|summary|clear)\n"
             "  /system       Set/view system prompt (/system <text>, clear, presets, use <preset>, append)\n"
             "  /keys         Keyboard shortcut overlay\n"
             "  /palette      Command palette (Ctrl+P) – fuzzy search all commands\n"

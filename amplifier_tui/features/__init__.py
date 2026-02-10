@@ -68,6 +68,7 @@ from .branch_manager import BranchManager, ConversationBranch
 from .compare_manager import CompareManager, ComparisonResult
 from .replay_engine import ReplayEngine, ReplayMessage, ReplayState
 from .plugin_loader import PluginLoader, LoadedPlugin
+from .dashboard_stats import DashboardStats, DashboardData, SessionRecord
 
 __all__ = [
     # diff_view
@@ -134,4 +135,8 @@ __all__ = [
     # plugin loader
     "PluginLoader",
     "LoadedPlugin",
+    # dashboard stats
+    "DashboardStats",
+    "DashboardData",
+    "SessionRecord",
 ]
