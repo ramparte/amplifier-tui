@@ -15,7 +15,20 @@ from .bars import SuggestionBar
 
 
 class ChatInput(TextArea):
-    """TextArea where Enter submits, Shift+Enter/Ctrl+J inserts a newline."""
+    """Chat input with smart Enter key behavior.
+
+    Key dispatch (three modes):
+
+    Slash commands (text starts with ``/``):
+        Enter → submit, Ctrl+J / Shift+Enter / Ctrl+Enter → literal newline.
+        This ensures /help, /tabs etc. always work with a plain Enter.
+
+    Multiline mode (``_multiline_mode=True``, no leading ``/``):
+        Enter → newline, Ctrl+J / Shift+Enter / Ctrl+Enter → submit.
+
+    Normal mode (``_multiline_mode=False``, no leading ``/``):
+        Enter → submit, Ctrl+J / Shift+Enter / Ctrl+Enter → newline.
+    """
 
     class Submitted(TextArea.Changed):
         """Fired when the user presses Enter."""
@@ -537,9 +550,34 @@ class ChatInput(TextArea):
                 event.stop()
                 return
 
-        if self._multiline_mode:
-            # Multiline mode: Enter = newline, Ctrl+J / Shift+Enter = send
-            if event.key == "ctrl+j" or event.key == "shift+enter":
+        # Keys that always mean "send" regardless of mode
+        _submit_keys = {"ctrl+j", "shift+enter", "ctrl+enter"}
+        # Keys that always mean "newline" regardless of mode
+        _newline_keys = {"shift+enter", "ctrl+enter"}
+
+        # Slash commands: Enter always submits, alt keys always insert newline.
+        # This reverses multiline-mode behavior for commands so /help, /tabs etc.
+        # work naturally regardless of the multiline preference.
+        _text_starts_with_slash = self.text.lstrip().startswith("/")
+
+        if _text_starts_with_slash:
+            # Slash command mode: Enter = send, Ctrl+J / Shift+Enter / Ctrl+Enter = literal newline
+            if event.key in _submit_keys:
+                event.prevent_default()
+                event.stop()
+                self._reset_tab_state()
+                self.insert("\n")
+                self._update_line_indicator()
+                return
+            elif event.key == "enter":
+                event.prevent_default()
+                event.stop()
+                self._reset_tab_state()
+                self.post_message(self.Submitted(text_area=self))
+                return
+        elif self._multiline_mode:
+            # Multiline mode: Enter = newline, Ctrl+J / Shift+Enter / Ctrl+Enter = send
+            if event.key in _submit_keys:
                 event.prevent_default()
                 event.stop()
                 self._reset_tab_state()
@@ -553,8 +591,8 @@ class ChatInput(TextArea):
                 self._update_line_indicator()
                 return
         else:
-            # Normal mode: Enter = send, Shift+Enter / Ctrl+J = newline
-            if event.key == "shift+enter":
+            # Normal mode: Enter = send, Shift+Enter / Ctrl+J / Ctrl+Enter = newline
+            if event.key in _submit_keys:
                 event.prevent_default()
                 event.stop()
                 self._reset_tab_state()
