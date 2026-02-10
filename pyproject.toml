@@ -16,6 +16,9 @@ capture = [
     "textual-capture @ git+https://github.com/ramparte/textual-capture.git",
     "cairosvg>=2.7.0",
 ]
+dev = [
+    "pytest-cov>=7.0",
+]
 
 # Note: Amplifier dependencies are expected to be installed globally
 # via: uv tool install git+https://github.com/microsoft/amplifier
@@ -24,8 +27,8 @@ capture = [
 [project.scripts]
 amplifier-tui = "amplifier_tui.__main__:main"
 
-[project.optional-dependencies.dev]
-pytest-cov = ">=7.0"
+[tool.setuptools]
+packages = ["amplifier_tui", "amplifier_tui.commands", "amplifier_tui.features", "amplifier_tui.widgets"]
 
 [tool.pytest.ini_options]
 addopts = "--cov=amplifier_tui --cov-report=term-missing"

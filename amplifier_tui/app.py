@@ -105,6 +105,7 @@ from .commands.compare_cmds import CompareCommandsMixin
 from .commands.replay_cmds import ReplayCommandsMixin
 from .commands.plugin_cmds import PluginCommandsMixin
 from .commands.dashboard_cmds import DashboardCommandsMixin
+from .commands.shell_cmds import ShellCommandsMixin
 from .features.agent_tracker import AgentTracker, is_delegate_tool, make_delegate_key
 from .features.tool_log import ToolLog
 from .features.recipe_tracker import RecipeTracker
@@ -134,6 +135,7 @@ _amp_home = amplifier_home()
 
 
 class AmplifierTuiApp(
+    ShellCommandsMixin,
     DashboardCommandsMixin,
     ReplayCommandsMixin,
     CompareCommandsMixin,
@@ -2927,6 +2929,7 @@ class AmplifierTuiApp(
             "/palette": self.action_command_palette,
             "/commands": self.action_command_palette,
             "/run": lambda: self._cmd_run(args),
+            "/shell": lambda: self._cmd_shell(args),
             "/include": lambda: self._cmd_include(args),
             "/autosave": lambda: self._cmd_autosave(args),
             "/system": lambda: self._cmd_system(args),
@@ -3050,6 +3053,7 @@ class AmplifierTuiApp(
             "  /branch       Alias for /fork\n"
             "  /run          Run shell command inline (/run ls -la, /run git status)\n"
             "  /!            Shorthand for /run (/! git diff)\n"
+            "  /shell        Drop to interactive shell (type 'exit' to return)\n"
             "  /include      Include file contents (/include src/main.py, /include *.py --send)\n"
             "  /include tree Project directory tree (respects .gitignore)\n"
             "  /include git  Git status + recent diff summary\n"

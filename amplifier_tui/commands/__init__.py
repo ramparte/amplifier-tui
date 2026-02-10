@@ -20,6 +20,7 @@ from .compare_cmds import CompareCommandsMixin
 from .replay_cmds import ReplayCommandsMixin
 from .plugin_cmds import PluginCommandsMixin
 from .dashboard_cmds import DashboardCommandsMixin
+from .shell_cmds import ShellCommandsMixin
 
 __all__ = [
     "AgentCommandsMixin",
@@ -42,4 +43,5 @@ __all__ = [
     "ReplayCommandsMixin",
     "PluginCommandsMixin",
     "DashboardCommandsMixin",
+    "ShellCommandsMixin",
 ]

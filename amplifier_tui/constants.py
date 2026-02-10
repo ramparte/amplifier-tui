@@ -113,6 +113,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/palette",
     "/commands",
     "/run",
+    "/shell",
     "/include",
     "/include tree",
     "/include git",
