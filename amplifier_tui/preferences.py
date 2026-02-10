@@ -564,6 +564,13 @@ def load_preferences(path: Path | None = None) -> Preferences:
                     )
                 if "progress_labels" in ddata:
                     prefs.display.progress_labels = bool(ddata["progress_labels"])
+                if "editor_auto_send" in ddata:
+                    prefs.display.editor_auto_send = bool(ddata["editor_auto_send"])
+                if "fold_threshold" in ddata:
+                    val = ddata["fold_threshold"]
+                    prefs.display.fold_threshold = int(val) if val is not None else 20
+                if "show_suggestions" in ddata:
+                    prefs.display.show_suggestions = bool(ddata["show_suggestions"])
             if isinstance(data.get("model"), dict):
                 mdata = data["model"]
                 if "preferred" in mdata:
