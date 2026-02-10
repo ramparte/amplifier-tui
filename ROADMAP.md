@@ -1,56 +1,56 @@
 # Amplifier TUI - Feature Roadmap
 
-## Phase 1: Core Session Management ⭐ (START HERE)
-- [ ] Start a new Amplifier session
-- [ ] Resume an existing session (by ID or "most recent")
-- [ ] Display session messages from transcript
-- [ ] Send user input to session
-- [ ] Stream assistant responses in real-time
-- [ ] Show session ID in UI
+## Phase 1: Core Session Management
+- [x] Start a new Amplifier session
+- [x] Resume an existing session (by ID or "most recent")
+- [x] Display session messages from transcript
+- [x] Send user input to session
+- [x] Stream assistant responses in real-time
+- [x] Show session ID in UI
 
 ## Phase 2: Tool Rendering
-- [ ] Detect tool uses in streaming response
-- [ ] Render tool calls as collapsible blocks (gray border)
-- [ ] Show tool name and summary when collapsed
-- [ ] Expand tool blocks to see input/output
-- [ ] Show tool execution state (pending/running/complete/error)
+- [x] Detect tool uses in streaming response
+- [x] Render tool calls as collapsible blocks (gray border)
+- [x] Show tool name and summary when collapsed
+- [x] Expand tool blocks to see input/output
+- [x] Show tool execution state (pending/running/complete/error)
 
 ## Phase 3: Multi-Session Support
-- [ ] List available sessions in sidebar
-- [ ] Switch between sessions
-- [ ] Show session status (active/idle)
-- [ ] Start new session in background
-- [ ] Close sessions
+- [x] List available sessions in sidebar
+- [x] Switch between sessions
+- [x] Show session status (active/idle)
+- [x] Start new session in background
+- [x] Close sessions
 
 ## Phase 4: Amplifier-Specific Features
-- [ ] Show active bundle name
+- [x] Show active bundle name
 - [ ] Bundle switcher UI
-- [ ] Mode indicator (e.g., "planning mode" badge)
-- [ ] Mode toggle command
-- [ ] Sub-session tree view (show delegate hierarchy)
+- [x] Mode indicator (e.g., "planning mode" badge)
+- [x] Mode toggle command
+- [x] Sub-session tree view (show delegate hierarchy)
 
 ## Phase 5: Visual Polish
-- [ ] Thinking/working indicator while agent responds
-- [ ] Status footer (session info, token count)
-- [ ] Keyboard shortcuts (Ctrl+N new session, Ctrl+W close)
-- [ ] Command palette (`/` commands)
-- [ ] Session search/filter
+- [x] Thinking/working indicator while agent responds
+- [x] Status footer (session info, token count)
+- [x] Keyboard shortcuts (Ctrl+N new session, Ctrl+W close)
+- [x] Command palette (`/` commands)
+- [x] Session search/filter
 
 ## Phase 6: Advanced Features
-- [ ] Diff viewer for file changes (from tool calls)
-- [ ] Recipe execution panel
-- [ ] Hook event log viewer
-- [ ] Session history browser
-- [ ] Export session to markdown
+- [x] Diff viewer for file changes (from tool calls)
+- [x] Recipe execution panel
+- [x] Hook event log viewer (tool log)
+- [x] Session history browser
+- [x] Export session to markdown
 
 ## Phase 7: Git Integration
-- [ ] Git status in footer
-- [ ] Worktree management (if we want this)
-- [ ] Commit helper
+- [x] Git status in footer
+- [ ] Worktree management
+- [x] Commit helper
 
 ## Nice-to-Have
 - [ ] Image attachment support
-- [ ] Syntax highlighting in code blocks
-- [ ] Copy message to clipboard
-- [ ] Session bookmarks/favorites
-- [ ] Custom themes
+- [x] Syntax highlighting in code blocks
+- [x] Copy message to clipboard
+- [x] Session bookmarks/favorites
+- [x] Custom themes
