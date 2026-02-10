@@ -684,7 +684,7 @@ class AmplifierTuiApp(
         try:
             self.session_manager = SessionManager()
             self._amplifier_ready = True
-        except Exception:
+        except (ImportError, OSError):
             logger.debug(
                 "Failed to initialize Amplifier session manager", exc_info=True
             )
@@ -1330,7 +1330,7 @@ class AmplifierTuiApp(
 
             self._purge_old_drafts(drafts)
             self._draft_store.save_all(drafts)
-        except Exception:
+        except (OSError, KeyError):
             logger.debug("failed to save draft", exc_info=True)
 
     def _restore_draft(self) -> None:
@@ -1350,7 +1350,7 @@ class AmplifierTuiApp(
                 input_widget.insert(draft_text)
                 self._last_saved_draft = draft_text
                 self._add_system_message(f"Draft restored ({len(draft_text)} chars)")
-        except Exception:
+        except (OSError, KeyError):
             logger.debug("failed to restore draft", exc_info=True)
 
     def _clear_draft(self) -> None:
@@ -1361,7 +1361,7 @@ class AmplifierTuiApp(
                 return
             self._draft_store.remove(session_id)
             self._last_saved_draft = ""
-        except Exception:
+        except (OSError, KeyError):
             logger.debug("failed to clear draft", exc_info=True)
 
     def _auto_save_draft(self) -> None:
@@ -1380,7 +1380,7 @@ class AmplifierTuiApp(
                     self._save_draft()
                     if current.strip():
                         self.notify("Draft saved", timeout=1.5, severity="information")
-        except Exception:
+        except (OSError, KeyError):
             logger.debug("failed to auto-save draft", exc_info=True)
 
     def _purge_old_drafts(self, drafts: dict) -> None:
@@ -1410,7 +1410,7 @@ class AmplifierTuiApp(
                 )
                 for sid, _ in by_ts[: len(drafts) - 50]:
                     del drafts[sid]
-        except Exception:
+        except (OSError, KeyError):
             logger.debug("failed to purge old drafts", exc_info=True)
 
     # ── Session auto-save ───────────────────────────────────────────────────
@@ -1465,7 +1465,7 @@ class AmplifierTuiApp(
 
             # Rotate old auto-saves for this tab
             self._rotate_autosaves(tab_id)
-        except Exception:
+        except OSError:
             logger.debug("auto-save failed", exc_info=True)
 
     def _rotate_autosaves(self, tab_id: str) -> None:
@@ -1498,7 +1498,7 @@ class AmplifierTuiApp(
                     f"Auto-save found ({age_minutes:.0f} min ago). "
                     "Use /autosave restore to recover."
                 )
-        except Exception:
+        except OSError:
             logger.debug("failed to check autosave recovery", exc_info=True)
 
     # ── System Prompt (/system) ──────────────────────────────────────────
@@ -1573,7 +1573,7 @@ class AmplifierTuiApp(
             input_widget = self.query_one("#chat-input", ChatInput)
             text = input_widget.text.strip()
             self._draft_store.save_crash(text)
-        except Exception:
+        except OSError:
             logger.debug("failed to save crash draft", exc_info=True)
 
     def _clear_crash_draft(self) -> None:
@@ -2304,7 +2304,7 @@ class AmplifierTuiApp(
             widget.add_class("find-current")
             try:
                 widget.scroll_visible()
-            except Exception:
+            except (AttributeError, TypeError):
                 logger.debug("Failed to scroll widget into view", exc_info=True)
 
     def _find_update_counter(self) -> None:
@@ -2419,7 +2419,7 @@ class AmplifierTuiApp(
             return
         try:
             await self.session_manager.end_session()
-        except Exception:
+        except (OSError, RuntimeError):
             logger.debug("Failed to end session cleanly", exc_info=True)
         # Reset session manager state (but keep the manager)
         if self.session_manager:
@@ -2674,7 +2674,7 @@ class AmplifierTuiApp(
         if _copy_to_clipboard(text):
             try:
                 self._clipboard_store.add(text, source="copy response")
-            except Exception:
+            except OSError:
                 pass
             preview = self._copy_preview(text)
             self._add_system_message(
@@ -4002,7 +4002,7 @@ class AmplifierTuiApp(
                     nxt = after_meta
                 if isinstance(nxt, FoldToggle):
                     nxt.remove()
-            except Exception:
+            except (AttributeError, TypeError):
                 logger.debug("failed to remove sibling widgets", exc_info=True)
 
             # Legacy: also check for old-style timestamp before the message
@@ -4010,7 +4010,7 @@ class AmplifierTuiApp(
                 prev_sib = widget.previous_sibling  # type: ignore[attr-defined]
                 if prev_sib is not None and prev_sib.has_class("msg-timestamp"):
                     prev_sib.remove()
-            except Exception:
+            except (AttributeError, TypeError):
                 logger.debug("failed to remove legacy timestamp sibling", exc_info=True)
 
             # Remove the message widget itself
@@ -5461,7 +5461,7 @@ class AmplifierTuiApp(
             ctx_history = getattr(self, "_context_history", None)
             if ctx_history is not None:
                 ctx_history.record(pct)
-        except Exception:
+        except (ValueError, AttributeError):
             logger.debug("Failed to record context snapshot", exc_info=True)
 
     def _update_session_display(self) -> None:
