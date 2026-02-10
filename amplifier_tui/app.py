@@ -466,6 +466,9 @@ class AmplifierTuiApp(
         self._tag_store = TagStore(_amp_home / "tui-session-tags.json")
         self._clipboard_store = ClipboardStore(_amp_home / "tui-clipboard-ring.json")
 
+        # Recently included files (/include recent)
+        self._recent_includes: list[str] = []
+
         # Agent delegation tracking (/agents command)
         self._agent_tracker = AgentTracker()
 
@@ -3010,6 +3013,10 @@ class AmplifierTuiApp(
             "  /run          Run shell command inline (/run ls -la, /run git status)\n"
             "  /!            Shorthand for /run (/! git diff)\n"
             "  /include      Include file contents (/include src/main.py, /include *.py --send)\n"
+            "  /include tree Project directory tree (respects .gitignore)\n"
+            "  /include git  Git status + recent diff summary\n"
+            "  /include recent Recently included files for quick re-include\n"
+            "  /include preview <path> File preview (language, lines, size)\n"
             "                Also: @./path/to/file in your prompt auto-includes\n"
             "  /attach       Attach file(s) to next message (/attach *.py, clear, remove N)\n"
             "  /cat          Display file contents in chat (/cat src/main.py)\n"

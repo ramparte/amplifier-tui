@@ -134,6 +134,22 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/quit", "Quit the application", "/quit"),
     ("/run", "Run a shell command inline (/! shorthand)", "/run"),
     ("/include", "Include file contents in prompt (@file syntax too)", "/include"),
+    (
+        "/include tree",
+        "Include project directory tree (respects .gitignore)",
+        "/include tree",
+    ),
+    ("/include git", "Include git status and recent diff", "/include git"),
+    (
+        "/include recent",
+        "Show recently included files for quick re-include",
+        "/include recent",
+    ),
+    (
+        "/include preview",
+        "Syntax-aware file preview (language, lines, size)",
+        "/include preview ",
+    ),
     ("/autosave", "Auto-save status, toggle, force save, or restore", "/autosave"),
     ("/autosave on", "Enable periodic auto-save", "/autosave on"),
     ("/autosave off", "Disable periodic auto-save", "/autosave off"),

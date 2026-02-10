@@ -58,6 +58,11 @@ from .context_profiler import (
     format_top_consumers,
 )
 from .tool_log import ToolEntry, ToolLog, tool_color, summarize_tool_input
+from .include_helpers import (
+    file_preview,
+    get_directory_tree,
+    get_git_status_and_diff,
+)
 from .recipe_tracker import RecipeStep, RecipeRun, RecipeTracker
 
 __all__ = [
@@ -104,6 +109,10 @@ __all__ = [
     "ToolLog",
     "tool_color",
     "summarize_tool_input",
+    # include helpers
+    "get_directory_tree",
+    "get_git_status_and_diff",
+    "file_preview",
     # recipe tracker
     "RecipeStep",
     "RecipeRun",

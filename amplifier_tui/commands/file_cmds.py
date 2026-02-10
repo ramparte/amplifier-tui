@@ -105,7 +105,21 @@ class FileCommandsMixin:
     # -- /include helpers ------------------------------------------------------
 
     def _cmd_include(self, text: str) -> None:
-        """Include file contents in the prompt."""
+        """Include file contents in the prompt.
+
+        Subcommands:
+          /include tree           Project directory tree (respects .gitignore)
+          /include git            Git status + recent diff
+          /include recent         Recently included files for quick re-include
+          /include preview <path> Syntax-aware file preview (language, lines, size)
+          /include <path>         Include file contents (original behaviour)
+        """
+        from ..features.include_helpers import (
+            file_preview,
+            get_directory_tree,
+            get_git_status_and_diff,
+        )
+
         text = text.strip()
         if not text:
             self._add_system_message(
@@ -114,9 +128,58 @@ class FileCommandsMixin:
                 "  /include src/main.py --send    Insert and send\n"
                 "  /include src/*.py              Glob pattern\n"
                 "  /include config.yaml           Auto-detect language\n\n"
+                "Subcommands:\n"
+                "  /include tree                  Project directory tree\n"
+                "  /include git                   Git status + recent diff\n"
+                "  /include recent                Recently included files\n"
+                "  /include preview <path>        File preview (language, size, lines)\n\n"
                 "Also: Type @./path/to/file in your prompt"
             )
             return
+
+        # -- Subcommand routing (checked before path-based logic) ---------------
+
+        # /include tree
+        if text == "tree":
+            cwd = os.getcwd()
+            tree = get_directory_tree(cwd)
+            self._add_system_message(f"Project structure:\n```\n{tree}\n```")
+            return
+
+        # /include git
+        if text == "git":
+            cwd = os.getcwd()
+            git_info = get_git_status_and_diff(cwd)
+            self._add_system_message(f"Git status:\n```\n{git_info}\n```")
+            return
+
+        # /include recent
+        if text == "recent":
+            recents: list[str] = getattr(self, "_recent_includes", [])
+            if not recents:
+                self._add_system_message(
+                    "No recent includes. Use /include <path> to include files."
+                )
+                return
+            lines = ["Recent includes:"]
+            for i, rpath in enumerate(recents[-10:], 1):
+                lines.append(f"  {i}. {rpath}")
+            lines.append("")
+            lines.append("Re-include: /include <path>")
+            self._add_system_message("\n".join(lines))
+            return
+
+        # /include preview <path>
+        if text.startswith("preview "):
+            preview_path = text[8:].strip()
+            if not preview_path:
+                self._add_system_message("Usage: /include preview <path>")
+                return
+            preview = file_preview(preview_path)
+            self._add_system_message(preview)
+            return
+
+        # -- Original path-based include logic ----------------------------------
 
         auto_send = False
         if text.endswith("--send"):
@@ -151,6 +214,10 @@ class FileCommandsMixin:
                 self._add_system_message(
                     f"Included {min(len(files), 20)} files. Edit and send."
                 )
+            # Track successful glob includes
+            recents_list: list[str] = getattr(self, "_recent_includes", [])
+            for f in files[:20]:
+                recents_list.append(str(f))
             return
 
         # Single file
@@ -170,6 +237,10 @@ class FileCommandsMixin:
         else:
             self._include_into_input(content)
             self._add_system_message(f"Included: {path.name}. Edit and send.")
+
+        # Track successful single-file include
+        recents_list = getattr(self, "_recent_includes", [])
+        recents_list.append(str(path))
 
     def _cmd_notify(self, text: str) -> None:
         """Toggle completion notifications, or set mode/threshold explicitly."""
