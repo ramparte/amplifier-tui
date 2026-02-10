@@ -97,8 +97,10 @@ from .commands import (
     ExportCommandsMixin,
     SplitCommandsMixin,
     WatchCommandsMixin,
+    ToolCommandsMixin,
 )
 from .features.agent_tracker import AgentTracker, is_delegate_tool, make_delegate_key
+from .features.tool_log import ToolLog
 from .persistence import (
     AliasStore,
     BookmarkStore,
@@ -121,6 +123,7 @@ _amp_home = amplifier_home()
 
 class AmplifierTuiApp(
     AgentCommandsMixin,
+    ToolCommandsMixin,
     SessionCommandsMixin,
     DisplayCommandsMixin,
     ContentCommandsMixin,
@@ -462,6 +465,9 @@ class AmplifierTuiApp(
 
         # Agent delegation tracking (/agents command)
         self._agent_tracker = AgentTracker()
+
+        # Live tool introspection log (/tools command)
+        self._tool_log = ToolLog()
 
         # Context window profiler history (/context history)
         from .features.context_profiler import ContextHistory
@@ -2902,6 +2908,7 @@ class AmplifierTuiApp(
             "/clipboard": lambda: self._cmd_clipboard(args),
             "/clip": lambda: self._cmd_clipboard(args),
             "/agents": lambda: self._cmd_agents(args),
+            "/tools": lambda: self._cmd_tools(args),
         }
 
         handler = handlers.get(cmd)
@@ -3001,6 +3008,7 @@ class AmplifierTuiApp(
             "  /cat          Display file contents in chat (/cat src/main.py)\n"
             "  /autosave     Auto-save status, toggle, force save, restore (/autosave on|off|now|restore)\n"
             "  /agents       Show agent delegation tree (/agents history, /agents clear)\n"
+            "  /tools        Live tool call log (/tools live|log|stats|clear)\n"
             "  /system       Set/view system prompt (/system <text>, clear, presets, use <preset>, append)\n"
             "  /keys         Keyboard shortcut overlay\n"
             "  /palette      Command palette (Ctrl+P) – fuzzy search all commands\n"
@@ -5534,6 +5542,8 @@ class AmplifierTuiApp(
 
         def on_tool_start(name: str, tool_input: dict) -> None:
             self._tool_count_this_turn += 1
+            # Live tool introspection log
+            self._tool_log.on_tool_start(name, tool_input)
             # Track agent delegations
             if is_delegate_tool(name) and isinstance(tool_input, dict):
                 key = make_delegate_key(tool_input)
@@ -5560,6 +5570,9 @@ class AmplifierTuiApp(
             self.call_from_thread(self._update_status, label)
 
         def on_tool_end(name: str, tool_input: dict, result: str) -> None:
+            # Live tool introspection log
+            _tool_status = "failed" if result.startswith("Error") else "completed"
+            self._tool_log.on_tool_end(name, status=_tool_status)
             # Complete agent delegation tracking
             if is_delegate_tool(name) and isinstance(tool_input, dict):
                 key = make_delegate_key(tool_input)

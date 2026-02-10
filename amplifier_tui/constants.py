@@ -134,6 +134,11 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/clipboard",
     "/clip",
     "/agents",
+    "/tools",
+    "/tools live",
+    "/tools log",
+    "/tools stats",
+    "/tools clear",
 )
 
 # -- Amplifier mode definitions ------------------------------------------------

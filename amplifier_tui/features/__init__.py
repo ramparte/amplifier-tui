@@ -57,6 +57,7 @@ from .context_profiler import (
     format_profiler_history,
     format_top_consumers,
 )
+from .tool_log import ToolEntry, ToolLog, tool_color, summarize_tool_input
 
 __all__ = [
     # diff_view
@@ -97,4 +98,9 @@ __all__ = [
     "format_profiler_detail",
     "format_profiler_history",
     "format_top_consumers",
+    # tool log
+    "ToolEntry",
+    "ToolLog",
+    "tool_color",
+    "summarize_tool_input",
 ]

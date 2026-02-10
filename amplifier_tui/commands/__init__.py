@@ -13,6 +13,7 @@ from .token_cmds import TokenCommandsMixin
 from .export_cmds import ExportCommandsMixin
 from .split_cmds import SplitCommandsMixin
 from .watch_cmds import WatchCommandsMixin
+from .tool_cmds import ToolCommandsMixin
 
 __all__ = [
     "AgentCommandsMixin",
@@ -28,4 +29,5 @@ __all__ = [
     "ExportCommandsMixin",
     "SplitCommandsMixin",
     "WatchCommandsMixin",
+    "ToolCommandsMixin",
 ]

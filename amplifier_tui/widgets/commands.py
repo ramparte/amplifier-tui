@@ -190,6 +190,11 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/agents", "Show agent delegation tree", "/agents"),
     ("/agents history", "Show past agent delegations", "/agents history"),
     ("/agents clear", "Clear agent delegation history", "/agents clear"),
+    ("/tools", "Live tool call log (recent calls)", "/tools"),
+    ("/tools live", "Scrolling log of recent tool calls", "/tools live"),
+    ("/tools log", "Full session tool log", "/tools log"),
+    ("/tools stats", "Aggregate tool statistics", "/tools stats"),
+    ("/tools clear", "Clear tool log", "/tools clear"),
     # ── Keyboard-shortcut actions ───────────────────────────────────────────
     ("New Session  Ctrl+N", "Start a new conversation", "action:new_session"),
     ("New Tab  Ctrl+T", "Open a new conversation tab", "action:new_tab"),
