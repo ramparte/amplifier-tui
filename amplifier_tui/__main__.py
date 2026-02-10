@@ -5,10 +5,33 @@ import sys
 
 from .log import logger
 
+_INSTALL_MESSAGE = """\
+Amplifier TUI requires Amplifier to be installed.
+
+  Install:  uv tool install git+https://github.com/microsoft/amplifier
+  Docs:     https://github.com/microsoft/amplifier#readme
+
+Once installed, run amplifier-tui again.
+"""
+
+
+def _check_amplifier() -> bool:
+    """Return True if amplifier_core is importable (after site-packages setup)."""
+    # Trigger the sys.path setup that session_manager does on import.
+    # noinspection PyUnresolvedReferences
+    from . import session_manager as _  # noqa: F401
+
+    try:
+        import amplifier_core  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
 
 def main():
-    """Run Amplifier TUI TUI."""
-    parser = argparse.ArgumentParser(description="Amplifier TUI TUI")
+    """Run Amplifier TUI."""
+    parser = argparse.ArgumentParser(description="Amplifier TUI")
     parser.add_argument(
         "--version",
         "-V",
@@ -33,6 +56,10 @@ def main():
         help="Initial prompt to send",
     )
     args = parser.parse_args()
+
+    if not _check_amplifier():
+        print(_INSTALL_MESSAGE, file=sys.stderr)
+        sys.exit(1)
 
     # Determine session to resume
     resume_session_id = None
