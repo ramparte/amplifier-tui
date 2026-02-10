@@ -19,3 +19,5 @@ venv/
 
 # Test artifacts
 .test-results/
+amplifier-chat-*.md
+uv.lock
