@@ -11,6 +11,12 @@ dependencies = [
     "textual>=0.47.0",
 ]
 
+[project.optional-dependencies]
+capture = [
+    "textual-capture @ git+https://github.com/ramparte/textual-capture.git",
+    "cairosvg>=2.7.0",
+]
+
 # Note: Amplifier dependencies are expected to be installed globally
 # via: uv tool install git+https://github.com/microsoft/amplifier
 # The TUI will detect if Amplifier is available and fall back to demo mode if not

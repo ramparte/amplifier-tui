@@ -1,7 +1,7 @@
 """Capture TUI screenshots as PNG images for analysis.
 
-Uses Textual's headless Pilot framework to run the app without a terminal,
-then exports SVG and converts to PNG via cairosvg.
+Uses textual-capture (https://github.com/ramparte/textual-capture) for the
+core headless capture, adding AmplifierTuiApp-specific mock content injection.
 
 Usage:
     # Capture empty app state (no backend needed)
@@ -21,60 +21,6 @@ from pathlib import Path
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-
-
-async def capture_screenshot(
-    output_path: str = "tui_capture.png",
-    width: int = 120,
-    height: int = 50,
-    mock_chat: bool = False,
-    svg_too: bool = False,
-) -> str:
-    """Capture the TUI as a PNG screenshot.
-
-    Args:
-        output_path: Where to write the PNG.
-        width: Terminal columns.
-        height: Terminal rows.
-        mock_chat: If True, inject sample chat messages to test rendering.
-        svg_too: Also save the intermediate SVG alongside the PNG.
-
-    Returns:
-        Path to the saved PNG.
-    """
-    import cairosvg
-    from amplifier_tui.app import AmplifierTuiApp
-
-    app = AmplifierTuiApp()
-
-    async with app.run_test(size=(width, height)) as pilot:
-        # Let the app settle
-        await pilot.pause(delay=0.5)
-
-        if mock_chat:
-            await _inject_mock_content(app, pilot)
-
-        # Capture SVG
-        svg_string = app.export_screenshot(title="Amplifier TUI")
-
-        # Convert SVG -> PNG
-        output = Path(output_path)
-        output.parent.mkdir(parents=True, exist_ok=True)
-
-        cairosvg.svg2png(
-            bytestring=svg_string.encode("utf-8"),
-            write_to=str(output),
-            output_width=width * 16,  # ~16px per character cell
-        )
-
-        if svg_too:
-            svg_path = output.with_suffix(".svg")
-            svg_path.write_text(svg_string, encoding="utf-8")
-            print(f"SVG saved: {svg_path}")
-
-        print(f"PNG saved: {output}")
-        print(f"Dimensions: {width}x{height} cells, {width * 16}px wide")
-        return str(output)
 
 
 async def _inject_mock_content(app, pilot):
@@ -173,6 +119,65 @@ async def _inject_mock_content(app, pilot):
 
     # Let rendering fully settle
     await pilot.pause(delay=0.5)
+
+
+async def capture_screenshot(
+    output_path: str = "tui_capture.png",
+    width: int = 120,
+    height: int = 50,
+    mock_chat: bool = False,
+    svg_too: bool = False,
+) -> str:
+    """Capture the TUI as a PNG screenshot.
+
+    Uses textual-capture for the core capture logic, with an optional
+    setup callback for injecting mock chat content.
+
+    Args:
+        output_path: Where to write the PNG.
+        width: Terminal columns.
+        height: Terminal rows.
+        mock_chat: If True, inject sample chat messages to test rendering.
+        svg_too: Also save the intermediate SVG alongside the PNG.
+
+    Returns:
+        Path to the saved PNG.
+    """
+    from textual_capture import capture_png, capture_svg
+
+    from amplifier_tui.app import AmplifierTuiApp
+
+    app = AmplifierTuiApp()
+
+    # Build setup callback if mock content requested
+    setup = _inject_mock_content if mock_chat else None
+
+    output = Path(output_path)
+
+    # Capture PNG
+    await capture_png(
+        app,
+        output,
+        size=(width, height),
+        title="Amplifier TUI",
+        setup=setup,
+    )
+    print(f"PNG saved: {output}")
+    print(f"Dimensions: {width}x{height} cells, {width * 16}px wide")
+
+    # Optionally save SVG alongside
+    if svg_too:
+        svg_path = output.with_suffix(".svg")
+        svg_string = await capture_svg(
+            AmplifierTuiApp(),
+            size=(width, height),
+            title="Amplifier TUI",
+            setup=setup,
+        )
+        svg_path.write_text(svg_string, encoding="utf-8")
+        print(f"SVG saved: {svg_path}")
+
+    return str(output)
 
 
 def main():
