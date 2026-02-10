@@ -160,6 +160,15 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/compare show",
     "/compare history",
     "/compare clear",
+    "/replay",
+    "/replay pause",
+    "/replay resume",
+    "/replay skip",
+    "/replay stop",
+    "/replay speed",
+    "/replay status",
+    "/replay timeline",
+    "/replay clear",
 )
 
 # -- Amplifier mode definitions ------------------------------------------------

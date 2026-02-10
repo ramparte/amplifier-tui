@@ -66,6 +66,7 @@ from .include_helpers import (
 from .recipe_tracker import RecipeStep, RecipeRun, RecipeTracker
 from .branch_manager import BranchManager, ConversationBranch
 from .compare_manager import CompareManager, ComparisonResult
+from .replay_engine import ReplayEngine, ReplayMessage, ReplayState
 
 __all__ = [
     # diff_view
@@ -125,4 +126,8 @@ __all__ = [
     # compare manager
     "CompareManager",
     "ComparisonResult",
+    # replay engine
+    "ReplayEngine",
+    "ReplayMessage",
+    "ReplayState",
 ]
