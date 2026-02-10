@@ -463,6 +463,11 @@ class AmplifierTuiApp(
         # Agent delegation tracking (/agents command)
         self._agent_tracker = AgentTracker()
 
+        # Context window profiler history (/context history)
+        from .features.context_profiler import ContextHistory
+
+        self._context_history = ContextHistory()
+
     # ── Layout ──────────────────────────────────────────────────
 
     def _active_chat_view(self) -> ScrollableContainer:
@@ -2825,7 +2830,7 @@ class AmplifierTuiApp(
             "/keys": self._cmd_keys,
             "/stats": lambda: self._cmd_stats(args),
             "/tokens": self._cmd_tokens,
-            "/context": self._cmd_context,
+            "/context": lambda: self._cmd_context(args),
             "/showtokens": lambda: self._cmd_showtokens(text),
             "/contextwindow": lambda: self._cmd_contextwindow(text),
             "/info": self._cmd_info,
@@ -5362,6 +5367,29 @@ class AmplifierTuiApp(
         except NoMatches:
             logger.debug("status bar widget not found for token display", exc_info=True)
 
+    def _record_context_snapshot(self) -> None:
+        """Record a context usage snapshot for the /context history sparkline."""
+        try:
+            window = self._get_context_window()
+            if window <= 0:
+                return
+            sm = self.session_manager
+            total = 0
+            if sm:
+                total = (getattr(sm, "total_input_tokens", 0) or 0) + (
+                    getattr(sm, "total_output_tokens", 0) or 0
+                )
+            if total == 0 and self._search_messages:
+                total = sum(
+                    len(content) // 4 for _role, content, _w in self._search_messages
+                )
+            pct = min(100.0, total / window * 100) if total > 0 else 0.0
+            ctx_history = getattr(self, "_context_history", None)
+            if ctx_history is not None:
+                ctx_history.record(pct)
+        except Exception:
+            logger.debug("Failed to record context snapshot", exc_info=True)
+
     def _update_session_display(self) -> None:
         if self.session_manager and getattr(self.session_manager, "session_id", None):
             sid = self.session_manager.session_id[:8]
@@ -5550,6 +5578,7 @@ class AmplifierTuiApp(
 
         def on_usage():
             self.call_from_thread(self._update_token_display)
+            self.call_from_thread(self._record_context_snapshot)
 
         self.session_manager.on_content_block_start = on_block_start
         self.session_manager.on_content_block_delta = on_block_delta

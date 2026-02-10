@@ -6,7 +6,6 @@ from pathlib import Path
 import time
 
 
-from .._utils import _context_color_name
 from ..constants import (
     TOOL_LABELS,
 )
@@ -105,7 +104,7 @@ class TokenCommandsMixin:
         # --- Build output ---
         lines: list[str] = [
             "Session Statistics",
-            "─" * 40,
+            "\u2500" * 40,
             f"  Session:         {session_id}",
         ]
         if title:
@@ -199,7 +198,7 @@ class TokenCommandsMixin:
 
         lines: list[str] = [
             "Tool Usage Breakdown",
-            "─" * 40,
+            "\u2500" * 40,
         ]
 
         for name, count in sorted_tools:
@@ -207,7 +206,7 @@ class TokenCommandsMixin:
             pct = count / total_calls * 100
             bar_w = 15
             filled = int(pct / 100 * bar_w)
-            bar = "█" * filled + "░" * (bar_w - filled)
+            bar = "\u2588" * filled + "\u2591" * (bar_w - filled)
             lines.append(f"  {label:<20s} {count:3d}  {bar} {pct:4.1f}%")
 
         lines += [
@@ -237,7 +236,7 @@ class TokenCommandsMixin:
 
         lines: list[str] = [
             "Token Breakdown",
-            "─" * 40,
+            "\u2500" * 40,
             f"  Model:             {model}",
             f"  Context window:    {fmt(window)}",
             "",
@@ -250,7 +249,7 @@ class TokenCommandsMixin:
 
             lines += [
                 "  API Tokens (actual)",
-                "  " + "─" * 20,
+                "  " + "\u2500" * 20,
                 f"  Input:             {inp_tok:>10,}  ({pct_in:.1f}%)",
                 f"  Output:            {out_tok:>10,}  ({pct_out:.1f}%)",
                 f"  Total:             {api_total:>10,}",
@@ -264,7 +263,7 @@ class TokenCommandsMixin:
             cost_total = cost_in + cost_out
             lines += [
                 "  Estimated Cost (Sonnet pricing)",
-                "  " + "─" * 33,
+                "  " + "\u2500" * 33,
                 f"  Input  ($3/M):     ${cost_in:.4f}",
                 f"  Output ($15/M):    ${cost_out:.4f}",
                 f"  Total:             ${cost_total:.4f}",
@@ -276,11 +275,11 @@ class TokenCommandsMixin:
 
         lines += [
             "  Word-based Estimate",
-            "  " + "─" * 21,
+            "  " + "\u2500" * 21,
             f"  User words:        {self._user_words:>10,}",
             f"  Assistant words:   {self._assistant_words:>10,}",
             f"  Total words:       {total_words:>10,}",
-            f"  Est. tokens:       ~{fmt(est_tokens)}  (words × 1.3)",
+            f"  Est. tokens:       ~{fmt(est_tokens)}  (words \u00d7 1.3)",
         ]
 
         self._add_system_message("\n".join(lines))
@@ -398,6 +397,7 @@ class TokenCommandsMixin:
         sm = self.session_manager
         names = self._load_session_names()
         pins = self._pinned_sessions
+
         bookmarks = self._load_bookmarks()
 
         # Gather info
@@ -572,78 +572,78 @@ class TokenCommandsMixin:
         ]
         self._add_system_message("\n".join(lines))
 
-    def _cmd_context(self) -> None:
-        """Show visual context window usage with a progress bar."""
+    def _cmd_context(self, text: str = "") -> None:
+        """Show visual context window usage with profiler breakdown.
+
+        Subcommands:
+            /context          Stacked bar with per-category breakdown
+            /context detail   Per-message token estimates
+            /context history  Sparkline of usage over time
+            /context top      Largest single items consuming context
+        """
+        from ..features.context_profiler import (
+            analyze_messages,
+            format_profiler_bar,
+            format_profiler_detail,
+            format_profiler_history,
+            format_top_consumers,
+        )
+
+        sub = text.strip().lower()
+
+        window = self._get_context_window()
         sm = self.session_manager
         model = (sm.model_name if sm else "") or "unknown"
-        window = self._get_context_window()
-        fmt = self._format_token_count
 
-        # --- Gather token counts (prefer real API data) ---
-        input_tokens = 0
-        output_tokens = 0
+        # Build the breakdown from visible messages
+        breakdown = analyze_messages(self._search_messages, total_capacity=window)
 
+        # If real API data is available and larger, scale up the breakdown
+        # proportionally to account for overhead (system prompt, tool schemas)
         if sm:
-            input_tokens = getattr(sm, "total_input_tokens", 0) or 0
-            output_tokens = getattr(sm, "total_output_tokens", 0) or 0
+            api_input = getattr(sm, "total_input_tokens", 0) or 0
+            if api_input > breakdown.total_used and breakdown.total_used > 0:
+                # The API reports more tokens than we estimate from visible
+                # messages; attribute the difference to injected context
+                # (system prompt, tool schemas, etc.)
+                overhead = api_input - breakdown.total_used
+                breakdown.injected_context_tokens += overhead
 
-        # Fallback: estimate from visible message text (~4 chars/token)
-        estimated = False
-        if input_tokens == 0 and output_tokens == 0:
-            estimated = True
-            for role, content, _widget in self._search_messages:
-                tok_est = len(content) // 4
-                if role == "user":
-                    input_tokens += tok_est
-                elif role == "assistant":
-                    output_tokens += tok_est
-                else:
-                    input_tokens += tok_est  # system msgs count toward input
+        # Record usage snapshot for history tracking
+        ctx_history = getattr(self, "_context_history", None)
+        if ctx_history is not None:
+            ctx_history.record(breakdown.usage_percent)
 
-        total = input_tokens + output_tokens
+        # --- Route subcommands ---
+        if sub == "detail":
+            header = f"Model: {model}  |  Window: {self._format_token_count(window)}\n"
+            self._add_system_message(
+                header + format_profiler_detail(self._search_messages, breakdown)
+            )
+            return
 
-        # Input tokens are the best proxy for how full the context window is
-        # (each request sends the full conversation as input).
-        effective_used = input_tokens
-        pct = min(100.0, (effective_used / window * 100)) if window > 0 else 0.0
+        if sub == "history":
+            history_data = ctx_history.as_list() if ctx_history else []
+            self._add_system_message(format_profiler_history(history_data))
+            return
 
-        # --- Visual bar (30 chars wide) ---
-        bar_width = 30
-        filled = int(pct / 100 * bar_width)
-        empty = bar_width - filled
+        if sub == "top":
+            self._add_system_message(
+                format_top_consumers(self._search_messages, top_n=5)
+            )
+            return
 
-        color_label = _context_color_name(pct)
+        if sub:
+            self._add_system_message(
+                f"Unknown subcommand: /context {sub}\n"
+                "Usage: /context | /context detail"
+                " | /context history | /context top"
+            )
+            return
 
-        bar = f"[{'█' * filled}{'░' * empty}]"
-
-        # --- Build output ---
-        source = "estimated" if estimated else "API"
-        lines = [
-            "Context Usage",
-            "\u2500" * 40,
-            f"  Model:     {model}",
-            f"  Window:    {fmt(window)} tokens",
-            "",
-            f"  {bar} {pct:.1f}%",
-            "",
-            f"  Input:     ~{fmt(input_tokens)} ({source})",
-            f"  Output:    ~{fmt(output_tokens)} ({source})",
-            f"  Total:     ~{fmt(total)}",
-            f"  Remaining: ~{fmt(max(0, window - effective_used))}",
-        ]
-
-        if pct > 90:
-            lines += [
-                "",
-                "  \u26a0 Context nearly full! Start a new session with /new.",
-            ]
-        elif pct > 75:
-            lines += [
-                "",
-                f"  \u26a0 Context is getting full ({color_label}). Consider /clear or /new.",
-            ]
-
-        self._add_system_message("\n".join(lines))
+        # --- Default: stacked bar profiler view ---
+        header = f"Model: {model}\n"
+        self._add_system_message(header + format_profiler_bar(breakdown))
 
     def _cmd_showtokens(self, text: str) -> None:
         """Toggle the status-bar token/context usage display on or off."""
@@ -721,4 +721,3 @@ class TokenCommandsMixin:
             self._add_system_message(
                 f"Context window: auto-detect ({effective:,} tokens)"
             )
-

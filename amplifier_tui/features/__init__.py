@@ -46,6 +46,17 @@ from .notifications import (
 )
 from .reverse_search import ReverseSearchManager
 from .agent_tracker import AgentTracker, AgentNode, is_delegate_tool, make_delegate_key
+from .context_profiler import (
+    ContextBreakdown,
+    ContextHistory,
+    analyze_messages,
+    analyze_messages_detail,
+    estimate_tokens,
+    format_profiler_bar,
+    format_profiler_detail,
+    format_profiler_history,
+    format_top_consumers,
+)
 
 __all__ = [
     # diff_view
@@ -76,4 +87,14 @@ __all__ = [
     "AgentNode",
     "is_delegate_tool",
     "make_delegate_key",
+    # context profiler
+    "ContextBreakdown",
+    "ContextHistory",
+    "analyze_messages",
+    "analyze_messages_detail",
+    "estimate_tokens",
+    "format_profiler_bar",
+    "format_profiler_detail",
+    "format_profiler_history",
+    "format_top_consumers",
 ]
