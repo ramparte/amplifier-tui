@@ -64,6 +64,7 @@ from .include_helpers import (
     get_git_status_and_diff,
 )
 from .recipe_tracker import RecipeStep, RecipeRun, RecipeTracker
+from .branch_manager import BranchManager, ConversationBranch
 
 __all__ = [
     # diff_view
@@ -117,4 +118,7 @@ __all__ = [
     "RecipeStep",
     "RecipeRun",
     "RecipeTracker",
+    # branch manager
+    "BranchManager",
+    "ConversationBranch",
 ]

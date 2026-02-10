@@ -35,8 +35,8 @@ class SessionCommandsMixin:
         sessions = SessionManager.list_all_sessions(limit=50)
         self.call_from_thread(self._populate_session_list, sessions)
 
-    def _cmd_fork(self, args: str) -> None:
-        """Fork conversation at a specific point into a new tab."""
+    def _cmd_fork_tab(self, args: str) -> None:
+        """Fork conversation at a specific point into a new tab (legacy)."""
         args = args.strip()
 
         # Get current messages

@@ -100,9 +100,11 @@ from .commands import (
     ToolCommandsMixin,
     RecipeCommandsMixin,
 )
+from .commands.branch_cmds import BranchCommandsMixin
 from .features.agent_tracker import AgentTracker, is_delegate_tool, make_delegate_key
 from .features.tool_log import ToolLog
 from .features.recipe_tracker import RecipeTracker
+from .features.branch_manager import BranchManager
 from .persistence import (
     AliasStore,
     BookmarkStore,
@@ -124,6 +126,7 @@ _amp_home = amplifier_home()
 
 
 class AmplifierTuiApp(
+    BranchCommandsMixin,
     AgentCommandsMixin,
     ToolCommandsMixin,
     RecipeCommandsMixin,
@@ -477,6 +480,9 @@ class AmplifierTuiApp(
 
         # Recipe pipeline tracking (/recipe command)
         self._recipe_tracker = RecipeTracker()
+
+        # Conversation branch manager (/fork, /branches, /branch commands)
+        self._branch_manager = BranchManager()
 
         # Context window profiler history (/context history)
         from .features.context_profiler import ContextHistory
@@ -2902,7 +2908,8 @@ class AmplifierTuiApp(
             "/note": lambda: self._cmd_note(args),
             "/notes": lambda: self._show_notes(),
             "/fork": lambda: self._cmd_fork(args),
-            "/branch": lambda: self._cmd_fork(args),
+            "/branches": lambda: self._cmd_branches(args),
+            "/branch": lambda: self._cmd_branch(args),
             "/name": lambda: self._cmd_name(args),
             "/attach": lambda: self._cmd_attach(args),
             "/cat": lambda: self._cmd_cat(args),
