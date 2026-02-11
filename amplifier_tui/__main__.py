@@ -1,9 +1,23 @@
 """Entry point for Amplifier TUI CLI."""
 
+from __future__ import annotations
+
 import argparse
+import shutil
+import subprocess
 import sys
 
 from .log import logger
+
+# ---------------------------------------------------------------------------
+# Environment health checks
+# ---------------------------------------------------------------------------
+
+_REQUIRED_LIBS = [
+    ("amplifier_core", "amplifier-core"),
+    ("amplifier_foundation", "amplifier-foundation"),
+    ("amplifier_distro", "amplifier-distro"),
+]
 
 
 def _check_amplifier() -> bool:
@@ -15,6 +29,108 @@ def _check_amplifier() -> bool:
         return True
     except ImportError:
         return False
+
+
+def _try_auto_repair() -> bool:
+    """Attempt to fix a broken environment with ``uv sync``.
+
+    Returns True if the repair succeeded (imports now work).
+    """
+    uv = shutil.which("uv")
+    if not uv:
+        return False
+
+    print(
+        "Amplifier libraries missing -- attempting auto-repair (uv sync)...",
+        file=sys.stderr,
+    )
+    try:
+        subprocess.run(
+            [uv, "sync", "--quiet"],
+            check=True,
+            timeout=120,
+            capture_output=True,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+        logger.debug("Auto-repair uv sync failed: %s", exc)
+        return False
+
+    # Re-check after sync
+    return _check_amplifier()
+
+
+def _run_doctor() -> None:
+    """Print a detailed environment health report and exit."""
+
+    print("Amplifier TUI -- Environment Doctor\n")
+
+    # 1. Python
+    print(f"  Python:   {sys.executable} ({sys.version.split()[0]})")
+
+    # 2. uv
+    uv = shutil.which("uv")
+    print(f"  uv:       {uv or 'NOT FOUND'}")
+
+    # 3. Required libraries
+    print()
+    all_ok = True
+    for mod_name, pkg_name in _REQUIRED_LIBS:
+        try:
+            mod = __import__(mod_name)
+            ver = getattr(mod, "__version__", "installed")
+            print(f"  [ok] {pkg_name:30s}  {ver}")
+        except ImportError:
+            print(f"  [!!] {pkg_name:30s}  NOT IMPORTABLE")
+            all_ok = False
+
+    # 4. Bridge
+    print()
+    try:
+        from amplifier_distro.bridge import LocalBridge  # type: ignore[import-not-found]
+
+        print(f"  [ok] {'distro Bridge':30s}  {LocalBridge.__module__}")
+    except Exception as exc:
+        print(f"  [!!] {'distro Bridge':30s}  {exc}")
+        all_ok = False
+
+    # 5. Bundle
+    print()
+    try:
+        from pathlib import Path
+        import yaml  # type: ignore[import-untyped]
+
+        distro_cfg = Path.home() / ".amplifier" / "distro.yaml"
+        if distro_cfg.exists():
+            with open(distro_cfg) as f:
+                cfg = yaml.safe_load(f)
+            bundle = cfg.get("bundle", {}).get("active", "(not set)")
+            print(f"  [ok] {'Active bundle':30s}  {bundle}")
+        else:
+            print(f"  [--] {'Active bundle':30s}  no distro.yaml")
+    except Exception as exc:
+        print(f"  [!!] {'Active bundle':30s}  {exc}")
+
+    # 6. Sessions directory
+    from pathlib import Path
+
+    projects = Path.home() / ".amplifier" / "projects"
+    if projects.exists():
+        count = sum(1 for p in projects.iterdir() if p.is_dir())
+        print(f"  [ok] {'Projects directory':30s}  {count} project(s)")
+    else:
+        print(f"  [--] {'Projects directory':30s}  not found")
+
+    # Summary
+    print()
+    if all_ok:
+        print("  All checks passed.")
+    else:
+        print("  Some checks failed.  Try:")
+        print("    cd <amplifier-tui-dir> && uv sync")
+        print("  or reinstall:")
+        print("    uv tool install git+https://github.com/microsoft/amplifier")
+
+    sys.exit(0 if all_ok else 1)
 
 
 def main():
@@ -39,23 +155,37 @@ def main():
         help="Resume a specific session ID",
     )
     parser.add_argument(
+        "--doctor",
+        action="store_true",
+        help="Check environment health and exit",
+    )
+    parser.add_argument(
         "prompt",
         nargs="*",
         help="Initial prompt to send",
     )
+
     args = parser.parse_args()
 
-    # Pre-flight check: warn but still launch the TUI so the user gets
-    # the nice in-app diagnostics rather than a raw terminal error.
+    # --doctor: print diagnostics and exit
+    if args.doctor:
+        _run_doctor()
+        return
+
+    # Pre-flight: if libraries are missing, try auto-repair before falling
+    # back to limited mode.  This handles the common case where an upstream
+    # dependency reshuffle (e.g. distro moving core behind an optional extra)
+    # broke the environment -- a simple ``uv sync`` usually fixes it.
     if not _check_amplifier():
-        print(
-            "Note: Amplifier libraries not detected.  The TUI will launch\n"
-            "in limited mode.  Use /environment inside the app for details,\n"
-            "or install Amplifier:\n"
-            "\n"
-            "  uv tool install git+https://github.com/microsoft/amplifier\n",
-            file=sys.stderr,
-        )
+        if not _try_auto_repair():
+            print(
+                "Note: Amplifier libraries not detected.  The TUI will launch\n"
+                "in limited mode.  Run 'amplifier-tui --doctor' for details,\n"
+                "or try:\n"
+                "\n"
+                "  cd <amplifier-tui-dir> && uv sync\n",
+                file=sys.stderr,
+            )
 
     # Determine session to resume
     resume_session_id = None

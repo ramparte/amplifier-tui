@@ -9,6 +9,11 @@ description = "Proof of concept: Textual TUI for Amplifier"
 requires-python = ">=3.11"
 dependencies = [
     "amplifier-distro[amplifier] @ git+https://github.com/ramparte/amplifier-distro",
+    # Direct deps on core+foundation: belt-and-suspenders so upstream
+    # distro changes (e.g. moving these behind optional extras) can't
+    # silently break the TUI.
+    "amplifier-core @ git+https://github.com/microsoft/amplifier-core",
+    "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation",
     "pyyaml>=6.0",
     "pyte>=0.8.2",
     "textual>=0.47.0",
@@ -23,7 +28,6 @@ dev = [
     "pytest-cov>=7.0",
 ]
 
-# amplifier-distro brings in core + foundation transitively.
 # The TUI uses the distro Bridge for session lifecycle.
 
 [project.scripts]
