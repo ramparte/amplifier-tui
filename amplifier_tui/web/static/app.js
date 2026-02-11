@@ -358,17 +358,185 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Command history (up/down arrow in input)
+  // ---------------------------------------------------------------------------
+  var cmdHistory = [];
+  var cmdHistoryIdx = -1;
+  var cmdDraft = "";
+
+  function pushHistory(text) {
+    if (text.trim() && (cmdHistory.length === 0 || cmdHistory[cmdHistory.length - 1] !== text)) {
+      cmdHistory.push(text);
+    }
+    cmdHistoryIdx = -1;
+    cmdDraft = "";
+  }
+
+  // ---------------------------------------------------------------------------
+  // Slash-command completion
+  // ---------------------------------------------------------------------------
+  var knownCommands = [
+    "/help", "/git", "/diff", "/tokens", "/agents", "/recipe", "/tools",
+    "/compare", "/branch", "/branches", "/replay", "/dashboard", "/watch",
+    "/plugins", "/shell", "/theme", "/stats", "/info", "/context", "/system",
+    "/mode", "/modes", "/attach", "/cat", "/history", "/ref", "/refs",
+    "/alias", "/snippet", "/snippets", "/template", "/templates", "/draft",
+    "/drafts", "/note", "/notes", "/bookmark", "/bookmarks", "/tag", "/tags",
+    "/pin", "/pins", "/new", "/clear", "/sessions", "/session", "/list",
+    "/include", "/model", "/copy", "/undo", "/redo", "/retry", "/fork",
+    "/keys", "/clipboard"
+  ];
+
+  function completeCommand(partial) {
+    var lower = partial.toLowerCase();
+    var matches = knownCommands.filter(function (c) { return c.indexOf(lower) === 0; });
+    return matches;
+  }
+
+  // ---------------------------------------------------------------------------
   // Input handling
   // ---------------------------------------------------------------------------
   inputEl.addEventListener("keydown", function (e) {
+    // Enter → send (Shift+Enter → newline)
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      sendMessage(inputEl.value);
+      var text = inputEl.value;
+      if (text.trim()) {
+        pushHistory(text);
+        sendMessage(text);
+      }
+      return;
+    }
+
+    // Tab → slash-command completion
+    if (e.key === "Tab" && inputEl.value.startsWith("/")) {
+      e.preventDefault();
+      var matches = completeCommand(inputEl.value);
+      if (matches.length === 1) {
+        inputEl.value = matches[0] + " ";
+      } else if (matches.length > 1) {
+        appendMessage("system", "Completions: " + matches.join(", "));
+      }
+      return;
+    }
+
+    // Up/Down → command history
+    if (e.key === "ArrowUp" && inputEl.selectionStart === 0) {
+      e.preventDefault();
+      if (cmdHistoryIdx === -1) {
+        cmdDraft = inputEl.value;
+        cmdHistoryIdx = cmdHistory.length - 1;
+      } else if (cmdHistoryIdx > 0) {
+        cmdHistoryIdx--;
+      }
+      if (cmdHistoryIdx >= 0) inputEl.value = cmdHistory[cmdHistoryIdx];
+      return;
+    }
+    if (e.key === "ArrowDown" && cmdHistoryIdx >= 0) {
+      e.preventDefault();
+      cmdHistoryIdx++;
+      if (cmdHistoryIdx >= cmdHistory.length) {
+        cmdHistoryIdx = -1;
+        inputEl.value = cmdDraft;
+      } else {
+        inputEl.value = cmdHistory[cmdHistoryIdx];
+      }
+      return;
+    }
+
+    // Escape → clear input / cancel streaming
+    if (e.key === "Escape") {
+      if (inputEl.value) {
+        inputEl.value = "";
+        autoResizeInput();
+      } else if (currentStreamEl) {
+        // Cancel streaming (TODO: send cancel event)
+        appendMessage("system", "Cancel not yet implemented");
+      }
+      return;
     }
   });
 
   sendBtn.addEventListener("click", function () {
-    sendMessage(inputEl.value);
+    var text = inputEl.value;
+    if (text.trim()) {
+      pushHistory(text);
+      sendMessage(text);
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Global keyboard shortcuts (browser-safe, no Ctrl+B/H/T conflicts)
+  // ---------------------------------------------------------------------------
+  document.addEventListener("keydown", function (e) {
+    // Don't intercept when typing in input (unless it's a global shortcut)
+    var inInput = document.activeElement === inputEl;
+
+    // Ctrl+L or Cmd+L → focus input (like address bar, but for chat)
+    if ((e.ctrlKey || e.metaKey) && e.key === "l") {
+      e.preventDefault();
+      inputEl.focus();
+      inputEl.select();
+      return;
+    }
+
+    // Ctrl+/ or Cmd+/ → show help
+    if ((e.ctrlKey || e.metaKey) && e.key === "/") {
+      e.preventDefault();
+      sendMessage("/help");
+      return;
+    }
+
+    // Ctrl+Shift+N → new session
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "N") {
+      e.preventDefault();
+      sendMessage("/new");
+      return;
+    }
+
+    // Ctrl+Shift+S → session list
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "S") {
+      e.preventDefault();
+      sendMessage("/sessions");
+      return;
+    }
+
+    // Ctrl+Shift+K → clear chat
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "K") {
+      e.preventDefault();
+      sendMessage("/clear");
+      return;
+    }
+
+    // Ctrl+Shift+G → git status
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "G") {
+      e.preventDefault();
+      sendMessage("/git");
+      return;
+    }
+
+    // Ctrl+Shift+T → token info
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "T") {
+      e.preventDefault();
+      sendMessage("/tokens");
+      return;
+    }
+
+    // Ctrl+Shift+D → dashboard
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "D") {
+      e.preventDefault();
+      sendMessage("/dashboard");
+      return;
+    }
+
+    // / → focus input and start command (when not already in input)
+    if (!inInput && e.key === "/" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      inputEl.focus();
+      inputEl.value = "/";
+      autoResizeInput();
+      return;
+    }
   });
 
   // Auto-resize textarea
@@ -382,4 +550,5 @@
   // Boot
   // ---------------------------------------------------------------------------
   connect();
+  inputEl.focus();
 })();
