@@ -5921,151 +5921,81 @@ class AmplifierTuiApp(
     # ── Streaming Callbacks ─────────────────────────────────────
 
     def _setup_streaming_callbacks(self) -> None:
-        """Wire session manager hooks to UI updates via call_from_thread.
+        """Wire streaming callbacks via SharedAppBase."""
+        self._wire_streaming_callbacks()
 
-        Supports three levels of streaming granularity:
-        1. content_block:delta  - true token streaming (when orchestrator emits)
-        2. content_block:start  - create widget early, remove spinner
-        3. content_block:end    - finalize with complete text (always fires)
-        """
-        if self.session_manager is None:
-            return
-        # Per-turn state captured by closures (reset each message send)
-        accumulated = {"text": ""}
-        last_update = {"t": 0.0}
-        block_started = {"v": False}
+    # --- Streaming callback overrides (called from BACKGROUND THREAD) ---
+    # These implement the abstract _on_stream_* methods from SharedAppBase.
+    # All UI updates are marshalled to the main thread via call_from_thread.
 
-        def on_block_start(block_type: str, block_index: int) -> None:
-            accumulated["text"] = ""
-            last_update["t"] = 0.0
-            block_started["v"] = True
-            self.call_from_thread(self._begin_streaming_block, block_type)
+    def _on_stream_block_start(self, block_type: str) -> None:
+        self.call_from_thread(self._begin_streaming_block, block_type)
 
-        def on_block_delta(block_type: str, delta: str) -> None:
-            if self._streaming_cancelled:
-                return
-            accumulated["text"] += delta
-            # Keep app-level accumulator in sync for cancel-recovery
-            self._stream_accumulated_text = accumulated["text"]
-            now = time.monotonic()
-            if now - last_update["t"] >= 0.05:  # Throttle: 50ms minimum
-                last_update["t"] = now
-                snapshot = accumulated["text"]
-                self.call_from_thread(
-                    self._update_streaming_content, block_type, snapshot
-                )
+    def _on_stream_block_delta(self, block_type: str, accumulated_text: str) -> None:
+        self.call_from_thread(
+            self._update_streaming_content, block_type, accumulated_text
+        )
 
-        def on_block_end(block_type: str, text: str) -> None:
-            self._got_stream_content = True
-            if block_started["v"]:
-                # Streaming widget exists - finalize it with complete text
-                block_started["v"] = False
-                accumulated["text"] = ""
-                self.call_from_thread(self._finalize_streaming_block, block_type, text)
+    def _on_stream_block_end(
+        self, block_type: str, final_text: str, had_block_start: bool
+    ) -> None:
+        if had_block_start:
+            # Streaming widget exists - finalize it with complete text
+            self.call_from_thread(
+                self._finalize_streaming_block, block_type, final_text
+            )
+        else:
+            # No start event received - direct display (fallback)
+            self.call_from_thread(self._remove_processing_indicator)
+            if block_type in ("thinking", "reasoning"):
+                self.call_from_thread(self._add_thinking_block, final_text)
             else:
-                # No start event received - direct display (fallback)
-                self.call_from_thread(self._remove_processing_indicator)
-                if block_type in ("thinking", "reasoning"):
-                    self.call_from_thread(self._add_thinking_block, text)
-                else:
-                    self.call_from_thread(self._add_assistant_message, text)
+                self.call_from_thread(self._add_assistant_message, final_text)
 
-        def on_tool_start(name: str, tool_input: dict) -> None:
-            self._tool_count_this_turn += 1
-            # Live tool introspection log
-            self._tool_log.on_tool_start(name, tool_input)
-            # Track agent delegations
-            if is_delegate_tool(name) and isinstance(tool_input, dict):
-                key = make_delegate_key(tool_input)
-                if key:
-                    self._agent_tracker.on_delegate_start(
-                        tool_use_id=key,
-                        agent=tool_input.get("agent", ""),
-                        instruction=tool_input.get("instruction", ""),
-                    )
-            # Feed todo tool calls to the TodoPanel
-            if name == "todo" and isinstance(tool_input, dict):
-                self.call_from_thread(self._update_todo_panel, tool_input)
-            # Feed delegate tool calls to the AgentTreePanel
-            if is_delegate_tool(name) and isinstance(tool_input, dict):
-                agent_name = tool_input.get("agent", "unknown")
-                agent_key = make_delegate_key(tool_input)
-                self.call_from_thread(
-                    self._update_agent_tree_start, agent_name, agent_key
-                )
-            # Track recipe executions
-            if name == "recipes" and isinstance(tool_input, dict):
-                op = tool_input.get("operation", "")
-                if op == "execute":
-                    recipe_path = tool_input.get("recipe_path", "")
-                    recipe_name = (
-                        recipe_path.rsplit("/", 1)[-1].replace(".yaml", "")
-                        if recipe_path
-                        else "unknown"
-                    )
-                    self._recipe_tracker.on_recipe_start(
-                        recipe_name, [], source_file=recipe_path
-                    )
-            if self._prefs.display.progress_labels:
-                label = _get_tool_label(name, tool_input)
-                bare = label.rstrip(".")
-                # Append raw tool name for extra detail
-                bare = f"{bare} ({name})"
-                # Show sequential counter when this isn't the first tool
-                if self._tool_count_this_turn > 1:
-                    bare = f"{bare} [#{self._tool_count_this_turn}]"
-            else:
-                label = "Thinking..."
-                bare = "Thinking"
-            self._processing_label = bare
-            self._status_activity_label = label
-            self.call_from_thread(self._ensure_processing_indicator, bare)
-            self.call_from_thread(self._update_status, label)
+    def _on_stream_tool_start(self, name: str, tool_input: dict) -> None:
+        # Feed todo tool calls to the TodoPanel
+        if name == "todo" and isinstance(tool_input, dict):
+            self.call_from_thread(self._update_todo_panel, tool_input)
+        # Feed delegate tool calls to the AgentTreePanel
+        if is_delegate_tool(name) and isinstance(tool_input, dict):
+            agent_name = tool_input.get("agent", "unknown")
+            agent_key = make_delegate_key(tool_input)
+            self.call_from_thread(self._update_agent_tree_start, agent_name, agent_key)
+        # Compute display label
+        if self._prefs.display.progress_labels:
+            label = _get_tool_label(name, tool_input)
+            bare = label.rstrip(".")
+            # Append raw tool name for extra detail
+            bare = f"{bare} ({name})"
+            # Show sequential counter when this isn't the first tool
+            if self._tool_count_this_turn > 1:
+                bare = f"{bare} [#{self._tool_count_this_turn}]"
+        else:
+            label = "Thinking..."
+            bare = "Thinking"
+        self._processing_label = bare
+        self._status_activity_label = label
+        self.call_from_thread(self._ensure_processing_indicator, bare)
+        self.call_from_thread(self._update_status, label)
 
-        def on_tool_end(name: str, tool_input: dict, result: str) -> None:
-            # Live tool introspection log
-            _tool_status = "failed" if result.startswith("Error") else "completed"
-            self._tool_log.on_tool_end(name, status=_tool_status)
-            # Complete agent delegation tracking
-            if is_delegate_tool(name) and isinstance(tool_input, dict):
-                key = make_delegate_key(tool_input)
-                if key:
-                    status = "failed" if result.startswith("Error") else "completed"
-                    self._agent_tracker.on_delegate_complete(
-                        tool_use_id=key,
-                        result=result,
-                        status=status,
-                    )
-            # Update AgentTreePanel on delegate completion
-            if is_delegate_tool(name) and isinstance(tool_input, dict):
-                agent_key = make_delegate_key(tool_input)
-                d_status = "failed" if result.startswith("Error") else "completed"
-                summary = result[:100] if result else ""
-                self.call_from_thread(
-                    self._update_agent_tree_end, agent_key, d_status, summary
-                )
-            # Complete recipe tracking
-            if name == "recipes" and isinstance(tool_input, dict):
-                op = tool_input.get("operation", "")
-                if op == "execute":
-                    r_status = "failed" if result.startswith("Error") else "completed"
-                    self._recipe_tracker.on_recipe_complete(status=r_status)
-            self._processing_label = "Thinking"
-            self._status_activity_label = "Thinking..."
-            self.call_from_thread(self._add_tool_use, name, tool_input, result)
-            self.call_from_thread(self._ensure_processing_indicator, "Thinking")
-            self.call_from_thread(self._update_status, "Thinking...")
+    def _on_stream_tool_end(self, name: str, tool_input: dict, result: str) -> None:
+        # Update AgentTreePanel on delegate completion
+        if is_delegate_tool(name) and isinstance(tool_input, dict):
+            agent_key = make_delegate_key(tool_input)
+            d_status = "failed" if result.startswith("Error") else "completed"
+            summary = result[:100] if result else ""
+            self.call_from_thread(
+                self._update_agent_tree_end, agent_key, d_status, summary
+            )
+        self._processing_label = "Thinking"
+        self._status_activity_label = "Thinking..."
+        self.call_from_thread(self._add_tool_use, name, tool_input, result)
+        self.call_from_thread(self._ensure_processing_indicator, "Thinking")
+        self.call_from_thread(self._update_status, "Thinking...")
 
-        def on_usage():
-            self.call_from_thread(self._update_token_display)
-            self.call_from_thread(self._record_context_snapshot)
-
-        self.session_manager.on_content_block_start = on_block_start
-        self.session_manager.on_content_block_delta = on_block_delta
-        self.session_manager.on_content_block_end = on_block_end
-        self.session_manager.on_tool_pre = on_tool_start
-        self.session_manager.on_tool_post = on_tool_end
-        self.session_manager.on_usage_update = on_usage
+    def _on_stream_usage_update(self) -> None:
+        self.call_from_thread(self._update_token_display)
+        self.call_from_thread(self._record_context_snapshot)
 
     # ── Streaming Display ─────────────────────────────────────────
 
