@@ -5314,7 +5314,7 @@ class AmplifierTuiApp(
                 input_str = input_str[:800] + "..."
             detail_parts.append(f"Input:\n{input_str}")
         if result:
-            r = result[:1500] + "..." if len(result) > 1500 else result
+            r = result[:8000] + "\n... (truncated)" if len(result) > 8000 else result
             detail_parts.append(f"Result:\n{r}")
 
         detail = "\n\n".join(detail_parts) if detail_parts else "(no details)"

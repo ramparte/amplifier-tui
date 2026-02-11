@@ -97,7 +97,7 @@ def parse_message_blocks(msg: dict) -> list[DisplayBlock]:
                     blocks.append(
                         DisplayBlock(
                             kind="tool_result",
-                            content=str(result_content)[:500],
+                            content=str(result_content),
                             tool_id=block.get("tool_use_id", ""),
                         )
                     )
@@ -111,7 +111,7 @@ def parse_message_blocks(msg: dict) -> list[DisplayBlock]:
         blocks.append(
             DisplayBlock(
                 kind="tool_result",
-                content=str(content)[:500],
+                content=str(content),
                 tool_id=msg.get("tool_use_id", ""),
             )
         )
