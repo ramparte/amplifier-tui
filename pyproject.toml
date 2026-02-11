@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Proof of concept: Textual TUI for Amplifier"
 requires-python = ">=3.11"
 dependencies = [
-    "amplifier-distro @ git+https://github.com/ramparte/amplifier-distro",
+    "amplifier-distro[amplifier] @ git+https://github.com/ramparte/amplifier-distro",
     "pyyaml>=6.0",
     "pyte>=0.8.2",
     "textual>=0.47.0",
