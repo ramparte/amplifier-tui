@@ -1,12 +1,17 @@
-"""Amplifier session management for the TUI."""
+"""Amplifier session management for the TUI.
+
+Uses the distro Bridge as the single interface for session lifecycle.
+No direct imports of amplifier-core or amplifier-foundation for session
+creation -- everything goes through LocalBridge.
+"""
 
 from __future__ import annotations
 
 import json
-import uuid
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from .log import logger
 from .platform import (
@@ -19,12 +24,15 @@ if TYPE_CHECKING:
 
 
 class SessionManager:
-    """Manages Amplifier session lifecycle."""
+    """Manages Amplifier session lifecycle via the distro Bridge."""
 
     def __init__(self):
         self.session: AmplifierSession | None = None
         self.session_id: str | None = None
-        self.prepared_bundle = None
+
+        # Bridge internals
+        self._bridge: Any | None = None
+        self._handle: Any | None = None
 
         # Streaming callbacks - set by the app before execute()
         self.on_content_block_start: Callable[[str, int], None] | None = None
@@ -55,7 +63,7 @@ class SessionManager:
             return
         try:
             providers = self.session.coordinator.get("providers") or {}
-            for _name, prov in providers.items():
+            for prov in providers.values():
                 if hasattr(prov, "default_model"):
                     self.model_name = prov.default_model
                 elif hasattr(prov, "model"):
@@ -65,7 +73,7 @@ class SessionManager:
                     if hasattr(info, "defaults") and isinstance(info.defaults, dict):
                         self.context_window = info.defaults.get("context_window", 0)
                 break  # Use the first provider
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.debug("Failed to extract model info", exc_info=True)
 
     def switch_model(self, model_name: str) -> bool:
@@ -78,7 +86,7 @@ class SessionManager:
             return False
         try:
             providers = self.session.coordinator.get("providers") or {}
-            for _name, prov in providers.items():
+            for prov in providers.values():
                 if hasattr(prov, "default_model"):
                     prov.default_model = model_name
                     self.model_name = model_name
@@ -88,7 +96,7 @@ class SessionManager:
                     self.model_name = model_name
                     return True
             return False
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.debug("Failed to switch model to %s", model_name, exc_info=True)
             return False
 
@@ -110,180 +118,39 @@ class SessionManager:
                     model = prov.model
                 if model:
                     results.append((model, name))
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.debug("Failed to get provider models", exc_info=True)
         return results
 
-    @staticmethod
-    def _apply_model_override(config_data: dict, model_override: str) -> None:
-        """Patch *config_data* providers to use *model_override*."""
-        for provider in config_data.get("providers", []):
-            cfg = provider.get("config", {})
-            if "default_model" in cfg:
-                cfg["default_model"] = model_override
-                # Promote to highest priority so this provider is selected
-                cfg["priority"] = 0
-                return
-        # Fallback: patch the first provider that has any config
-        for provider in config_data.get("providers", []):
-            cfg = provider.get("config")
-            if isinstance(cfg, dict):
-                cfg["default_model"] = model_override
-                cfg["priority"] = 0
-                return
+    # ------------------------------------------------------------------
+    # Bridge helpers
+    # ------------------------------------------------------------------
 
-    @staticmethod
-    def _get_active_bundle() -> str | None:
-        """Read the active bundle name from Amplifier settings."""
-        settings_path = Path.home() / ".amplifier" / "settings.yaml"
-        if not settings_path.exists():
-            return None
-        try:
-            import yaml
+    def _get_bridge(self) -> Any:
+        """Lazily create the LocalBridge singleton."""
+        if self._bridge is None:
+            from amplifier_distro.bridge import LocalBridge
 
-            with open(settings_path, "r", encoding="utf-8") as f:
-                settings = yaml.safe_load(f)
-            if isinstance(settings, dict):
-                bundle_cfg = settings.get("bundle", {})
-                if isinstance(bundle_cfg, dict):
-                    return bundle_cfg.get("active")
-        except Exception:
-            logger.debug("Failed to read Amplifier settings", exc_info=True)
-        return None
+            self._bridge = LocalBridge()
+        return self._bridge
 
-    async def start_new_session(
-        self,
-        cwd: Path | None = None,
-        model_override: str = "",
-    ) -> None:
-        """Start a new Amplifier session.
-
-        Parameters
-        ----------
-        cwd:
-            Working directory for the session.
-        model_override:
-            If non-empty, override the provider's default model after
-            session creation.
-        """
-        from amplifier_foundation import load_bundle
-
-        if cwd is None:
-            cwd = Path.cwd()
-
-        self.session_id = str(uuid.uuid4())
-
-        bundle_name = self._get_active_bundle()
-        if not bundle_name:
-            raise ValueError(
-                "No active bundle configured. "
-                "Run 'amplifier bundle use <name>' to set one."
-            )
-
-        bundle = await load_bundle(bundle_name)
-        prepared = await bundle.prepare()
-        self.prepared_bundle = prepared
-
-        self.session = await prepared.create_session(
-            session_id=self.session_id,
-            session_cwd=cwd,
-        )
-
-        if model_override:
-            self.switch_model(model_override)
-
-        # Register streaming hooks and extract model info
-        self._register_hooks()
-        self.reset_usage()
-        self._extract_model_info()
-
-    async def resume_session(
-        self,
-        session_id: str,
-        model_override: str = "",
-    ) -> None:
-        """Resume an existing Amplifier session.
-
-        Parameters
-        ----------
-        session_id:
-            The session to resume.
-        model_override:
-            If non-empty, override the provider's default model.
-        """
-        from amplifier_foundation import load_bundle
-
-        self.session_id = session_id
-
-        bundle_name = self._get_active_bundle()
-        if not bundle_name:
-            raise ValueError(
-                "No active bundle configured. "
-                "Run 'amplifier bundle use <name>' to set one."
-            )
-
-        bundle = await load_bundle(bundle_name)
-        prepared = await bundle.prepare()
-        self.prepared_bundle = prepared
-
-        self.session = await prepared.create_session(
-            session_id=session_id,
-            session_cwd=Path.cwd(),
-            is_resumed=True,
-        )
-
-        # Load and inject the prior transcript into the session context
-        transcript_path = self.get_session_transcript_path(session_id)
-        transcript = self._load_transcript(transcript_path)
-        if transcript and self.session:
-            try:
-                context = self.session.coordinator.get("context")
-                if context:
-                    for msg in transcript:
-                        context.add_message(msg)
-            except Exception:
-                logger.debug(
-                    "Failed to inject transcript into session context",
-                    exc_info=True,
-                )
-
-        if model_override:
-            self.switch_model(model_override)
-
-        # Register streaming hooks and extract model info
-        self._register_hooks()
-        self.reset_usage()
-        self._extract_model_info()
-
-    def _register_hooks(self) -> None:
-        """Register hooks on the session for streaming UI updates."""
-        if not self.session:
-            return
-
-        try:
-            from amplifier_core.models import HookResult
-        except ImportError:
-            return
-
-        hooks = self.session.coordinator.hooks
-
-        async def on_block_start(event: str, data: dict) -> Any:
-            block_type = data.get("block_type", "text")
-            block_index = data.get("block_index", 0)
+    def _on_stream(self, event: str, data: dict[str, Any]) -> None:
+        """Dispatch bridge streaming events to the TUI callbacks."""
+        if event == "content_block:start":
             if self.on_content_block_start:
-                self.on_content_block_start(block_type, block_index)
-            return HookResult(action="continue")
-
-        async def on_block_delta(event: str, data: dict) -> Any:
-            block_type = data.get("block_type", "text")
+                self.on_content_block_start(
+                    data.get("block_type", "text"),
+                    data.get("block_index", 0),
+                )
+        elif event == "content_block:delta":
             delta = (
-                data.get("delta", "") or data.get("text", "") or data.get("content", "")
+                data.get("delta", "")
+                or data.get("text", "")
+                or data.get("content", "")
             )
             if delta and self.on_content_block_delta:
-                self.on_content_block_delta(block_type, delta)
-            return HookResult(action="continue")
-
-        async def on_block_end(event: str, data: dict) -> Any:
+                self.on_content_block_delta(data.get("block_type", "text"), delta)
+        elif event == "content_block:end":
             block = data.get("block", {})
             block_type = block.get("type", "")
             if block_type == "text" and self.on_content_block_end:
@@ -291,16 +158,12 @@ class SessionManager:
             elif block_type in ("thinking", "reasoning") and self.on_content_block_end:
                 text = block.get("thinking", "") or block.get("text", "")
                 self.on_content_block_end("thinking", text)
-            return HookResult(action="continue")
-
-        async def on_tool_start(event: str, data: dict) -> Any:
+        elif event == "tool:pre":
             if self.on_tool_pre:
                 self.on_tool_pre(
                     data.get("tool_name", "unknown"), data.get("tool_input", {})
                 )
-            return HookResult(action="continue")
-
-        async def on_tool_end(event: str, data: dict) -> Any:
+        elif event == "tool:post":
             if self.on_tool_post:
                 result = data.get("result", "")
                 if isinstance(result, dict):
@@ -308,21 +171,15 @@ class SessionManager:
                 self.on_tool_post(
                     data.get("tool_name", "unknown"),
                     data.get("tool_input", {}),
-                    str(result)[:2000],  # Truncate long results (collapsed by default)
+                    str(result)[:2000],
                 )
-            return HookResult(action="continue")
-
-        async def on_exec_start(event: str, data: dict) -> Any:
+        elif event == "execution:start":
             if self.on_execution_start:
                 self.on_execution_start()
-            return HookResult(action="continue")
-
-        async def on_exec_end(event: str, data: dict) -> Any:
+        elif event == "execution:end":
             if self.on_execution_end:
                 self.on_execution_end()
-            return HookResult(action="continue")
-
-        async def on_llm_response(event: str, data: dict) -> Any:
+        elif event == "llm:response":
             usage = data.get("usage", {})
             if usage:
                 self.total_input_tokens += usage.get("input", 0)
@@ -332,77 +189,116 @@ class SessionManager:
                 self.model_name = model
             if self.on_usage_update:
                 self.on_usage_update()
-            return HookResult(action="continue")
 
-        hooks.register("content_block:start", on_block_start, name="tui-block-start")
-        hooks.register("content_block:delta", on_block_delta, name="tui-block-delta")
-        hooks.register("content_block:end", on_block_end, name="tui-content")
-        hooks.register("tool:pre", on_tool_start, name="tui-tool-pre")
-        hooks.register("tool:post", on_tool_end, name="tui-tool-post")
-        hooks.register("execution:start", on_exec_start, name="tui-exec-start")
-        hooks.register("execution:end", on_exec_end, name="tui-exec-end")
-        hooks.register("llm:response", on_llm_response, name="tui-usage")
+    # ------------------------------------------------------------------
+    # Session lifecycle (via Bridge)
+    # ------------------------------------------------------------------
 
-    def _load_transcript(self, transcript_path: Path) -> list[dict]:
-        """Load messages from a transcript file."""
-        messages = []
-        with open(transcript_path, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    messages.append(json.loads(line))
-        return messages
+    async def start_new_session(
+        self,
+        cwd: Path | None = None,
+        model_override: str = "",
+    ) -> None:
+        """Start a new Amplifier session via the distro Bridge.
 
-    def _find_most_recent_session(self) -> str:
-        """Find the most recent session ID."""
-        sessions = self.list_all_sessions()
-        if not sessions:
-            raise ValueError("No sessions found")
-        return sessions[0]["session_id"]
-
-    def get_session_transcript_path(self, session_id: str) -> Path:
-        """Get the path to a session's transcript file.
-
-        Searches all project directories for the session.
-        A session dir may exist in multiple projects (e.g. sub-sessions),
-        so we verify transcript.jsonl actually exists before returning.
+        Parameters
+        ----------
+        cwd:
+            Working directory for the session.
+        model_override:
+            If non-empty, override the provider's default model after
+            session creation.
         """
-        sessions_dir = amplifier_projects_dir()
+        from amplifier_distro.bridge import BridgeConfig
 
-        for project_dir in sessions_dir.iterdir():
-            if not project_dir.is_dir():
-                continue
-            sessions_subdir = project_dir / "sessions"
-            if sessions_subdir.exists():
-                transcript = sessions_subdir / session_id / "transcript.jsonl"
-                if transcript.exists():
-                    return transcript
+        if cwd is None:
+            cwd = Path.cwd()
 
-        raise ValueError(f"Session {session_id} not found")
+        bridge = self._get_bridge()
+        config = BridgeConfig(
+            working_dir=cwd,
+            run_preflight=False,
+            on_stream=self._on_stream,
+        )
+
+        handle = await bridge.create_session(config)
+        self._handle = handle
+        self.session = handle._session
+        self.session_id = handle.session_id
+
+        if model_override:
+            self.switch_model(model_override)
+
+        self.reset_usage()
+        self._extract_model_info()
+
+    async def resume_session(
+        self,
+        session_id: str,
+        model_override: str = "",
+    ) -> None:
+        """Resume an existing Amplifier session via the distro Bridge.
+
+        Parameters
+        ----------
+        session_id:
+            The session to resume.
+        model_override:
+            If non-empty, override the provider's default model.
+        """
+        from amplifier_distro.bridge import BridgeConfig
+
+        bridge = self._get_bridge()
+        config = BridgeConfig(
+            working_dir=Path.cwd(),
+            run_preflight=False,
+            on_stream=self._on_stream,
+        )
+
+        handle = await bridge.resume_session(session_id, config)
+        self._handle = handle
+        self.session = handle._session
+        self.session_id = handle.session_id
+
+        if model_override:
+            self.switch_model(model_override)
+
+        self.reset_usage()
+        self._extract_model_info()
 
     async def end_session(self) -> None:
-        """End the current session cleanly (emit SESSION_END + cleanup).
+        """End the current session cleanly via the Bridge.
 
-        This mirrors what the CLI does in its finally block.
-        Must be called before the app exits or the last turn won't persist.
+        Emits SESSION_END, writes handoff, and cleans up resources.
         """
         if not self.session:
             return
 
         try:
-            hooks = self.session.coordinator.get("hooks")
-            if hooks:
-                from amplifier_core.events import SESSION_END
+            if self._handle:
+                bridge = self._get_bridge()
+                await bridge.end_session(self._handle)
+            else:
+                # Fallback: direct cleanup when no handle (e.g. tab-swapped session)
+                try:
+                    hooks = self.session.coordinator.get("hooks")
+                    if hooks:
+                        from amplifier_core.events import SESSION_END  # type: ignore[import-not-found]
 
-                await hooks.emit(SESSION_END, {"session_id": self.session_id})
-        except Exception:
-            logger.debug("Failed to emit SESSION_END", exc_info=True)
-
-        try:
-            await self.session.cleanup()
-        except Exception:
-            logger.debug("Failed to clean up session", exc_info=True)
+                        await hooks.emit(
+                            SESSION_END, {"session_id": self.session_id}
+                        )
+                except Exception:  # noqa: BLE001
+                    logger.debug("Failed to emit SESSION_END", exc_info=True)
+                try:
+                    await self.session.cleanup()
+                except Exception:  # noqa: BLE001
+                    logger.debug("Failed to clean up session", exc_info=True)
+        except Exception:  # noqa: BLE001
+            logger.debug("Failed to end session via bridge", exc_info=True)
 
         self.session = None
+        self._handle = None
 
     async def send_message(self, message: str) -> str:
         """Send a message to the current session."""
@@ -410,6 +306,10 @@ class SessionManager:
             raise ValueError("No active session")
         response = await self.session.execute(message)
         return response
+
+    # ------------------------------------------------------------------
+    # Session discovery (local filesystem -- no bridge needed)
+    # ------------------------------------------------------------------
 
     @staticmethod
     def list_all_sessions(limit: int = 50) -> list[dict]:
@@ -424,7 +324,7 @@ class SessionManager:
         if not sessions_dir.exists():
             return []
 
-        results = []
+        results: list[dict[str, Any]] = []
         for project_dir in sessions_dir.iterdir():
             if not project_dir.is_dir():
                 continue
@@ -433,7 +333,6 @@ class SessionManager:
                 continue
 
             # Reconstruct the original path from the directory name
-            # Uses platform-aware decoding (handles Unix and Windows path encodings)
             raw_name = project_dir.name
             try:
                 project_path = reconstruct_project_path(raw_name)
@@ -448,7 +347,7 @@ class SessionManager:
             for session_dir in sessions_subdir.iterdir():
                 if not session_dir.is_dir():
                     continue
-                # Skip sub-sessions (they have _ in the session ID like uuid_agent-name)
+                # Skip sub-sessions (they have _ in the session ID)
                 if "_" in session_dir.name:
                     continue
                 transcript_path = session_dir / "transcript.jsonl"
@@ -461,7 +360,9 @@ class SessionManager:
                     "project": project_label,
                     "project_path": project_path,
                     "mtime": mtime,
-                    "date_str": datetime.fromtimestamp(mtime).strftime("%m/%d %H:%M"),
+                    "date_str": datetime.fromtimestamp(mtime).strftime(
+                        "%m/%d %H:%M"
+                    ),
                     "name": "",
                     "description": "",
                 }
@@ -470,7 +371,7 @@ class SessionManager:
                 metadata_path = session_dir / "metadata.json"
                 if metadata_path.exists():
                     try:
-                        with open(metadata_path, "r", encoding="utf-8") as f:
+                        with open(metadata_path, encoding="utf-8") as f:
                             meta = json.load(f)
                             info["name"] = meta.get("name", "")
                             info["description"] = meta.get("description", "")
@@ -485,3 +386,42 @@ class SessionManager:
 
         results.sort(key=lambda x: x["mtime"], reverse=True)
         return results[:limit]
+
+    def _find_most_recent_session(self) -> str:
+        """Return the session_id of the most recently modified session.
+
+        Raises ``ValueError`` when no sessions exist on disk.
+        """
+        sessions = self.list_all_sessions(limit=1)
+        if not sessions:
+            raise ValueError("No sessions found")
+        return sessions[0]["session_id"]
+
+    @staticmethod
+    def get_session_transcript_path(session_id: str) -> Path | None:
+        """Locate the ``transcript.jsonl`` file for *session_id*.
+
+        Scans all project directories under ``~/.amplifier/projects/``.
+        Supports prefix matching (e.g. first 8 chars of a UUID).
+        """
+        projects_dir = amplifier_projects_dir()
+        if not projects_dir.exists():
+            return None
+
+        for project_dir in projects_dir.iterdir():
+            if not project_dir.is_dir():
+                continue
+            sessions_subdir = project_dir / "sessions"
+            if not sessions_subdir.exists():
+                continue
+            for session_dir in sessions_subdir.iterdir():
+                if not session_dir.is_dir():
+                    continue
+                if (
+                    session_dir.name == session_id
+                    or session_dir.name.startswith(session_id)
+                ):
+                    transcript = session_dir / "transcript.jsonl"
+                    if transcript.exists():
+                        return transcript
+        return None

@@ -354,6 +354,9 @@ autosave:
   enabled: true                   # auto-save sessions periodically and after responses
   interval: 120                   # seconds between periodic auto-saves (default 2 min)
 
+environment:
+  workspace: ""                   # root directory for your projects (e.g. ~/dev/ANext)
+
 # Custom themes: define your own color themes here.
 # Each key becomes a theme name usable with /theme <name>.
 # Only include the color keys you want to override; missing keys are
@@ -438,6 +441,13 @@ class AutosavePreferences:
 
 
 @dataclass
+class EnvironmentPreferences:
+    """Environment paths and configuration."""
+
+    workspace: str = ""  # Root directory for projects (e.g. ~/dev/ANext)
+
+
+@dataclass
 class Preferences:
     """Top-level TUI preferences."""
 
@@ -447,6 +457,7 @@ class Preferences:
     )
     display: DisplayPreferences = field(default_factory=DisplayPreferences)
     autosave: AutosavePreferences = field(default_factory=AutosavePreferences)
+    environment: EnvironmentPreferences = field(default_factory=EnvironmentPreferences)
     preferred_model: str = ""  # Empty means use default from bundle config
     theme_name: str = "dark"  # Active theme name (persisted for display)
     session_sort: str = "date"  # Session sort order: date, name, project
@@ -591,6 +602,10 @@ def load_preferences(path: Path | None = None) -> Preferences:
                     prefs.autosave.enabled = bool(adata["enabled"])
                 if "interval" in adata:
                     prefs.autosave.interval = max(30, int(adata["interval"]))
+            if isinstance(data.get("environment"), dict):
+                edata = data["environment"]
+                if "workspace" in edata:
+                    prefs.environment.workspace = str(edata["workspace"] or "")
             # Load user-defined custom themes into the module-level dicts
             if isinstance(data.get("custom_themes"), dict):
                 _load_custom_themes(data["custom_themes"])
@@ -1605,3 +1620,46 @@ def save_progress_labels(enabled: bool, path: Path | None = None) -> None:
         logger.debug(
             "Failed to save progress labels preference to %s", path, exc_info=True
         )
+
+
+def save_workspace(workspace: str, path: Path | None = None) -> None:
+    """Persist the workspace path to the preferences file.
+
+    Surgically updates only the workspace value under the environment section,
+    preserving the rest of the file (including user comments) as-is.
+    """
+    import re
+
+    path = path or PREFS_PATH
+    try:
+        if path.exists():
+            text = path.read_text()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = _DEFAULT_YAML
+
+        value = f'"{workspace}"' if workspace else '""'
+        if re.search(r"^\s+workspace:", text, re.MULTILINE):
+            text = re.sub(
+                r"^(\s+workspace:).*$",
+                f"\\1 {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        elif re.search(r"^environment:", text, re.MULTILINE):
+            # environment section exists but no workspace key
+            text = re.sub(
+                r"^(environment:.*)$",
+                f"\\1\n  workspace: {value}",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            # No environment section at all -- append it
+            text = text.rstrip() + f"\n\nenvironment:\n  workspace: {value}\n"
+
+        path.write_text(text)
+    except OSError:
+        logger.debug("Failed to save workspace preference to %s", path, exc_info=True)

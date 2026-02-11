@@ -8,8 +8,7 @@ version = "0.1.0"
 description = "Proof of concept: Textual TUI for Amplifier"
 requires-python = ">=3.11"
 dependencies = [
-    "amplifier-core @ git+https://github.com/microsoft/amplifier-core",
-    "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation",
+    "amplifier-distro @ git+https://github.com/ramparte/amplifier-distro",
     "pyyaml>=6.0",
     "pyte>=0.8.2",
     "textual>=0.47.0",
@@ -24,8 +23,8 @@ dev = [
     "pytest-cov>=7.0",
 ]
 
-# Amplifier core and foundation are direct dependencies.
-# The TUI will detect if Amplifier is available at startup.
+# amplifier-distro brings in core + foundation transitively.
+# The TUI uses the distro Bridge for session lifecycle.
 
 [project.scripts]
 amplifier-tui = "amplifier_tui.__main__:main"

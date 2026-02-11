@@ -5,21 +5,12 @@ import sys
 
 from .log import logger
 
-_INSTALL_MESSAGE = """\
-Amplifier TUI requires Amplifier to be installed.
-
-  Install:  uv tool install git+https://github.com/microsoft/amplifier
-  Docs:     https://github.com/microsoft/amplifier#readme
-
-Once installed, run amplifier-tui again.
-"""
-
 
 def _check_amplifier() -> bool:
     """Return True if amplifier_core and amplifier_foundation are importable."""
     try:
-        import amplifier_core  # noqa: F401
-        import amplifier_foundation  # noqa: F401
+        import amplifier_core  # noqa: F401  # type: ignore[import-not-found]
+        import amplifier_foundation  # noqa: F401  # type: ignore[import-not-found]
 
         return True
     except ImportError:
@@ -54,9 +45,17 @@ def main():
     )
     args = parser.parse_args()
 
+    # Pre-flight check: warn but still launch the TUI so the user gets
+    # the nice in-app diagnostics rather than a raw terminal error.
     if not _check_amplifier():
-        print(_INSTALL_MESSAGE, file=sys.stderr)
-        sys.exit(1)
+        print(
+            "Note: Amplifier libraries not detected.  The TUI will launch\n"
+            "in limited mode.  Use /environment inside the app for details,\n"
+            "or install Amplifier:\n"
+            "\n"
+            "  uv tool install git+https://github.com/microsoft/amplifier\n",
+            file=sys.stderr,
+        )
 
     # Determine session to resume
     resume_session_id = None

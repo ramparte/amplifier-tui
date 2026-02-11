@@ -184,6 +184,9 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/monitor close",
     "/monitor big",
     "/monitor small",
+    "/workspace",
+    "/environment",
+    "/env",
 )
 
 # -- Amplifier mode definitions ------------------------------------------------

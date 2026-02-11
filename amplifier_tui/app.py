@@ -8,7 +8,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
 from collections import Counter
@@ -692,9 +691,14 @@ class AmplifierTuiApp(
                 "Failed to initialize Amplifier session manager", exc_info=True
             )
             self._amplifier_available = False
+            from .environment import check_environment, format_status
+
+            env_status = check_environment(self._prefs.environment.workspace)
+            diag = format_status(env_status)
             self.call_from_thread(
                 self._show_welcome,
-                "Amplifier not found. Install: uv tool install amplifier",
+                diag
+                + "\n\nUse /environment for details or /workspace <path> to set your project root.",
             )
             self.call_from_thread(self._update_status, "Not connected")
             return
@@ -2966,6 +2970,9 @@ class AmplifierTuiApp(
             "/plugins": lambda: self._cmd_plugins(args),
             "/dashboard": lambda: self._cmd_dashboard(args),
             "/monitor": lambda: self._cmd_monitor(args),
+            "/workspace": lambda: self._cmd_workspace(args),
+            "/environment": self._cmd_environment,
+            "/env": self._cmd_environment,
         }
 
         handler = handlers.get(cmd)
@@ -2987,6 +2994,8 @@ class AmplifierTuiApp(
             "  /new          New session\n"
             "  /sessions     Session manager (list, search, recent, open, delete, info)\n"
             "  /prefs        Show preferences\n"
+            "  /workspace    Show or set project workspace (/workspace <path>)\n"
+            "  /environment  Full Amplifier install diagnostics (/env alias)\n"
             "  /model        Show/switch model | /model list | /model <name>\n"
             "  /stats        Show session statistics | /stats tools | /stats tokens | /stats time\n"
             "  /tokens       Detailed token / context usage breakdown\n"
@@ -3624,6 +3633,7 @@ class AmplifierTuiApp(
         from .preferences import PREFS_PATH
 
         c = self._prefs.colors
+        e = self._prefs.environment
         lines = [
             "Color Preferences\n",
             f"  user_text:            {c.user_text}",
@@ -3639,9 +3649,58 @@ class AmplifierTuiApp(
             f"  system_text:          {c.system_text}",
             f"  system_border:        {c.system_border}",
             f"  status_bar:           {c.status_bar}",
-            f"\nPreferences file: {PREFS_PATH}",
+            "",
+            "Environment\n",
+            f"  workspace:            {e.workspace or '(not set)'}",
+            "",
+            f"Preferences file: {PREFS_PATH}",
+            "Use /workspace <path> to set your project root.",
+            "Use /environment for full install diagnostics.",
         ]
         self._add_system_message("\n".join(lines))
+
+    def _cmd_workspace(self, args: str) -> None:
+        """Show or set the workspace (project root) directory.
+
+        /workspace          Show current workspace
+        /workspace <path>   Set workspace to <path>
+        """
+        from .preferences import save_workspace
+
+        arg = args.strip()
+        if not arg:
+            ws = self._prefs.environment.workspace
+            if ws:
+                self._add_system_message(
+                    f"Workspace: {ws}\nUse /workspace <path> to change it."
+                )
+            else:
+                self._add_system_message(
+                    "No workspace configured.\n"
+                    "Set your project root with: /workspace ~/dev/ANext"
+                )
+            return
+
+        from pathlib import Path
+
+        resolved = Path(arg).expanduser().resolve()
+        if not resolved.is_dir():
+            self._add_system_message(
+                f"Directory not found: {resolved}\n"
+                "The path must be an existing directory."
+            )
+            return
+
+        save_workspace(str(resolved))
+        self._prefs.environment.workspace = str(resolved)
+        self._add_system_message(f"Workspace set to: {resolved}")
+
+    def _cmd_environment(self) -> None:
+        """Show full environment diagnostics."""
+        from .environment import check_environment, format_status
+
+        status = check_environment(self._prefs.environment.workspace)
+        self._add_system_message(format_status(status))
 
     def _cmd_model(self, text: str) -> None:
         """Show model info, list available models, or switch models.
