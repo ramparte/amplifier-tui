@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -12,30 +11,8 @@ from typing import TYPE_CHECKING, Any, Callable
 from .log import logger
 from .platform import (
     amplifier_projects_dir,
-    amplifier_uv_site_packages,
     reconstruct_project_path,
 )
-
-# Add the global Amplifier installation to sys.path if it exists.
-# This allows us to import from amplifier_core/foundation even though
-# they're not in our venv.  Uses platform-aware path discovery.
-_site_packages = amplifier_uv_site_packages()
-if _site_packages and str(_site_packages) not in sys.path:
-    sys.path.insert(0, str(_site_packages))
-
-    # Also process .pth files to find amplifier packages
-    # (amplifier_foundation and others are installed via .pth files)
-    for _pth_file in _site_packages.glob("*.pth"):
-        try:
-            with open(_pth_file, "r", encoding="utf-8") as _f:
-                for _line in _f:
-                    _line = _line.strip()
-                    if _line and not _line.startswith("#"):
-                        _pth_path = Path(_line)
-                        if _pth_path.exists() and str(_pth_path) not in sys.path:
-                            sys.path.insert(0, str(_pth_path))
-        except OSError:
-            logger.debug("Failed to process .pth file %s", _pth_file, exc_info=True)
 
 if TYPE_CHECKING:
     from amplifier_core import AmplifierSession
@@ -155,6 +132,25 @@ class SessionManager:
                 cfg["priority"] = 0
                 return
 
+    @staticmethod
+    def _get_active_bundle() -> str | None:
+        """Read the active bundle name from Amplifier settings."""
+        settings_path = Path.home() / ".amplifier" / "settings.yaml"
+        if not settings_path.exists():
+            return None
+        try:
+            import yaml
+
+            with open(settings_path, "r", encoding="utf-8") as f:
+                settings = yaml.safe_load(f)
+            if isinstance(settings, dict):
+                bundle_cfg = settings.get("bundle", {})
+                if isinstance(bundle_cfg, dict):
+                    return bundle_cfg.get("active")
+        except Exception:
+            logger.debug("Failed to read Amplifier settings", exc_info=True)
+        return None
+
     async def start_new_session(
         self,
         cwd: Path | None = None,
@@ -167,46 +163,34 @@ class SessionManager:
         cwd:
             Working directory for the session.
         model_override:
-            If non-empty, override the provider's default model before
+            If non-empty, override the provider's default model after
             session creation.
         """
+        from amplifier_foundation import load_bundle
+
         if cwd is None:
             cwd = Path.cwd()
 
-        from amplifier_app_cli.session_runner import (
-            create_initialized_session,
-            SessionConfig,
-        )
-        from amplifier_app_cli.runtime.config import resolve_bundle_config
-        from amplifier_app_cli.lib.settings import AppSettings
-        from rich.console import Console
-
         self.session_id = str(uuid.uuid4())
 
-        app_settings = AppSettings()
-        bundle_name = app_settings.get_active_bundle()
+        bundle_name = self._get_active_bundle()
+        if not bundle_name:
+            raise ValueError(
+                "No active bundle configured. "
+                "Run 'amplifier bundle use <name>' to set one."
+            )
 
-        config_data, self.prepared_bundle = await resolve_bundle_config(
-            bundle_name=bundle_name,
-            app_settings=app_settings,
-            console=None,
+        bundle = await load_bundle(bundle_name)
+        prepared = await bundle.prepare()
+        self.prepared_bundle = prepared
+
+        self.session = await prepared.create_session(
+            session_id=self.session_id,
+            session_cwd=cwd,
         )
 
         if model_override:
-            self._apply_model_override(config_data, model_override)
-
-        session_config = SessionConfig(
-            config=config_data,
-            search_paths=[cwd],
-            verbose=False,
-            session_id=self.session_id,
-            bundle_name=bundle_name,
-            prepared_bundle=self.prepared_bundle,
-        )
-
-        console = Console()
-        initialized = await create_initialized_session(session_config, console)
-        self.session = initialized.session
+            self.switch_model(model_override)
 
         # Register streaming hooks and extract model info
         self._register_hooks()
@@ -227,45 +211,44 @@ class SessionManager:
         model_override:
             If non-empty, override the provider's default model.
         """
-        from amplifier_app_cli.session_runner import (
-            create_initialized_session,
-            SessionConfig,
-        )
-        from amplifier_app_cli.runtime.config import resolve_bundle_config
-        from amplifier_app_cli.lib.settings import AppSettings
-        from rich.console import Console
-
-        app_settings = AppSettings()
-        bundle_name = app_settings.get_active_bundle()
-
-        config_data, self.prepared_bundle = await resolve_bundle_config(
-            bundle_name=bundle_name,
-            app_settings=app_settings,
-            console=None,
-        )
-
-        if model_override:
-            self._apply_model_override(config_data, model_override)
-
-        # Load the transcript
-        transcript_path = self.get_session_transcript_path(session_id)
-        transcript = self._load_transcript(transcript_path)
+        from amplifier_foundation import load_bundle
 
         self.session_id = session_id
 
-        session_config = SessionConfig(
-            config=config_data,
-            search_paths=[Path.cwd()],
-            verbose=False,
+        bundle_name = self._get_active_bundle()
+        if not bundle_name:
+            raise ValueError(
+                "No active bundle configured. "
+                "Run 'amplifier bundle use <name>' to set one."
+            )
+
+        bundle = await load_bundle(bundle_name)
+        prepared = await bundle.prepare()
+        self.prepared_bundle = prepared
+
+        self.session = await prepared.create_session(
             session_id=session_id,
-            bundle_name=bundle_name,
-            prepared_bundle=self.prepared_bundle,
-            initial_transcript=transcript,
+            session_cwd=Path.cwd(),
+            is_resumed=True,
         )
 
-        console = Console()
-        initialized = await create_initialized_session(session_config, console)
-        self.session = initialized.session
+        # Load and inject the prior transcript into the session context
+        transcript_path = self.get_session_transcript_path(session_id)
+        transcript = self._load_transcript(transcript_path)
+        if transcript and self.session:
+            try:
+                context = self.session.coordinator.get("context")
+                if context:
+                    for msg in transcript:
+                        context.add_message(msg)
+            except Exception:
+                logger.debug(
+                    "Failed to inject transcript into session context",
+                    exc_info=True,
+                )
+
+        if model_override:
+            self.switch_model(model_override)
 
         # Register streaming hooks and extract model info
         self._register_hooks()

@@ -16,13 +16,10 @@ Once installed, run amplifier-tui again.
 
 
 def _check_amplifier() -> bool:
-    """Return True if amplifier_core is importable (after site-packages setup)."""
-    # Trigger the sys.path setup that session_manager does on import.
-    # noinspection PyUnresolvedReferences
-    from . import session_manager as _  # noqa: F401
-
+    """Return True if amplifier_core and amplifier_foundation are importable."""
     try:
         import amplifier_core  # noqa: F401
+        import amplifier_foundation  # noqa: F401
 
         return True
     except ImportError:

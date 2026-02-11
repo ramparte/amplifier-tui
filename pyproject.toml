@@ -8,6 +8,9 @@ version = "0.1.0"
 description = "Proof of concept: Textual TUI for Amplifier"
 requires-python = ">=3.10"
 dependencies = [
+    "amplifier-core @ git+https://github.com/microsoft/amplifier-core",
+    "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation",
+    "pyyaml>=6.0",
     "pyte>=0.8.2",
     "textual>=0.47.0",
 ]
@@ -21,9 +24,8 @@ dev = [
     "pytest-cov>=7.0",
 ]
 
-# Note: Amplifier dependencies are expected to be installed globally
-# via: uv tool install git+https://github.com/microsoft/amplifier
-# The TUI will detect if Amplifier is available and fall back to demo mode if not
+# Amplifier core and foundation are direct dependencies.
+# The TUI will detect if Amplifier is available at startup.
 
 [project.scripts]
 amplifier-tui = "amplifier_tui.__main__:main"
