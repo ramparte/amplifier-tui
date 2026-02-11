@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from pathlib import Path
 import json
 
 from textual import work
@@ -116,6 +115,8 @@ class SearchCommandsMixin:
             return
         result = self._last_search_results[n - 1]
         sid = result["session_id"]
+        # Set active search query so find bar auto-opens after transcript loads
+        self._active_search_query = getattr(self, "_last_search_query", "")
         self._sessions_open(sid)
 
     @work(thread=True)
@@ -250,8 +251,12 @@ class SearchCommandsMixin:
         # Sort by most recent first
         results.sort(key=lambda r: r["mtime"], reverse=True)
 
-        # Store for /search open N
+        # Store for /search open N and sidebar integration
         self._last_search_results = results
+        self._last_search_query = query
+
+        # Also populate sidebar with results
+        self.call_from_thread(self._show_sidebar_search_results, results, query)
 
         # Build output
         if not results:

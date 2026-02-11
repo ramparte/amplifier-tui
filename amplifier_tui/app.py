@@ -389,6 +389,10 @@ class AmplifierTuiApp(
 
         # Cross-session search results (for /search open N)
         self._last_search_results: list[dict] = []
+        self._active_search_query: str = (
+            ""  # Auto-trigger find bar on next transcript display
+        )
+        self._last_search_query: str = ""  # Query from last cross-session search
 
         # Find-in-chat state (Ctrl+F interactive search bar)
         self._find_visible: bool = False
@@ -1957,13 +1961,35 @@ class AmplifierTuiApp(
     def on_input_changed(self, event: Input.Changed) -> None:
         """Filter the session tree as the user types in the filter input."""
         if event.input.id == "session-filter":
-            self._filter_sessions(event.value)
+            value = event.value
+            if value.startswith(">"):
+                # Search mode: show hint instead of filtering metadata
+                tree = self.query_one("#session-tree", Tree)
+                tree.clear()
+                tree.show_root = False
+                query_part = value[1:].strip()
+                if query_part:
+                    tree.root.add_leaf(
+                        f"Press Enter to search transcripts for '{query_part}'"
+                    )
+                else:
+                    tree.root.add_leaf("Type query after > to search inside sessions")
+            else:
+                self._filter_sessions(value)
         elif event.input.id == "find-input":
             self._find_execute_search(event.value)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Handle Enter in the find-input to navigate to next match."""
-        if event.input.id == "find-input":
+        """Handle Enter in the find-input or session-filter search mode."""
+        if event.input.id == "session-filter":
+            value = event.value
+            if value.startswith(">"):
+                query = value[1:].strip()
+                if query:
+                    self._active_search_query = query
+                    self._last_search_query = query
+                    self._sidebar_search_worker(query)
+        elif event.input.id == "find-input":
             self._find_next()
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
@@ -2136,6 +2162,218 @@ class AmplifierTuiApp(
 
         if q and matched == 0:
             tree.root.add_leaf("No matching sessions")
+
+    # -- Sidebar transcript search (> prefix / /search integration) ----------
+
+    @work(thread=True)
+    def _sidebar_search_worker(self, query: str) -> None:
+        """Search transcripts across all sessions and populate the sidebar."""
+        from .platform import amplifier_projects_dir
+
+        # Show progress immediately
+        self.call_from_thread(self._sidebar_search_show_progress, query)
+
+        projects_dir = amplifier_projects_dir()
+        if not projects_dir.exists():
+            self.call_from_thread(self._display_search_results, [], query)
+            return
+
+        query_lower = query.lower()
+        results: list[dict] = []
+
+        for project_dir in projects_dir.iterdir():
+            if not project_dir.is_dir():
+                continue
+            sessions_subdir = project_dir / "sessions"
+            if not sessions_subdir.exists():
+                continue
+
+            for session_dir in sessions_subdir.iterdir():
+                if not session_dir.is_dir():
+                    continue
+                # Skip sub-sessions (agent delegations)
+                if "_" in session_dir.name:
+                    continue
+
+                sid = session_dir.name
+                transcript = session_dir / "transcript.jsonl"
+                if not transcript.exists():
+                    continue
+
+                try:
+                    mtime = transcript.stat().st_mtime
+                except OSError:
+                    continue
+
+                # Read metadata
+                meta_name = ""
+                meta_desc = ""
+                metadata_path = session_dir / "metadata.json"
+                if metadata_path.exists():
+                    try:
+                        meta = json.loads(metadata_path.read_text(encoding="utf-8"))
+                        meta_name = meta.get("name", "")
+                        meta_desc = meta.get("description", "")
+                    except (OSError, json.JSONDecodeError):
+                        pass
+
+                # Derive project name
+                project_name = (
+                    project_dir.name.rsplit("-", 1)[-1]
+                    if "-" in project_dir.name
+                    else project_dir.name
+                )
+
+                # Scan transcript for matches
+                match_count = 0
+                first_snippet = ""
+                first_role = ""
+                try:
+                    with open(transcript, "r", encoding="utf-8") as fh:
+                        for raw_line in fh:
+                            raw_line = raw_line.strip()
+                            if not raw_line:
+                                continue
+                            try:
+                                msg = json.loads(raw_line)
+                            except json.JSONDecodeError:
+                                continue
+                            role = msg.get("role", "")
+                            if role not in ("user", "assistant"):
+                                continue
+                            content = self._extract_transcript_text(
+                                msg.get("content", "")
+                            )
+                            content_lower = content.lower()
+                            start = 0
+                            while True:
+                                idx = content_lower.find(query_lower, start)
+                                if idx == -1:
+                                    break
+                                match_count += 1
+                                if match_count == 1:
+                                    snip_start = max(0, idx - 40)
+                                    snip_end = min(len(content), idx + len(query) + 40)
+                                    snippet = content[snip_start:snip_end].replace(
+                                        "\n", " "
+                                    )
+                                    if snip_start > 0:
+                                        snippet = "..." + snippet
+                                    if snip_end < len(content):
+                                        snippet = snippet + "..."
+                                    first_snippet = snippet
+                                    first_role = role
+                                start = idx + 1
+                except OSError:
+                    continue
+
+                # Also check metadata fields
+                for meta_field in (meta_name, meta_desc):
+                    if meta_field and query_lower in meta_field.lower():
+                        if not first_snippet:
+                            first_snippet = meta_field.replace("\n", " ")[:100]
+                            first_role = "metadata"
+                            match_count = max(match_count, 1)
+                        break
+
+                if match_count > 0:
+                    from datetime import datetime
+
+                    results.append(
+                        {
+                            "session_id": sid,
+                            "mtime": mtime,
+                            "date_str": datetime.fromtimestamp(mtime).strftime(
+                                "%m/%d %H:%M"
+                            ),
+                            "match_count": match_count,
+                            "first_snippet": first_snippet,
+                            "first_role": first_role,
+                            "name": meta_name,
+                            "description": meta_desc,
+                            "project": project_name,
+                        }
+                    )
+
+        # Sort by most recent first
+        results.sort(key=lambda r: r["mtime"], reverse=True)
+
+        # Store for /search open N
+        self._last_search_results = results
+        self._last_search_query = query
+
+        self.call_from_thread(self._display_search_results, results, query)
+
+    def _sidebar_search_show_progress(self, query: str) -> None:
+        """Show a 'Searching...' indicator in the sidebar tree."""
+        try:
+            tree = self.query_one("#session-tree", Tree)
+            tree.clear()
+            tree.show_root = False
+            tree.root.add_leaf(f"Searching for '{query}'...")
+        except Exception:
+            pass
+
+    def _display_search_results(self, results: list[dict], query: str) -> None:
+        """Populate the sidebar tree with cross-session search results."""
+        try:
+            tree = self.query_one("#session-tree", Tree)
+        except Exception:
+            return
+
+        tree.clear()
+        tree.show_root = False
+
+        if not results:
+            tree.root.add_leaf(f"No matches for '{query}'")
+            return
+
+        total_matches = sum(r["match_count"] for r in results)
+        count_label = "match" if total_matches == 1 else "matches"
+        sess_label = "session" if len(results) == 1 else "sessions"
+        tree.root.add_leaf(
+            f"{total_matches} {count_label} in {len(results)} {sess_label}"
+        )
+
+        custom_names = self._load_session_names()
+        session_titles = self._load_session_titles()
+
+        # Group results by project
+        current_project: str | None = None
+        group_node = tree.root
+        for r in results:
+            project = r["project"]
+            if project != current_project:
+                current_project = project
+                group_node = tree.root.add(project, expand=True)
+
+            sid = r["session_id"]
+            display = self._session_display_label(r, custom_names, session_titles)
+            count = r["match_count"]
+            count_str = f"({count} match{'es' if count != 1 else ''})"
+            session_node = group_node.add(f"{display}  {count_str}", data=sid)
+            # Show first snippet as a leaf
+            if r["first_snippet"]:
+                snippet = r["first_snippet"][:80]
+                session_node.add_leaf(f"[{r['first_role']}] {snippet}")
+            session_node.collapse()
+
+        self._last_search_results = results
+        self._active_search_query = query
+
+    def _show_sidebar_search_results(self, results: list[dict], query: str) -> None:
+        """Open sidebar and display search results (called from /search)."""
+        # Open sidebar if not visible
+        if not self._sidebar_visible:
+            self.action_toggle_sidebar()
+
+        # Set the filter input to >query
+        try:
+            self.query_one("#session-filter", Input).value = f">{query}"
+        except Exception:
+            pass
+
+        self._display_search_results(results, query)
 
     def action_toggle_sidebar(self) -> None:
         sidebar = self.query_one("#session-sidebar")
@@ -6375,6 +6613,12 @@ class AmplifierTuiApp(
         self._replay_notes()
 
         chat_view.scroll_end(animate=False)
+
+        # Auto-trigger find bar if opened from a search result
+        if self._active_search_query:
+            query = self._active_search_query
+            self._active_search_query = ""
+            self._show_find_bar(query)
 
 
 # ── Entry Point ─────────────────────────────────────────────────────
