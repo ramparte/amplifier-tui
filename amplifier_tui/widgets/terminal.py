@@ -335,13 +335,36 @@ class _TerminalEmulator:
         self.send_task = asyncio.create_task(self._send_data())
 
     def stop(self) -> None:
+        # 1. Remove the fd reader FIRST (prevents callbacks on dead fd)
+        try:
+            loop = asyncio.get_running_loop()
+            loop.remove_reader(self.p_out)
+        except Exception:
+            pass
+
+        # 2. Cancel async tasks
         if self.run_task:
             self.run_task.cancel()
         if self.send_task:
             self.send_task.cancel()
+
+        # 3. Close the PTY fd
+        try:
+            self.p_out.close()
+        except Exception:
+            pass
+
+        # 4. Kill the child process (non-blocking)
         try:
             os.kill(self.pid, signal.SIGTERM)
-            os.waitpid(self.pid, 0)
+        except (ProcessLookupError, PermissionError):
+            return
+        try:
+            _pid, _status = os.waitpid(self.pid, os.WNOHANG)
+            if _pid == 0:
+                # Still alive after SIGTERM -- force kill
+                os.kill(self.pid, signal.SIGKILL)
+                os.waitpid(self.pid, os.WNOHANG)
         except (ProcessLookupError, ChildProcessError):
             pass
 

@@ -95,6 +95,13 @@ class TerminalCommandsMixin:
         except Exception:
             return
 
+        # Move focus away BEFORE stopping (prevents Textual focus deadlock)
+        try:
+            chat_input = self.query_one("ChatInput")  # type: ignore[attr-defined]
+            chat_input.focus()
+        except Exception:
+            pass
+
         panel.remove_class("visible")
         if self._terminal_widget is not None:
             try:
