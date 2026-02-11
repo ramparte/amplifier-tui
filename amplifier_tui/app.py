@@ -107,6 +107,7 @@ from .commands.plugin_cmds import PluginCommandsMixin
 from .commands.dashboard_cmds import DashboardCommandsMixin
 from .commands.shell_cmds import ShellCommandsMixin
 from .commands.terminal_cmds import TerminalCommandsMixin
+from .commands.monitor_cmds import MonitorCommandsMixin
 from .features.agent_tracker import AgentTracker, is_delegate_tool, make_delegate_key
 from .features.tool_log import ToolLog
 from .features.recipe_tracker import RecipeTracker
@@ -136,6 +137,7 @@ _amp_home = amplifier_home()
 
 
 class AmplifierTuiApp(
+    MonitorCommandsMixin,
     TerminalCommandsMixin,
     ShellCommandsMixin,
     DashboardCommandsMixin,
@@ -543,6 +545,7 @@ class AmplifierTuiApp(
                     yield ScrollableContainer(id="chat-view", classes="tab-chat-view")
                     yield ScrollableContainer(id="split-panel")
                 yield Vertical(id="terminal-panel")
+                yield Vertical(id="monitor-panel")
                 yield ChatInput(
                     "",
                     id="chat-input",
@@ -2962,6 +2965,7 @@ class AmplifierTuiApp(
             "/replay": lambda: self._cmd_replay(args),
             "/plugins": lambda: self._cmd_plugins(args),
             "/dashboard": lambda: self._cmd_dashboard(args),
+            "/monitor": lambda: self._cmd_monitor(args),
         }
 
         handler = handlers.get(cmd)
@@ -3074,6 +3078,7 @@ class AmplifierTuiApp(
             "  /compare      Model A/B testing (/compare <a> <b>, off, pick, status, history)\n"
             "  /replay       Session replay (/replay [id], pause, resume, skip, stop, speed, timeline)\n"
             "  /plugins      List loaded plugins (/plugins reload, /plugins help)\n"
+            "  /monitor      Live session monitor (/monitor big|small|close)\n"
             "  /dashboard    Session heatmap dashboard (/dashboard refresh|export|heatmap|summary|clear)\n"
             "  /system       Set/view system prompt (/system <text>, clear, presets, use <preset>, append)\n"
             "  /keys         Keyboard shortcut overlay\n"

@@ -69,6 +69,8 @@ from .compare_manager import CompareManager, ComparisonResult
 from .replay_engine import ReplayEngine, ReplayMessage, ReplayState
 from .plugin_loader import PluginLoader, LoadedPlugin
 from .dashboard_stats import DashboardStats, DashboardData, SessionRecord
+from .session_scanner import SessionScanner, MonitoredSession, SessionState
+from .session_summarizer import SessionSummarizer, make_anthropic_summarizer
 
 __all__ = [
     # diff_view
@@ -139,4 +141,10 @@ __all__ = [
     "DashboardStats",
     "DashboardData",
     "SessionRecord",
+    # session monitor
+    "SessionScanner",
+    "MonitoredSession",
+    "SessionState",
+    "SessionSummarizer",
+    "make_anthropic_summarizer",
 ]

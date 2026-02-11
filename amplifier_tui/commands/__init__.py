@@ -22,6 +22,7 @@ from .plugin_cmds import PluginCommandsMixin
 from .dashboard_cmds import DashboardCommandsMixin
 from .shell_cmds import ShellCommandsMixin
 from .terminal_cmds import TerminalCommandsMixin
+from .monitor_cmds import MonitorCommandsMixin
 
 __all__ = [
     "AgentCommandsMixin",
@@ -46,4 +47,5 @@ __all__ = [
     "DashboardCommandsMixin",
     "ShellCommandsMixin",
     "TerminalCommandsMixin",
+    "MonitorCommandsMixin",
 ]

@@ -177,6 +177,37 @@ Screen {
     height: 24;
 }
 
+/* -- Session Monitor Panel ---------------------------- */
+
+#monitor-panel {
+    display: none;
+    height: 16;
+    border-top: solid $primary;
+    background: $surface;
+}
+
+#monitor-panel.visible {
+    display: block;
+}
+
+#monitor-panel .monitor-header {
+    width: 100%;
+    height: 1;
+    background: $primary-background;
+    color: $text-muted;
+    padding: 0 1;
+    text-style: bold;
+}
+
+#monitor-panel DataTable {
+    width: 100%;
+    height: 1fr;
+}
+
+#monitor-panel.monitor-large {
+    height: 28;
+}
+
 /* -- Chat View ---------------------------------------- */
 
 .tab-chat-view {

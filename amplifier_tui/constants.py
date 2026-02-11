@@ -180,6 +180,10 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/dashboard heatmap",
     "/dashboard summary",
     "/dashboard clear",
+    "/monitor",
+    "/monitor close",
+    "/monitor big",
+    "/monitor small",
 )
 
 # -- Amplifier mode definitions ------------------------------------------------
