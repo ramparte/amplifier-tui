@@ -1470,47 +1470,78 @@ class AmplifierTuiApp(
             )
 
     def _do_autosave(self) -> None:
-        """Perform an auto-save of the current session (timer + event hook).
+        """Auto-save ALL tabs and workspace state.
 
         Silently fails — never interrupts the user.
         """
         if not self._autosave_enabled:
             return
         try:
-            messages = self._search_messages
-            if not messages:
-                return  # Nothing to save
-
-            tab = self._tabs[self._active_tab_index]
-            tab_id = tab.tab_id
-
-            session_data = {
-                "session_id": self._get_session_id(),
-                "session_title": self._session_title or "",
-                "tab_id": tab_id,
-                "tab_name": tab.name,
-                "saved_at": datetime.now().isoformat(),
-                "message_count": len(messages),
-                "messages": [
-                    {"role": role, "content": content}
-                    for role, content, _widget in messages
-                ],
-            }
+            # Sync active tab state so all tabs are up-to-date
+            self._save_current_tab_state()
 
             ts = int(time.time())
-            filename = f"autosave-{tab_id}-{ts}.json"
-            filepath = AUTOSAVE_DIR / filename
+            saved_tabs_info: list[dict] = []
 
-            filepath.write_text(
-                json.dumps(session_data, indent=2, ensure_ascii=False),
+            for tab in self._tabs:
+                messages = tab.conversation.search_messages
+                tab_id = tab.tab_id
+
+                if not messages:
+                    # Track the tab but no autosave file
+                    saved_tabs_info.append({
+                        "tab_id": tab_id,
+                        "name": tab.custom_name or tab.name,
+                        "autosave_file": None,
+                    })
+                    continue
+
+                session_data = {
+                    "session_id": tab.conversation.session_id or "",
+                    "session_title": tab.conversation.title or "",
+                    "tab_id": tab_id,
+                    "tab_name": tab.custom_name or tab.name,
+                    "saved_at": datetime.now().isoformat(),
+                    "message_count": len(messages),
+                    "messages": [
+                        {"role": role, "content": content}
+                        for role, content, _widget in messages
+                    ],
+                }
+
+                filename = f"autosave-{tab_id}-{ts}.json"
+                filepath = AUTOSAVE_DIR / filename
+                filepath.write_text(
+                    json.dumps(session_data, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+
+                saved_tabs_info.append({
+                    "tab_id": tab_id,
+                    "name": tab.custom_name or tab.name,
+                    "autosave_file": filename,
+                })
+
+                # Rotate old auto-saves for this tab
+                self._rotate_autosaves(tab_id)
+
+            # Write workspace state (tab layout + references to autosave files)
+            workspace_state = {
+                "saved_at": datetime.now().isoformat(),
+                "active_tab_index": self._active_tab_index,
+                "tab_counter": self._tab_counter,
+                "tabs": saved_tabs_info,
+            }
+            ws_path = AUTOSAVE_DIR / "workspace-state.json"
+            ws_path.write_text(
+                json.dumps(workspace_state, indent=2, ensure_ascii=False),
                 encoding="utf-8",
             )
-            self._last_autosave = time.time()
 
-            # Rotate old auto-saves for this tab
-            self._rotate_autosaves(tab_id)
+            self._last_autosave = time.time()
         except OSError:
             logger.debug("auto-save failed", exc_info=True)
+
 
     def _rotate_autosaves(self, tab_id: str) -> None:
         """Keep only the last MAX_AUTOSAVES_PER_TAB files per tab."""
@@ -1524,10 +1555,20 @@ class AmplifierTuiApp(
             logger.debug("failed to rotate autosaves", exc_info=True)
 
     def _check_autosave_recovery(self) -> None:
-        """Check for auto-save files on startup and notify the user."""
+        """Check for workspace or auto-save files on startup and auto-restore."""
         try:
             if not AUTOSAVE_DIR.exists():
                 return
+
+            # First check for workspace state (multi-tab restore)
+            ws_path = AUTOSAVE_DIR / "workspace-state.json"
+            if ws_path.exists():
+                ws_age = (time.time() - ws_path.stat().st_mtime) / 60
+                if ws_age < 60:  # Less than 1 hour old
+                    self._restore_workspace_state(ws_path)
+                    return
+
+            # Fall back to individual autosave notification
             autosaves = sorted(
                 AUTOSAVE_DIR.glob("autosave-*.json"),
                 key=lambda f: f.stat().st_mtime,
@@ -1544,6 +1585,7 @@ class AmplifierTuiApp(
                 )
         except OSError:
             logger.debug("failed to check autosave recovery", exc_info=True)
+
 
     # ── System Prompt (/system) ──────────────────────────────────────────
 
@@ -1567,8 +1609,8 @@ class AmplifierTuiApp(
             indicator.update("")
         self._update_breadcrumb()
 
-    def _autosave_restore(self) -> None:
-        """Show available auto-saves for recovery."""
+    def _autosave_restore(self, file_index: int | None = None) -> None:
+        """Show available auto-saves or restore one by number."""
         try:
             autosaves = sorted(
                 AUTOSAVE_DIR.glob("autosave-*.json"),
@@ -1583,12 +1625,23 @@ class AmplifierTuiApp(
             self._add_system_message("No auto-saves found")
             return
 
+        # If a number was given, restore that file directly
+        if file_index is not None:
+            if file_index < 1 or file_index > len(autosaves[:10]):
+                self._add_system_message(
+                    f"Invalid auto-save number: {file_index}. "
+                    f"Valid range: 1–{min(len(autosaves), 10)}"
+                )
+                return
+            self._restore_autosave_file(autosaves[file_index - 1])
+            return
+
+        # No number — list available auto-saves with restore instructions
         lines = ["Available auto-saves:"]
         for i, f in enumerate(autosaves[:10], 1):
             try:
                 age = (time.time() - f.stat().st_mtime) / 60
                 size = f.stat().st_size / 1024
-                # Try to read session title from the file
                 data = json.loads(f.read_text(encoding="utf-8"))
                 title = data.get("session_title", "")
                 msg_count = data.get("message_count", "?")
@@ -1603,11 +1656,143 @@ class AmplifierTuiApp(
                 lines.append(f"  {i}. {f.name}")
 
         lines.append("")
-        lines.append("To restore the most recent auto-save:")
-        lines.append(f"  /export json  (then compare with {autosaves[0]})")
-        lines.append(f"\nAuto-save files are in: {AUTOSAVE_DIR}")
+        lines.append("Restore commands:")
+        lines.append("  /autosave restore N          Restore auto-save #N into a new tab")
+        lines.append("  /autosave restore workspace  Restore all tabs from last session")
 
+        # Check for workspace state
+        ws_path = AUTOSAVE_DIR / "workspace-state.json"
+        if ws_path.exists():
+            try:
+                ws = json.loads(ws_path.read_text(encoding="utf-8"))
+                tab_count = len(ws.get("tabs", []))
+                ws_age = (time.time() - ws_path.stat().st_mtime) / 60
+                lines.append(
+                    f"\nWorkspace state: {tab_count} tab(s), "
+                    f"saved {ws_age:.0f} min ago"
+                )
+            except (OSError, json.JSONDecodeError):
+                pass
+
+        lines.append(f"\nAuto-save files are in: {AUTOSAVE_DIR}")
         self._add_system_message("\n".join(lines))
+
+    def _restore_autosave_file(self, filepath: Path) -> None:
+        """Restore messages from a single auto-save file into a new tab."""
+        try:
+            data = json.loads(filepath.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            self._add_system_message(f"Failed to read auto-save: {exc}")
+            return
+
+        messages = data.get("messages", [])
+        if not messages:
+            self._add_system_message("Auto-save file contains no messages.")
+            return
+
+        tab_name = data.get("tab_name", "Restored")
+        title = data.get("session_title", "")
+        label = f" — {title}" if title else ""
+
+        # If current tab already has messages, create a new tab
+        if self._search_messages:
+            self._create_new_tab(name=f"Restored: {tab_name}", show_welcome=False)
+        else:
+            # Reuse current empty tab — clear welcome screen
+            self._clear_welcome()
+
+        # Replay messages
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role == "user":
+                self._add_user_message(content)
+            elif role == "assistant":
+                self._add_assistant_message(content)
+
+        self._add_system_message(
+            f"Restored {len(messages)} messages from {filepath.name}{label}"
+        )
+
+    def _restore_workspace_from_command(self) -> None:
+        """Handle /autosave restore workspace command."""
+        ws_path = AUTOSAVE_DIR / "workspace-state.json"
+        if not ws_path.exists():
+            self._add_system_message("No workspace state found.")
+            return
+        self._restore_workspace_state(ws_path)
+
+    def _restore_workspace_state(self, ws_path: Path) -> None:
+        """Restore full workspace (all tabs) from workspace-state.json."""
+        try:
+            ws = json.loads(ws_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            self._add_system_message(f"Failed to read workspace state: {exc}")
+            return
+
+        tabs_data = ws.get("tabs", [])
+        if not tabs_data:
+            self._add_system_message("Workspace state contains no tabs.")
+            return
+
+        saved_active = ws.get("active_tab_index", 0)
+        restored_count = 0
+
+        for tab_idx, tab_info in enumerate(tabs_data):
+            autosave_file = tab_info.get("autosave_file")
+            tab_name = tab_info.get("name", f"Tab {tab_idx + 1}")
+
+            if not autosave_file:
+                # Tab had no messages — create empty tab if not the first
+                if tab_idx > 0:
+                    self._create_new_tab(name=tab_name, show_welcome=False)
+                restored_count += 1
+                continue
+
+            # Load the autosave data
+            filepath = AUTOSAVE_DIR / autosave_file
+            if not filepath.exists():
+                if tab_idx > 0:
+                    self._create_new_tab(name=tab_name, show_welcome=False)
+                restored_count += 1
+                continue
+
+            try:
+                data = json.loads(filepath.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                logger.debug("failed to read tab autosave during restore", exc_info=True)
+                if tab_idx > 0:
+                    self._create_new_tab(name=tab_name, show_welcome=False)
+                restored_count += 1
+                continue
+
+            messages = data.get("messages", [])
+
+            if tab_idx == 0:
+                # First tab — use existing tab-0, just clear welcome
+                self._clear_welcome()
+            else:
+                self._create_new_tab(name=tab_name, show_welcome=False)
+
+            # Replay messages
+            for msg in messages:
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                if role == "user":
+                    self._add_user_message(content)
+                elif role == "assistant":
+                    self._add_assistant_message(content)
+
+            restored_count += 1
+
+        # Switch to the tab that was active when saved
+        if saved_active < len(self._tabs) and saved_active != self._active_tab_index:
+            self._switch_to_tab(saved_active)
+
+        self._add_system_message(
+            f"Workspace restored: {restored_count} tab(s)"
+        )
+
 
     # ── Crash-recovery draft (global, plain-text) ─────────────────
 

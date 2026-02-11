@@ -181,17 +181,33 @@ class ContentCommandsMixin:
                     "Nothing to auto-save (no messages in current session)"
                 )
 
-        elif text == "restore":
-            self._autosave_restore()
+        elif text == "restore" or text.startswith("restore "):
+            parts = text.split(None, 1)
+            arg = parts[1] if len(parts) > 1 else ""
+            if arg and arg.isdigit():
+                self._autosave_restore(file_index=int(arg))
+            elif arg == "workspace":
+                self._restore_workspace_from_command()
+            elif arg:
+                self._add_system_message(
+                    "Usage: /autosave restore [number|workspace]\n"
+                    "  /autosave restore            List available auto-saves\n"
+                    "  /autosave restore N          Restore auto-save #N into new tab\n"
+                    "  /autosave restore workspace  Restore full workspace (all tabs)"
+                )
+            else:
+                self._autosave_restore()
 
         else:
             self._add_system_message(
                 "Usage: /autosave [on|off|now|restore]\n"
-                "  /autosave          Show auto-save status\n"
-                "  /autosave on       Enable periodic auto-save\n"
-                "  /autosave off      Disable periodic auto-save\n"
-                "  /autosave now      Force immediate save\n"
-                "  /autosave restore  List & restore auto-saves"
+                "  /autosave              Show auto-save status\n"
+                "  /autosave on           Enable periodic auto-save\n"
+                "  /autosave off          Disable periodic auto-save\n"
+                "  /autosave now          Force immediate save\n"
+                "  /autosave restore      List available auto-saves\n"
+                "  /autosave restore N    Restore auto-save #N\n"
+                "  /autosave restore workspace  Restore all tabs"
             )
 
     def _cmd_attach(self, text: str) -> None:

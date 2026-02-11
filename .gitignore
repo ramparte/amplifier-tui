@@ -21,3 +21,4 @@ venv/
 .test-results/
 amplifier-chat-*.md
 uv.lock
+.coverage
