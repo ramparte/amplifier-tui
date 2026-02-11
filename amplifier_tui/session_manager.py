@@ -355,7 +355,10 @@ class SessionManager:
                 if not transcript_path.exists():
                     continue
 
-                mtime = session_dir.stat().st_mtime
+                # Use transcript mtime for accurate "last activity" sorting.
+                # Directory mtime on Linux only updates when entries are
+                # added/removed, not when files inside are modified.
+                mtime = transcript_path.stat().st_mtime
                 info: dict[str, Any] = {
                     "session_id": session_dir.name,
                     "project": project_label,

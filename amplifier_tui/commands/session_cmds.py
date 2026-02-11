@@ -198,7 +198,7 @@ class SessionCommandsMixin:
                     continue
 
                 try:
-                    mtime = session_dir.stat().st_mtime
+                    mtime = transcript.stat().st_mtime
                 except OSError:
                     continue
 
