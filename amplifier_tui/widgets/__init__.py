@@ -19,6 +19,8 @@ from .messages import (
     UserMessage,
 )
 from .panels import PinnedPanel, PinnedPanelHeader, PinnedPanelItem
+from .todo_panel import TodoPanel
+from .agent_tree_panel import AgentTreePanel
 from .screens import HistorySearchScreen, ShortcutOverlay
 from .tabs import TabBar, TabButton
 
@@ -34,6 +36,7 @@ __all__ = [
     "HistorySearchScreen",
     "MessageMeta",
     "NoteMessage",
+    "AgentTreePanel",
     "PinnedPanel",
     "PinnedPanelHeader",
     "PinnedPanelItem",
@@ -46,5 +49,6 @@ __all__ = [
     "TabState",
     "ThinkingBlock",
     "ThinkingStatic",
+    "TodoPanel",
     "UserMessage",
 ]

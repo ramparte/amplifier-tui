@@ -239,3 +239,115 @@ The recommended execution order respects dependencies:
 15. **TUI-015** (reduce bare excepts -- 30 minutes)
 
 Total estimated effort: ~6 hours of focused AI session time.
+
+## Phase 2: Codex-Inspired Features (New)
+
+Competitive analysis of OpenAI Codex CLI identified features worth adding.
+Approved for implementation now, plus deferred items noted for later.
+
+### BUILD NOW
+
+#### TUI-020: Mid-Turn Steering
+- **Priority**: P0 - Highest UX impact
+- Allow user to type while agent is streaming/working
+- Input queued and sent as interrupt or next message
+- ChatInput must accept input during streaming state
+- `_streaming` flag should not block input focus
+- Options: (a) interrupt current turn, (b) queue as next message
+- Start with queue-as-next, add interrupt later if needed
+- **Acceptance**: User can type and submit while agent is streaming; message is sent after current turn completes
+
+#### TUI-021: Todo Panel
+- **Priority**: P1 - Continuous visibility into agent planning
+- Surface the agent's `todo` tool state as a live sidebar/panel
+- Parse `todo` tool calls from streaming events (`tool_use` where tool name is `todo`)
+- Display as a persistent checklist panel (collapsible, like PinnedPanel)
+- Update in real-time as todo events stream in
+- Show status indicators: pending, in_progress, completed
+- Toggle with `/todo` command or keybinding
+- **Acceptance**: Todo items appear and update live as agent uses the todo tool
+
+#### TUI-022: Context Pressure Indicator
+- **Priority**: P1 - Always-visible context health
+- Add persistent element to status bar showing context window usage
+- Color-coded thresholds: green (<50%), yellow (50-75%), orange (75-90%), red (>90%)
+- Use existing `total_input_tokens` + `total_output_tokens` vs `context_window`
+- Compact format: e.g., `[CTX 45%]` or a mini progress bar
+- Updates after each LLM response
+- **Acceptance**: Status bar shows color-coded context usage percentage that updates live
+
+#### TUI-023: Agent Tree Panel
+- **Priority**: P1 - Differentiator vs Codex (they don't have this)
+- Collapsible panel showing live delegation hierarchy
+- Parse `delegate` tool calls and `session:start`/`session:end` events
+- Tree structure: root session -> sub-agents with status (running/completed/failed)
+- Clicking/selecting a sub-session shows summary or transcript snippet
+- Remove the `_` filter in session listing (make it optional via preference)
+- Integrate with existing `agent_tracker.py` feature module
+- Toggle with `/agents tree` or keybinding
+- **Acceptance**: Live tree of agent delegations visible during multi-agent work; completed agents show summary
+
+#### TUI-024: /skills Command
+- **Priority**: P2 - Quality of life
+- `/skills` - List available skills (from `~/.amplifier/skills/` and `.amplifier/skills/`)
+- `/skills <name>` - Preview a skill's description/metadata
+- `/skills load <name>` - Send a message asking the agent to load the skill
+- Discover skills by scanning skill directories for `.md` files with YAML frontmatter
+- **Acceptance**: User can browse and activate skills from the TUI
+
+#### TUI-025: /commit Shortcut
+- **Priority**: P2 - Developer workflow
+- Smart commit flow in one command:
+  1. Run `git diff --staged` (or `git diff` if nothing staged)
+  2. Show diff summary to user
+  3. Ask agent to generate commit message based on diff
+  4. Show proposed message, user can accept/edit/cancel
+  5. Execute commit
+- If nothing staged, offer to stage all changes first
+- **Acceptance**: `/commit` produces a reviewed, committed change with AI-generated message
+
+#### TUI-026: /recipe Quick-Launch
+- **Priority**: P2 - Easy recipe access
+- `/recipe run` - List available recipes
+- `/recipe run <name>` - Execute a recipe by name
+- Discover recipes from bundle paths and local `.amplifier/recipes/`
+- Show recipe description before confirming execution
+- **Acceptance**: User can browse and launch recipes from the TUI
+
+#### TUI-027: /gitstatus Command
+- **Priority**: P3 - Easy and useful
+- `/gitstatus` - Show `git status --short` + branch + ahead/behind info
+- Compact, colorized output in chat
+- Alias: `/gs`
+- **Acceptance**: Quick git status visible in chat
+
+#### TUI-028: /auto Command (Approval Mode)
+- **Priority**: P3 - Safety toggle
+- `/auto` - Show current mode
+- `/auto suggest` - Confirm file writes and bash commands (safe default)
+- `/auto edit` - Auto-apply file edits, confirm bash
+- `/auto full` - Auto-approve everything (current default behavior)
+- Default: `full` (preserves current behavior)
+- Store in preferences
+- **Acceptance**: Mode toggleable, persists across sessions
+
+### DEFERRED (noted for later)
+
+#### TUI-029: Tool Approval Mode (Deferred)
+- Optional confirmation dialogs for file writes and bash commands
+- Preference: default OFF
+- Implement if /auto command proves popular
+- Depends on TUI-028
+
+#### TUI-030: Diff Review Overlay (Deferred)
+- When agent edits a file, show colored unified diff with approve/reject
+- Not doing now per user decision
+- Revisit when tool approval mode is built
+
+#### TUI-031: Plan Mode Split UI (Deferred)
+- Rejected for now - planning mode behavioral overlay is sufficient
+- Would split view into plan pane + chat pane
+
+#### TUI-032: /compact Context Compression (Deferred)
+- Rejected for now - needs orchestrator/kernel support
+- Would ask model to summarize and compress history

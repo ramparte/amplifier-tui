@@ -146,6 +146,8 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/clipboard",
     "/clip",
     "/agents",
+    "/agents tree",
+    "/todo",
     "/tools",
     "/tools live",
     "/tools log",
@@ -187,6 +189,16 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/workspace",
     "/environment",
     "/env",
+    "/gitstatus",
+    "/gs",
+    "/auto",
+    "/auto suggest",
+    "/auto edit",
+    "/auto full",
+    "/skills",
+    "/skills load",
+    "/commit",
+    "/recipe run",
 )
 
 # -- Amplifier mode definitions ------------------------------------------------

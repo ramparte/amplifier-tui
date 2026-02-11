@@ -15,6 +15,10 @@ class AgentCommandsMixin:
             self._add_system_message("Agent delegation history cleared.")  # type: ignore[attr-defined]
             return
 
+        if sub == "tree":
+            self._cmd_agent_tree_panel()  # type: ignore[attr-defined]
+            return
+
         # /agents, /agents history — both show the tree
         tracker = self._agent_tracker  # type: ignore[attr-defined]
         if not tracker.has_delegations:

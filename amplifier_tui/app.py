@@ -70,6 +70,7 @@ from .widgets import (
     HistorySearchBar,
     MessageMeta,
     NoteMessage,
+    AgentTreePanel,
     PinnedPanel,
     PinnedPanelHeader,
     PinnedPanelItem,
@@ -79,6 +80,7 @@ from .widgets import (
     SystemMessage,
     TabBar,
     TabState,
+    TodoPanel,
     UserMessage,
 )
 
@@ -300,6 +302,8 @@ class AmplifierTuiApp(
         self.initial_prompt = initial_prompt
         self.session_manager: SessionManager | None = None
         self.is_processing = False
+        self._queued_message: str | None = None
+        self._auto_mode: str = "full"
         self._got_stream_content = False
         self._amplifier_available = True
         self._amplifier_ready = False
@@ -570,6 +574,8 @@ class AmplifierTuiApp(
                     yield Static("0 words", id="status-wordcount")
                     yield Static("", id="status-context")
                     yield Static("", id="status-model")
+            yield TodoPanel(id="todo-panel")
+            yield AgentTreePanel(id="agent-tree-panel")
 
     async def on_mount(self) -> None:
         # Register all built-in color themes
@@ -2793,6 +2799,12 @@ class AmplifierTuiApp(
         if not text:
             return
         if self.is_processing:
+            # Queue message for after current turn completes (mid-turn steering)
+            input_widget.clear()
+            self._queued_message = text
+            self._add_system_message(
+                f"Queued (will send after current response): {text[:80]}{'...' if len(text) > 80 else ''}"
+            )
             return
 
         # Re-enable auto-scroll when user sends a new message
@@ -2982,6 +2994,7 @@ class AmplifierTuiApp(
             "/clipboard": lambda: self._cmd_clipboard(args),
             "/clip": lambda: self._cmd_clipboard(args),
             "/agents": lambda: self._cmd_agents(args),
+            "/todo": lambda: self._cmd_todo_panel(args),
             "/tools": lambda: self._cmd_tools(args),
             "/recipe": lambda: self._cmd_recipe(args),
             "/compare": lambda: self._cmd_compare(args),
@@ -2992,6 +3005,11 @@ class AmplifierTuiApp(
             "/workspace": lambda: self._cmd_workspace(args),
             "/environment": self._cmd_environment,
             "/env": self._cmd_environment,
+            "/gitstatus": lambda: self._cmd_git(""),
+            "/gs": lambda: self._cmd_git(""),
+            "/auto": lambda: self._cmd_auto(args),
+            "/skills": lambda: self._cmd_skills(args),
+            "/commit": lambda: self._cmd_commit(args),
         }
 
         handler = handlers.get(cmd)
@@ -3059,6 +3077,8 @@ class AmplifierTuiApp(
             "  /diff last    Re-show the most recent inline file-edit diff\n"
             "  /diff msgs    Compare assistant messages (/diff msgs, /diff msgs N M)\n"
             "  /git          Quick git operations (/git status|log|diff|branch|stash|blame)\n"
+            "  /gitstatus    Quick git status overview (alias: /gs)\n"
+            "  /commit       Smart commit with AI-generated message\n"
             "  /watch        Watch files for changes (/watch <path>, stop, diff)\n"
             "  /sort         Sort sessions: date, name, project (/sort <mode>)\n"
             "  /edit         Open $EDITOR for longer prompts (same as Ctrl+G)\n"
@@ -3100,8 +3120,11 @@ class AmplifierTuiApp(
             "  /attach       Attach file(s) to next message (/attach *.py, clear, remove N)\n"
             "  /cat          Display file contents in chat (/cat src/main.py)\n"
             "  /autosave     Auto-save status, toggle, force save, restore (/autosave on|off|now|restore)\n"
-            "  /agents       Show agent delegation tree (/agents history, /agents clear)\n"
+            "  /todo         Toggle live todo panel (auto-shows when agent uses todo tool)\n"
+            "  /agents       Show agent delegation tree (/agents history, /agents clear, /agents tree)\n"
             "  /tools        Live tool call log (/tools live|log|stats|clear)\n"
+            "  /skills       Browse available skills (/skills, /skills <name>)\n"
+            "  /auto         Set approval mode (/auto suggest|edit|full)\n"
             "  /recipe       Recipe pipeline view (/recipe status|history|clear)\n"
             "  /compare      Model A/B testing (/compare <a> <b>, off, pick, status, history)\n"
             "  /replay       Session replay (/replay [id], pause, resume, skip, stop, speed, timeline)\n"
@@ -3729,6 +3752,179 @@ class AmplifierTuiApp(
             self._add_system_message(
                 "Environment looks good now. Send a message to start a session."
             )
+
+    def _cmd_auto(self, args: str) -> None:
+        """Toggle approval automation level."""
+        mode = args.strip().lower()
+        valid_modes = ("suggest", "edit", "full")
+        if not mode:
+            current = getattr(self, "_auto_mode", "full")
+            self._add_system_message(
+                f"Approval mode: {current}\n"
+                "  /auto suggest  - Confirm file writes and bash commands\n"
+                "  /auto edit     - Auto-apply file edits, confirm bash\n"
+                "  /auto full     - Auto-approve everything (default)"
+            )
+            return
+        if mode not in valid_modes:
+            self._add_system_message(f"Unknown mode: {mode}. Use: suggest, edit, full")
+            return
+        self._auto_mode = mode
+        descriptions = {
+            "suggest": "Will confirm file writes and bash commands",
+            "edit": "Auto-applying file edits, confirming bash commands",
+            "full": "Auto-approving all tool calls",
+        }
+        self._add_system_message(f"Approval mode set to: {mode}\n{descriptions[mode]}")
+
+    def _cmd_skills(self, args: str) -> None:
+        """Browse available skills."""
+        from pathlib import Path
+        import yaml as _yaml
+
+        skill_dirs = []
+        # Check workspace skills
+        ws_skills = Path.cwd() / ".amplifier" / "skills"
+        if ws_skills.is_dir():
+            skill_dirs.append(("workspace", ws_skills))
+        # Check user home skills
+        home_skills = Path.home() / ".amplifier" / "skills"
+        if home_skills.is_dir():
+            skill_dirs.append(("user", home_skills))
+
+        if not skill_dirs:
+            self._add_system_message(
+                "No skill directories found.\n"
+                "Skills can be placed in:\n"
+                "  .amplifier/skills/  (project)\n"
+                "  ~/.amplifier/skills/ (user)"
+            )
+            return
+
+        name = args.strip()
+        if name and name != "load":
+            # Show specific skill info
+            for _source, sdir in skill_dirs:
+                skill_file = sdir / f"{name}.md"
+                if skill_file.exists():
+                    try:
+                        content = skill_file.read_text()
+                        # Parse YAML frontmatter
+                        if content.startswith("---"):
+                            end = content.index("---", 3)
+                            frontmatter = content[3:end].strip()
+                            meta = _yaml.safe_load(frontmatter) or {}
+                            desc = meta.get("description", "No description")
+                            version = meta.get("version", "?")
+                            self._add_system_message(
+                                f"Skill: {name}\n"
+                                f"  Version: {version}\n"
+                                f"  Description: {desc}\n\n"
+                                f"To load: /skills load {name}\n"
+                                f"  (or ask the agent: 'load the {name} skill')"
+                            )
+                        else:
+                            self._add_system_message(
+                                f"Skill: {name}\n  (no metadata found)"
+                            )
+                    except Exception:
+                        self._add_system_message(f"Error reading skill: {name}")
+                    return
+            self._add_system_message(f"Skill not found: {name}")
+            return
+
+        if args.strip().startswith("load "):
+            # Send a message to the agent to load the skill
+            skill_name = args.strip()[5:].strip()
+            if skill_name and self._amplifier_ready:
+                msg = f"Please load the skill: {skill_name}"
+                self._add_user_message(msg)
+                self._start_processing("Loading skill")
+                self._send_message_worker(msg)
+            return
+
+        # List all skills
+        lines = ["Available Skills\n"]
+        for source, sdir in skill_dirs:
+            found = sorted(sdir.glob("*.md"))
+            if found:
+                lines.append(f"  [{source}] {sdir}")
+                for f in found:
+                    skill_name_str = f.stem
+                    # Try to read description from frontmatter
+                    desc = ""
+                    try:
+                        text = f.read_text(errors="replace")[:500]
+                        if text.startswith("---"):
+                            end_idx = text.index("---", 3)
+                            meta = _yaml.safe_load(text[3:end_idx]) or {}
+                            desc = meta.get("description", "")
+                    except Exception:
+                        pass
+                    suffix = f" - {desc}" if desc else ""
+                    lines.append(f"    {skill_name_str}{suffix}")
+                lines.append("")
+        self._add_system_message("\n".join(lines))
+
+    def _cmd_commit(self, args: str) -> None:
+        """Smart commit with AI-generated message."""
+        import subprocess
+
+        if not self._amplifier_ready:
+            self._add_system_message("Amplifier not ready yet.")
+            return
+
+        try:
+            # Check if there are staged changes
+            staged = subprocess.run(
+                ["git", "diff", "--staged", "--stat"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if not staged.stdout.strip():
+                # Nothing staged - check for unstaged changes
+                unstaged = subprocess.run(
+                    ["git", "diff", "--stat"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if not unstaged.stdout.strip():
+                    self._add_system_message("No changes to commit.")
+                    return
+                self._add_system_message(
+                    "No staged changes. Unstaged changes:\n"
+                    f"{unstaged.stdout.strip()}\n\n"
+                    "Stage all with: /! git add -A\n"
+                    "Then try /commit again."
+                )
+                return
+
+            # Show staged changes and ask agent to generate commit message
+            diff_summary = staged.stdout.strip()
+            diff_content = subprocess.run(
+                ["git", "diff", "--staged"], capture_output=True, text=True, timeout=30
+            ).stdout[:3000]  # Limit diff size
+
+            msg = (
+                f"I have the following staged changes:\n\n"
+                f"```\n{diff_summary}\n```\n\n"
+                f"Diff (truncated):\n```\n{diff_content}\n```\n\n"
+                f"Please generate a concise, descriptive git commit message for these changes. "
+                f"Use conventional commit format (feat:, fix:, refactor:, etc). "
+                f"Then run the git commit with that message."
+            )
+            self._add_user_message("/commit")
+            self._start_processing("Generating commit")
+            self._send_message_worker(msg)
+
+        except subprocess.TimeoutExpired:
+            self._add_system_message("Git command timed out.")
+        except FileNotFoundError:
+            self._add_system_message("Git not found in PATH.")
+        except Exception as e:
+            self._add_system_message(f"Error: {e}")
 
     def _cmd_model(self, text: str) -> None:
         """Show model info, list available models, or switch models.
@@ -5032,6 +5228,54 @@ class AmplifierTuiApp(
         self._style_thinking(collapsible, inner)
         self._search_messages.append(("thinking", text, collapsible))
 
+    # -- Panel helper methods (called via call_from_thread) ------------------
+
+    def _update_todo_panel(self, tool_input: dict) -> None:
+        """Feed a todo tool call to the TodoPanel widget."""
+        try:
+            panel = self.query_one("#todo-panel", TodoPanel)
+            panel.update_todos(tool_input)
+        except Exception:
+            pass  # Panel not mounted or query failed
+
+    def _update_agent_tree_start(self, agent_name: str, agent_key: str) -> None:
+        """Add a new agent to the AgentTreePanel when delegation starts."""
+        try:
+            panel = self.query_one("#agent-tree-panel", AgentTreePanel)
+            panel.add_agent(name=agent_name, agent_id=agent_key)
+        except Exception:
+            pass  # Panel not mounted or query failed
+
+    def _update_agent_tree_end(
+        self, agent_key: str, status: str, summary: str = ""
+    ) -> None:
+        """Update an agent in the AgentTreePanel when delegation completes."""
+        try:
+            panel = self.query_one("#agent-tree-panel", AgentTreePanel)
+            panel.update_agent(agent_id=agent_key, status=status, summary=summary)
+        except Exception:
+            pass  # Panel not mounted or query failed
+
+    def _cmd_todo_panel(self, args: str = "") -> None:
+        """Toggle the todo panel visibility."""
+        try:
+            panel = self.query_one("#todo-panel", TodoPanel)
+            panel.visible = not panel.visible
+            state = "shown" if panel.visible else "hidden"
+            self._add_system_message(f"Todo panel {state}.")
+        except Exception:
+            self._add_system_message("Todo panel not available.")
+
+    def _cmd_agent_tree_panel(self, args: str = "") -> None:
+        """Toggle the agent tree panel visibility."""
+        try:
+            panel = self.query_one("#agent-tree-panel", AgentTreePanel)
+            panel.visible = not panel.visible
+            state = "shown" if panel.visible else "hidden"
+            self._add_system_message(f"Agent tree panel {state}.")
+        except Exception:
+            self._add_system_message("Agent tree panel not available.")
+
     def _add_tool_use(
         self,
         tool_name: str,
@@ -5187,8 +5431,7 @@ class AmplifierTuiApp(
         self._processing_start_time = time.monotonic()
         self._tool_count_this_turn = 0
         inp = self.query_one("#chat-input", ChatInput)
-        inp.disabled = True
-        inp.add_class("disabled")
+        inp.placeholder = "Type to queue next message..."
 
         chat_view = self._active_chat_view()
         frame = self._SPINNER[0]
@@ -5236,8 +5479,7 @@ class AmplifierTuiApp(
         self._stream_container = None
         self._stream_block_type = None
         inp = self.query_one("#chat-input", ChatInput)
-        inp.disabled = False
-        inp.remove_class("disabled")
+        inp.placeholder = "Message..."
         inp.focus()
         self._remove_processing_indicator()
         self._update_token_display()
@@ -5252,6 +5494,28 @@ class AmplifierTuiApp(
         self._notify_sound(elapsed)
         # Auto-save after every completed response
         self._do_autosave()
+        # Mid-turn steering: send queued message if any
+        if self._queued_message:
+            queued = self._queued_message
+            self._queued_message = None
+            # Use set_timer to send after current processing cleanup completes
+            self.set_timer(0.1, lambda: self._send_queued_message(queued))
+
+    def _send_queued_message(self, message: str) -> None:
+        """Send a previously queued mid-turn message."""
+        if not self._amplifier_ready:
+            return
+        self._add_user_message(message)
+        expanded = self._expand_snippet_mentions(message)
+        expanded = self._expand_at_mentions(expanded)
+        expanded = self._build_message_with_attachments(expanded)
+        if self._active_mode:
+            expanded = f"/mode {self._active_mode}\n{expanded}"
+        has_session = self.session_manager and getattr(
+            self.session_manager, "session", None
+        )
+        self._start_processing("Starting session" if not has_session else "Thinking")
+        self._send_message_worker(expanded)
 
     def _maybe_send_notification(self, elapsed: float | None = None) -> None:
         """Send a terminal notification if processing took long enough."""
@@ -5711,6 +5975,16 @@ class AmplifierTuiApp(
                         agent=tool_input.get("agent", ""),
                         instruction=tool_input.get("instruction", ""),
                     )
+            # Feed todo tool calls to the TodoPanel
+            if name == "todo" and isinstance(tool_input, dict):
+                self.call_from_thread(self._update_todo_panel, tool_input)
+            # Feed delegate tool calls to the AgentTreePanel
+            if is_delegate_tool(name) and isinstance(tool_input, dict):
+                agent_name = tool_input.get("agent", "unknown")
+                agent_key = make_delegate_key(tool_input)
+                self.call_from_thread(
+                    self._update_agent_tree_start, agent_name, agent_key
+                )
             # Track recipe executions
             if name == "recipes" and isinstance(tool_input, dict):
                 op = tool_input.get("operation", "")
@@ -5754,6 +6028,14 @@ class AmplifierTuiApp(
                         result=result,
                         status=status,
                     )
+            # Update AgentTreePanel on delegate completion
+            if is_delegate_tool(name) and isinstance(tool_input, dict):
+                agent_key = make_delegate_key(tool_input)
+                d_status = "failed" if result.startswith("Error") else "completed"
+                summary = result[:100] if result else ""
+                self.call_from_thread(
+                    self._update_agent_tree_end, agent_key, d_status, summary
+                )
             # Complete recipe tracking
             if name == "recipes" and isinstance(tool_input, dict):
                 op = tool_input.get("operation", "")
@@ -5987,8 +6269,21 @@ class AmplifierTuiApp(
             self.call_from_thread(self._display_transcript, transcript_path)
 
             # Resume the actual session (restores LLM context)
+            # Look up the original project path so the session CWD is correct
+            working_dir = None
+            for s in getattr(self, "_session_list_data", []):
+                if s.get("session_id") == session_id:
+                    pp = s.get("project_path")
+                    if pp:
+                        candidate = Path(pp)
+                        if candidate.is_dir():
+                            working_dir = candidate
+                    break
+
             model = self._prefs.preferred_model or ""
-            await self.session_manager.resume_session(session_id, model_override=model)
+            await self.session_manager.resume_session(
+                session_id, model_override=model, working_dir=working_dir
+            )
 
             # Restore session title
             title = self._load_session_title_for(session_id)

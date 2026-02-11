@@ -144,9 +144,7 @@ class SessionManager:
                 )
         elif event == "content_block:delta":
             delta = (
-                data.get("delta", "")
-                or data.get("text", "")
-                or data.get("content", "")
+                data.get("delta", "") or data.get("text", "") or data.get("content", "")
             )
             if delta and self.on_content_block_delta:
                 self.on_content_block_delta(data.get("block_type", "text"), delta)
@@ -236,6 +234,7 @@ class SessionManager:
         self,
         session_id: str,
         model_override: str = "",
+        working_dir: Path | None = None,
     ) -> None:
         """Resume an existing Amplifier session via the distro Bridge.
 
@@ -245,12 +244,16 @@ class SessionManager:
             The session to resume.
         model_override:
             If non-empty, override the provider's default model.
+        working_dir:
+            Working directory for the resumed session.  When resuming from
+            the sidebar the caller should pass the original project path
+            so the session CWD matches.  Falls back to ``Path.cwd()``.
         """
         from amplifier_distro.bridge import BridgeConfig
 
         bridge = self._get_bridge()
         config = BridgeConfig(
-            working_dir=Path.cwd(),
+            working_dir=working_dir or Path.cwd(),
             run_preflight=False,
             on_stream=self._on_stream,
         )
@@ -285,9 +288,7 @@ class SessionManager:
                     if hooks:
                         from amplifier_core.events import SESSION_END  # type: ignore[import-not-found]
 
-                        await hooks.emit(
-                            SESSION_END, {"session_id": self.session_id}
-                        )
+                        await hooks.emit(SESSION_END, {"session_id": self.session_id})
                 except Exception:  # noqa: BLE001
                     logger.debug("Failed to emit SESSION_END", exc_info=True)
                 try:
@@ -360,9 +361,7 @@ class SessionManager:
                     "project": project_label,
                     "project_path": project_path,
                     "mtime": mtime,
-                    "date_str": datetime.fromtimestamp(mtime).strftime(
-                        "%m/%d %H:%M"
-                    ),
+                    "date_str": datetime.fromtimestamp(mtime).strftime("%m/%d %H:%M"),
                     "name": "",
                     "description": "",
                 }
@@ -417,9 +416,8 @@ class SessionManager:
             for session_dir in sessions_subdir.iterdir():
                 if not session_dir.is_dir():
                     continue
-                if (
-                    session_dir.name == session_id
-                    or session_dir.name.startswith(session_id)
+                if session_dir.name == session_id or session_dir.name.startswith(
+                    session_id
                 ):
                     transcript = session_dir / "transcript.jsonl"
                     if transcript.exists():
