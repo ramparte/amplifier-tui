@@ -1,7 +1,7 @@
 """Tests for amplifier_tui.session_manager -- TUI-012.
 
-The SessionManager integrates with amplifier-core, so all tests mock
-at the amplifier boundary.  No real sessions are created.
+The SessionManager integrates with amplifier-core via the distro Bridge,
+so all tests mock at the bridge boundary.  No real sessions are created.
 """
 
 from __future__ import annotations
@@ -151,64 +151,6 @@ class TestGetProviderModels:
         assert sm.get_provider_models() == []
 
 
-# -- _apply_model_override (static) ------------------------------------------
-
-
-class TestApplyModelOverride:
-    """Static method patches config_data providers."""
-
-    def test_patches_default_model(self):
-        config = {
-            "providers": [
-                {"config": {"default_model": "old-model"}},
-            ]
-        }
-        SessionManager._apply_model_override(config, "new-model")
-        assert config["providers"][0]["config"]["default_model"] == "new-model"
-        assert config["providers"][0]["config"]["priority"] == 0
-
-    def test_fallback_patches_first_config(self):
-        config = {
-            "providers": [
-                {"config": {"some_key": "val"}},
-            ]
-        }
-        SessionManager._apply_model_override(config, "new-model")
-        assert config["providers"][0]["config"]["default_model"] == "new-model"
-
-    def test_no_providers_is_noop(self):
-        config: dict = {"providers": []}
-        SessionManager._apply_model_override(config, "new-model")
-        assert config == {"providers": []}
-
-
-# -- _load_transcript ---------------------------------------------------------
-
-
-class TestLoadTranscript:
-    """_load_transcript reads JSONL lines."""
-
-    def test_loads_messages(self, tmp_path: Path):
-        transcript = tmp_path / "transcript.jsonl"
-        msgs = [
-            {"role": "user", "content": "hello"},
-            {"role": "assistant", "content": "hi"},
-        ]
-        transcript.write_text("\n".join(json.dumps(m) for m in msgs) + "\n")
-        sm = SessionManager()
-        result = sm._load_transcript(transcript)
-        assert len(result) == 2
-        assert result[0]["role"] == "user"
-        assert result[1]["content"] == "hi"
-
-    def test_skips_blank_lines(self, tmp_path: Path):
-        transcript = tmp_path / "transcript.jsonl"
-        transcript.write_text('{"role":"user","content":"a"}\n\n\n')
-        sm = SessionManager()
-        result = sm._load_transcript(transcript)
-        assert len(result) == 1
-
-
 # -- list_all_sessions --------------------------------------------------------
 
 
@@ -309,19 +251,139 @@ class TestGetSessionTranscriptPath:
             "amplifier_tui.session_manager.amplifier_projects_dir",
             return_value=tmp_path,
         ):
-            sm = SessionManager()
-            result = sm.get_session_transcript_path("find-me-123")
+            result = SessionManager.get_session_transcript_path("find-me-123")
 
         assert result == transcript
 
-    def test_raises_for_missing_session(self, tmp_path: Path):
+    def test_returns_none_for_missing_session(self, tmp_path: Path):
+        with patch(
+            "amplifier_tui.session_manager.amplifier_projects_dir",
+            return_value=tmp_path,
+        ):
+            result = SessionManager.get_session_transcript_path("nonexistent")
+            assert result is None
+
+    def test_prefix_matching(self, tmp_path: Path):
+        project = tmp_path / "_home_user_project"
+        sd = project / "sessions" / "abcdef-1234-5678"
+        sd.mkdir(parents=True)
+        transcript = sd / "transcript.jsonl"
+        transcript.write_text("{}\n")
+
+        with patch(
+            "amplifier_tui.session_manager.amplifier_projects_dir",
+            return_value=tmp_path,
+        ):
+            result = SessionManager.get_session_transcript_path("abcdef")
+
+        assert result == transcript
+
+
+# -- _find_most_recent_session ------------------------------------------------
+
+
+class TestFindMostRecentSession:
+    """_find_most_recent_session returns the newest session ID."""
+
+    def test_returns_most_recent(self, tmp_path: Path):
+        project = tmp_path / "_home_user_project"
+        # Create two sessions; modify one more recently
+        for sid in ("older-111", "newer-222"):
+            sd = project / "sessions" / sid
+            sd.mkdir(parents=True)
+            (sd / "transcript.jsonl").write_text("{}\n")
+
+        import time
+        time.sleep(0.05)
+        # Touch the newer one to make it most recent
+        (project / "sessions" / "newer-222").touch()
+
         with patch(
             "amplifier_tui.session_manager.amplifier_projects_dir",
             return_value=tmp_path,
         ):
             sm = SessionManager()
-            with pytest.raises(ValueError, match="not found"):
-                sm.get_session_transcript_path("nonexistent")
+            result = sm._find_most_recent_session()
+
+        assert result == "newer-222"
+
+    def test_raises_when_empty(self, tmp_path: Path):
+        with patch(
+            "amplifier_tui.session_manager.amplifier_projects_dir",
+            return_value=tmp_path / "nonexistent",
+        ):
+            sm = SessionManager()
+            with pytest.raises(ValueError, match="No sessions found"):
+                sm._find_most_recent_session()
+
+
+# -- _on_stream callback dispatch ---------------------------------------------
+
+
+class TestOnStream:
+    """_on_stream dispatches bridge events to TUI callbacks."""
+
+    def test_content_block_start(self):
+        sm = SessionManager()
+        calls = []
+        sm.on_content_block_start = lambda bt, bi: calls.append(("start", bt, bi))
+        sm._on_stream("content_block:start", {"block_type": "text", "block_index": 0})
+        assert calls == [("start", "text", 0)]
+
+    def test_content_block_delta(self):
+        sm = SessionManager()
+        calls = []
+        sm.on_content_block_delta = lambda bt, d: calls.append(("delta", bt, d))
+        sm._on_stream("content_block:delta", {"block_type": "text", "delta": "hello"})
+        assert calls == [("delta", "text", "hello")]
+
+    def test_content_block_end_text(self):
+        sm = SessionManager()
+        calls = []
+        sm.on_content_block_end = lambda bt, t: calls.append(("end", bt, t))
+        sm._on_stream(
+            "content_block:end",
+            {"block": {"type": "text", "text": "full text"}},
+        )
+        assert calls == [("end", "text", "full text")]
+
+    def test_tool_pre(self):
+        sm = SessionManager()
+        calls = []
+        sm.on_tool_pre = lambda name, inp: calls.append(("pre", name, inp))
+        sm._on_stream("tool:pre", {"tool_name": "bash", "tool_input": {"cmd": "ls"}})
+        assert calls == [("pre", "bash", {"cmd": "ls"})]
+
+    def test_tool_post(self):
+        sm = SessionManager()
+        calls = []
+        sm.on_tool_post = lambda name, inp, res: calls.append(("post", name, res))
+        sm._on_stream(
+            "tool:post",
+            {"tool_name": "bash", "tool_input": {}, "result": "output"},
+        )
+        assert calls == [("post", "bash", "output")]
+
+    def test_llm_response_tracks_usage(self):
+        sm = SessionManager()
+        sm._on_stream(
+            "llm:response",
+            {"usage": {"input": 100, "output": 50}, "model": "claude-sonnet"},
+        )
+        assert sm.total_input_tokens == 100
+        assert sm.total_output_tokens == 50
+        assert sm.model_name == "claude-sonnet"
+
+    def test_llm_response_accumulates(self):
+        sm = SessionManager()
+        sm._on_stream("llm:response", {"usage": {"input": 100, "output": 50}})
+        sm._on_stream("llm:response", {"usage": {"input": 200, "output": 100}})
+        assert sm.total_input_tokens == 300
+        assert sm.total_output_tokens == 150
+
+    def test_unknown_event_ignored(self):
+        sm = SessionManager()
+        sm._on_stream("unknown:event", {})  # Should not raise
 
 
 # -- send_message & end_session -----------------------------------------------
@@ -347,23 +409,41 @@ class TestSendMessage:
 
 
 class TestEndSession:
-    """end_session emits SESSION_END and cleans up."""
+    """end_session cleans up via bridge or fallback."""
 
     @pytest.mark.asyncio
-    async def test_end_cleans_up(self):
+    async def test_end_via_bridge(self):
         sm = SessionManager()
         mock_session = _make_session()
         sm.session = mock_session
         sm.session_id = "test-session"
 
-        # Mock hooks
+        # Mock the bridge and handle
+        mock_bridge = AsyncMock()
+        sm._bridge = mock_bridge
+        sm._handle = MagicMock()
+
+        await sm.end_session()
+
+        mock_bridge.end_session.assert_awaited_once_with(sm._handle)
+        assert sm.session is None
+        assert sm._handle is None
+
+    @pytest.mark.asyncio
+    async def test_end_fallback_without_handle(self):
+        sm = SessionManager()
+        mock_session = _make_session()
+        sm.session = mock_session
+        sm.session_id = "test-session"
+        sm._handle = None  # No bridge handle
+
+        # Mock hooks for fallback path
         hooks = AsyncMock()
         mock_session.coordinator.get.side_effect = lambda key: (
             hooks if key == "hooks" else None
         )
 
-        with patch("amplifier_tui.session_manager.SessionManager._register_hooks"):
-            await sm.end_session()
+        await sm.end_session()
 
         assert sm.session is None
 

@@ -683,25 +683,44 @@ class AmplifierTuiApp(
     def _init_amplifier_worker(self) -> None:
         """Import Amplifier in background so UI appears instantly."""
         self.call_from_thread(self._update_status, "Loading Amplifier...")
+
+        # SessionManager.__init__ is lightweight (no amplifier imports), so it
+        # essentially never fails.  The real failures happen at session-creation
+        # time inside LocalBridge.  We probe the environment here to give users
+        # structured guidance *before* they hit a raw exception on first message.
         try:
             self.session_manager = SessionManager()
-            self._amplifier_ready = True
-        except (ImportError, OSError):
+        except Exception:
             logger.debug(
                 "Failed to initialize Amplifier session manager", exc_info=True
             )
             self._amplifier_available = False
-            from .environment import check_environment, format_status
+            self.call_from_thread(
+                self._show_welcome,
+                "Amplifier session manager failed to initialise.\n"
+                "Use /environment for diagnostics.",
+            )
+            self.call_from_thread(self._update_status, "Not connected")
+            return
 
-            env_status = check_environment(self._prefs.environment.workspace)
+        # Proactive readiness check -- catches the common "clean machine" case
+        # where libraries or bundles aren't set up yet, BEFORE the user sends a
+        # message and gets a raw exception.
+        from .environment import check_environment, format_status
+
+        env_status = check_environment(self._prefs.environment.workspace)
+        if not env_status.ready:
+            self._amplifier_available = False
             diag = format_status(env_status)
             self.call_from_thread(
                 self._show_welcome,
                 diag
-                + "\n\nUse /environment for details or /workspace <path> to set your project root.",
+                + "\n\nFix the issues above, then restart or use /environment to re-check.",
             )
-            self.call_from_thread(self._update_status, "Not connected")
+            self.call_from_thread(self._update_status, "Setup needed")
             return
+
+        self._amplifier_ready = True
 
         # Now handle resume or initial prompt
         if self.resume_session_id:
@@ -3696,11 +3715,20 @@ class AmplifierTuiApp(
         self._add_system_message(f"Workspace set to: {resolved}")
 
     def _cmd_environment(self) -> None:
-        """Show full environment diagnostics."""
+        """Show full environment diagnostics and re-arm if now ready."""
         from .environment import check_environment, format_status
 
         status = check_environment(self._prefs.environment.workspace)
         self._add_system_message(format_status(status))
+
+        # If the environment is now ready but we previously marked it
+        # unavailable, re-arm so the next message will try to create a session.
+        if status.ready and not self._amplifier_ready:
+            self._amplifier_available = True
+            self._amplifier_ready = True
+            self._add_system_message(
+                "Environment looks good now. Send a message to start a session."
+            )
 
     def _cmd_model(self, text: str) -> None:
         """Show model info, list available models, or switch models.
@@ -5886,9 +5914,25 @@ class AmplifierTuiApp(
             if not self.session_manager.session:
                 self.call_from_thread(self._update_status, "Starting session...")
                 model = self._prefs.preferred_model or ""
-                await self.session_manager.start_new_session(
-                    model_override=model,
-                )
+                try:
+                    await self.session_manager.start_new_session(
+                        model_override=model,
+                    )
+                except Exception as session_err:
+                    # Session creation is where bundle loading, foundation import,
+                    # and provider setup actually happen.  Show structured diagnostics
+                    # instead of a raw traceback.
+                    logger.debug("Session creation failed", exc_info=True)
+                    from .environment import check_environment, format_status
+
+                    env = check_environment(self._prefs.environment.workspace)
+                    diag = format_status(env)
+                    self.call_from_thread(
+                        self._show_error,
+                        f"Could not start session: {session_err}\n\n{diag}\n"
+                        "Use /environment to re-check after fixing.",
+                    )
+                    return
                 self.call_from_thread(self._update_session_display)
                 self.call_from_thread(self._update_token_display)
 
