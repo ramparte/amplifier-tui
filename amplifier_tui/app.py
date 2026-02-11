@@ -1686,12 +1686,16 @@ class AmplifierTuiApp(
 
     def _load_notes(self) -> list[dict]:
         """Load notes for the current session."""
-        sid = self._get_session_id() or "default"
+        sid = self._get_session_id()
+        if not sid:
+            return []
         return self._note_store.load(sid)
 
     def _save_notes(self) -> None:
         """Persist session notes keyed by session ID."""
-        sid = self._get_session_id() or "default"
+        sid = self._get_session_id()
+        if not sid:
+            return
         self._note_store.save(sid, self._session_notes)
 
     def _add_message_pin(self, index: int, content: str, label: str = "") -> None:

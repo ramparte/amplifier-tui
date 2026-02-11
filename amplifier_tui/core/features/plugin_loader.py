@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from amplifier_tui.plugin import PluginCommand, clear_registry, get_registry
+from amplifier_tui.core.plugin import PluginCommand, clear_registry, get_registry
 
 
 @dataclass

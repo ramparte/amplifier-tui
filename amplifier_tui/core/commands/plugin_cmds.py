@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from amplifier_tui.features.plugin_loader import PluginLoader
+    from amplifier_tui.core.features.plugin_loader import PluginLoader
 
 
 class PluginCommandsMixin:
