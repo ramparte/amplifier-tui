@@ -160,6 +160,17 @@ def main():
         help="Check environment health and exit",
     )
     parser.add_argument(
+        "--web",
+        action="store_true",
+        help="Launch web interface instead of TUI",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8765,
+        help="Web server port (default: 8765)",
+    )
+    parser.add_argument(
         "prompt",
         nargs="*",
         help="Initial prompt to send",
@@ -195,6 +206,24 @@ def main():
         resume_session_id = "__most_recent__"
 
     initial_prompt = " ".join(args.prompt) if args.prompt else None
+
+    # --web: launch web interface instead of TUI
+    if args.web:
+        try:
+            from amplifier_tui.web import main as web_main
+
+            web_main(port=args.port, resume_session_id=resume_session_id)
+        except ImportError as exc:
+            print(
+                f"Web dependencies not installed: {exc}\n"
+                "Install with:  pip install amplifier-tui[web]\n"
+                "Or:  pip install fastapi uvicorn websockets",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        except (KeyboardInterrupt, SystemExit):
+            pass
+        return
 
     try:
         from amplifier_tui.app import run_app

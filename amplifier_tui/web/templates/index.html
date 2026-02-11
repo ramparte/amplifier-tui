@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Amplifier</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <!-- highlight.js for code syntax highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <!-- marked.js for markdown rendering -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.1/marked.min.js"></script>
+</head>
+<body>
+    <div id="app">
+        <!-- Header bar -->
+        <header id="header">
+            <div class="header-left">
+                <span class="logo">&#9889; Amplifier</span>
+                <span id="status-text" class="status-badge">Connecting...</span>
+            </div>
+            <div class="header-right">
+                <span id="model-name" class="header-info"></span>
+                <span id="token-count" class="header-info"></span>
+            </div>
+        </header>
+
+        <!-- Main content area -->
+        <main id="main">
+            <div id="chat-area">
+                <div id="messages"></div>
+                <div id="streaming-indicator" class="hidden">
+                    <div class="typing-dots"><span></span><span></span><span></span></div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Input area -->
+        <footer id="input-area">
+            <div class="input-wrapper">
+                <textarea
+                    id="chat-input"
+                    placeholder="Send a message... (Enter to send, Shift+Enter for newline)"
+                    rows="1"
+                    autofocus
+                ></textarea>
+                <button id="send-btn" title="Send message">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 2L11 13"></path>
+                        <path d="M22 2L15 22L11 13L2 9L22 2Z"></path>
+                    </svg>
+                </button>
+            </div>
+        </footer>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
