@@ -1489,11 +1489,13 @@ class AmplifierTuiApp(
 
                 if not messages:
                     # Track the tab but no autosave file
-                    saved_tabs_info.append({
-                        "tab_id": tab_id,
-                        "name": tab.custom_name or tab.name,
-                        "autosave_file": None,
-                    })
+                    saved_tabs_info.append(
+                        {
+                            "tab_id": tab_id,
+                            "name": tab.custom_name or tab.name,
+                            "autosave_file": None,
+                        }
+                    )
                     continue
 
                 session_data = {
@@ -1516,11 +1518,13 @@ class AmplifierTuiApp(
                     encoding="utf-8",
                 )
 
-                saved_tabs_info.append({
-                    "tab_id": tab_id,
-                    "name": tab.custom_name or tab.name,
-                    "autosave_file": filename,
-                })
+                saved_tabs_info.append(
+                    {
+                        "tab_id": tab_id,
+                        "name": tab.custom_name or tab.name,
+                        "autosave_file": filename,
+                    }
+                )
 
                 # Rotate old auto-saves for this tab
                 self._rotate_autosaves(tab_id)
@@ -1541,7 +1545,6 @@ class AmplifierTuiApp(
             self._last_autosave = time.time()
         except OSError:
             logger.debug("auto-save failed", exc_info=True)
-
 
     def _rotate_autosaves(self, tab_id: str) -> None:
         """Keep only the last MAX_AUTOSAVES_PER_TAB files per tab."""
@@ -1585,7 +1588,6 @@ class AmplifierTuiApp(
                 )
         except OSError:
             logger.debug("failed to check autosave recovery", exc_info=True)
-
 
     # ── System Prompt (/system) ──────────────────────────────────────────
 
@@ -1657,8 +1659,12 @@ class AmplifierTuiApp(
 
         lines.append("")
         lines.append("Restore commands:")
-        lines.append("  /autosave restore N          Restore auto-save #N into a new tab")
-        lines.append("  /autosave restore workspace  Restore all tabs from last session")
+        lines.append(
+            "  /autosave restore N          Restore auto-save #N into a new tab"
+        )
+        lines.append(
+            "  /autosave restore workspace  Restore all tabs from last session"
+        )
 
         # Check for workspace state
         ws_path = AUTOSAVE_DIR / "workspace-state.json"
@@ -1668,8 +1674,7 @@ class AmplifierTuiApp(
                 tab_count = len(ws.get("tabs", []))
                 ws_age = (time.time() - ws_path.stat().st_mtime) / 60
                 lines.append(
-                    f"\nWorkspace state: {tab_count} tab(s), "
-                    f"saved {ws_age:.0f} min ago"
+                    f"\nWorkspace state: {tab_count} tab(s), saved {ws_age:.0f} min ago"
                 )
             except (OSError, json.JSONDecodeError):
                 pass
@@ -1760,7 +1765,9 @@ class AmplifierTuiApp(
             try:
                 data = json.loads(filepath.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
-                logger.debug("failed to read tab autosave during restore", exc_info=True)
+                logger.debug(
+                    "failed to read tab autosave during restore", exc_info=True
+                )
                 if tab_idx > 0:
                     self._create_new_tab(name=tab_name, show_welcome=False)
                 restored_count += 1
@@ -1789,10 +1796,7 @@ class AmplifierTuiApp(
         if saved_active < len(self._tabs) and saved_active != self._active_tab_index:
             self._switch_to_tab(saved_active)
 
-        self._add_system_message(
-            f"Workspace restored: {restored_count} tab(s)"
-        )
-
+        self._add_system_message(f"Workspace restored: {restored_count} tab(s)")
 
     # ── Crash-recovery draft (global, plain-text) ─────────────────
 
@@ -4334,6 +4338,7 @@ class AmplifierTuiApp(
         Usage:
             /commit          Stage all, generate message, commit, and push
             /commit nopush   Stage all, generate message, commit (skip push)
+            /commit info     Show what would be committed (dry run)
         """
         import subprocess
 
@@ -4342,7 +4347,8 @@ class AmplifierTuiApp(
             return
 
         cwd = self._get_session_project_dir()
-        do_push = "nopush" not in args.lower()
+        info_mode = "info" in args.lower()
+        do_push = "nopush" not in args.lower() and not info_mode
 
         try:
             # Verify we're in a git repo
@@ -4377,6 +4383,42 @@ class AmplifierTuiApp(
             )
             if not status.stdout.strip():
                 self._add_system_message("No changes to commit (working tree clean).")
+                return
+
+            # /commit info -- dry run: show what would be committed and stop
+            if info_mode:
+                from pathlib import Path
+
+                project_label = Path(cwd).name
+                # Categorise porcelain lines
+                lines = status.stdout.strip().splitlines()
+                staged = [ln for ln in lines if ln and ln[0] not in (" ", "?")]
+                unstaged = [ln for ln in lines if len(ln) > 1 and ln[1] in ("M", "D")]
+                untracked = [ln for ln in lines if ln.startswith("??")]
+                parts = [
+                    f"Project: **{project_label}** ({branch})",
+                    f"Directory: `{cwd}`",
+                    "",
+                ]
+                if staged:
+                    parts.append(f"Already staged ({len(staged)}):")
+                    parts.extend(f"  {ln}" for ln in staged)
+                    parts.append("")
+                if unstaged:
+                    parts.append(f"Modified ({len(unstaged)}):")
+                    parts.extend(f"  {ln}" for ln in unstaged)
+                    parts.append("")
+                if untracked:
+                    parts.append(f"New files ({len(untracked)}):")
+                    parts.extend(f"  {ln[3:]}" for ln in untracked)
+                    parts.append("")
+                total = len(staged) + len(unstaged) + len(untracked)
+                parts.append(
+                    f"/commit would stage **{total}** changes, "
+                    f"generate a commit message, commit, and push."
+                )
+                parts.append("/commit nopush would do the same without pushing.")
+                self._add_system_message("\n".join(parts))
                 return
 
             # Auto-stage everything
