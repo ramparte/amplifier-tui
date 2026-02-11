@@ -84,6 +84,8 @@ from .widgets import (
     UserMessage,
 )
 
+from .core.app_base import SharedAppBase
+
 from .commands import (
     AgentCommandsMixin,
     SessionCommandsMixin,
@@ -161,6 +163,7 @@ class AmplifierTuiApp(
     ExportCommandsMixin,
     SplitCommandsMixin,
     WatchCommandsMixin,
+    SharedAppBase,
     App,
 ):
     """Amplifier TUI - a clean TUI for Amplifier."""
@@ -437,9 +440,9 @@ class AmplifierTuiApp(
                 name="Main",
                 tab_id="tab-0",
                 container_id="chat-view",
-                created_at=datetime.now().isoformat(),
             )
         ]
+        self._tabs[0].conversation.created_at = datetime.now().isoformat()
         self._active_tab_index: int = 0
         self._tab_counter: int = 1
 
@@ -783,29 +786,31 @@ class AmplifierTuiApp(
     def _save_current_tab_state(self) -> None:
         """Save current app state into the active tab's TabState."""
         tab = self._tabs[self._active_tab_index]
+        conv = tab.conversation
         if self.session_manager:
-            tab.sm_session = getattr(self.session_manager, "session", None)
-            tab.sm_session_id = getattr(self.session_manager, "session_id", None)
-        tab.session_title = self._session_title
-        tab.search_messages = self._search_messages
-        tab.total_words = self._total_words
-        tab.user_message_count = self._user_message_count
-        tab.assistant_message_count = self._assistant_message_count
-        tab.tool_call_count = self._tool_call_count
-        tab.user_words = self._user_words
-        tab.assistant_words = self._assistant_words
-        tab.response_times = self._response_times
-        tab.tool_usage = self._tool_usage
-        tab.assistant_msg_index = self._assistant_msg_index
+            conv.session = getattr(self.session_manager, "session", None)
+            conv.session_id = getattr(self.session_manager, "session_id", None)
+        conv.title = self._session_title
+        conv.search_messages = self._search_messages
+        conv.total_words = self._total_words
+        conv.user_message_count = self._user_message_count
+        conv.assistant_message_count = self._assistant_message_count
+        conv.tool_call_count = self._tool_call_count
+        conv.user_words = self._user_words
+        conv.assistant_words = self._assistant_words
+        conv.response_times = self._response_times
+        conv.tool_usage = self._tool_usage
+        conv.assistant_msg_index = self._assistant_msg_index
+        conv.last_assistant_text = self._last_assistant_text
+        conv.bookmarks = self._session_bookmarks
+        conv.refs = self._session_refs
+        conv.pins = self._message_pins
+        conv.notes = self._session_notes
+        conv.system_prompt = self._system_prompt
+        conv.system_preset_name = self._system_preset_name
+        conv.active_mode = self._active_mode
+        # UI-only fields stay on tab
         tab.last_assistant_widget = self._last_assistant_widget
-        tab.last_assistant_text = self._last_assistant_text
-        tab.session_bookmarks = self._session_bookmarks
-        tab.session_refs = self._session_refs
-        tab.message_pins = self._message_pins
-        tab.session_notes = self._session_notes
-        tab.system_prompt = self._system_prompt
-        tab.system_preset_name = self._system_preset_name
-        tab.active_mode = self._active_mode
         # Preserve unsent input text across tab switches
         try:
             tab.input_text = self.query_one("#chat-input", ChatInput).text
@@ -816,29 +821,31 @@ class AmplifierTuiApp(
 
     def _load_tab_state(self, tab: TabState) -> None:
         """Load a TabState's data into current app state."""
+        conv = tab.conversation
         if self.session_manager:
-            self.session_manager.session = tab.sm_session
-            self.session_manager.session_id = tab.sm_session_id
-        self._session_title = tab.session_title
-        self._search_messages = tab.search_messages
-        self._total_words = tab.total_words
-        self._user_message_count = tab.user_message_count
-        self._assistant_message_count = tab.assistant_message_count
-        self._tool_call_count = tab.tool_call_count
-        self._user_words = tab.user_words
-        self._assistant_words = tab.assistant_words
-        self._response_times = tab.response_times
-        self._tool_usage = tab.tool_usage
-        self._assistant_msg_index = tab.assistant_msg_index
+            self.session_manager.session = conv.session
+            self.session_manager.session_id = conv.session_id
+        self._session_title = conv.title
+        self._search_messages = conv.search_messages
+        self._total_words = conv.total_words
+        self._user_message_count = conv.user_message_count
+        self._assistant_message_count = conv.assistant_message_count
+        self._tool_call_count = conv.tool_call_count
+        self._user_words = conv.user_words
+        self._assistant_words = conv.assistant_words
+        self._response_times = conv.response_times
+        self._tool_usage = conv.tool_usage
+        self._assistant_msg_index = conv.assistant_msg_index
+        self._last_assistant_text = conv.last_assistant_text
+        self._session_bookmarks = conv.bookmarks
+        self._session_refs = conv.refs
+        self._message_pins = conv.pins
+        self._session_notes = conv.notes
+        self._system_prompt = conv.system_prompt
+        self._system_preset_name = conv.system_preset_name
+        self._active_mode = conv.active_mode
+        # UI-only fields from tab
         self._last_assistant_widget = tab.last_assistant_widget
-        self._last_assistant_text = tab.last_assistant_text
-        self._session_bookmarks = tab.session_bookmarks
-        self._session_refs = tab.session_refs
-        self._message_pins = tab.message_pins
-        self._session_notes = tab.session_notes
-        self._system_prompt = tab.system_prompt
-        self._system_preset_name = tab.system_preset_name
-        self._active_mode = tab.active_mode
 
     def _switch_to_tab(self, index: int) -> None:
         """Switch to the tab at the given index."""
@@ -938,8 +945,8 @@ class AmplifierTuiApp(
             name=name,
             tab_id=tab_id,
             container_id=container_id,
-            created_at=datetime.now().isoformat(),
         )
+        tab.conversation.created_at = datetime.now().isoformat()
 
         # Save current tab state before switching
         self._save_current_tab_state()

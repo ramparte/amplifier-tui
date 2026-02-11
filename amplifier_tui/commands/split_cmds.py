@@ -26,13 +26,13 @@ class SplitCommandsMixin:
             for i, tab in enumerate(self._tabs):
                 marker = " ▶" if i == self._active_tab_index else "  "
                 sid = ""
-                if tab.sm_session_id or (
+                if tab.conversation.session_id or (
                     i == self._active_tab_index
                     and self.session_manager
                     and getattr(self.session_manager, "session_id", None)
                 ):
                     s = (
-                        tab.sm_session_id
+                        tab.conversation.session_id
                         if i != self._active_tab_index
                         else getattr(self.session_manager, "session_id", "")
                     )

@@ -118,28 +118,31 @@ class TestTabState:
 
     def test_default_values(self):
         ts = TabState(name="tab", tab_id="t", container_id="c")
-        assert ts.sm_session is None
-        assert ts.sm_session_id is None
-        assert ts.session_title == ""
-        assert ts.total_words == 0
-        assert ts.user_message_count == 0
-        assert ts.assistant_message_count == 0
-        assert ts.tool_call_count == 0
-        assert ts.user_words == 0
-        assert ts.assistant_words == 0
-        assert ts.response_times == []
-        assert ts.tool_usage == {}
-        assert ts.assistant_msg_index == 0
+        # Conversation-level defaults (via embedded ConversationState)
+        conv = ts.conversation
+        assert conv.session is None
+        assert conv.session_id is None
+        assert conv.title == ""
+        assert conv.total_words == 0
+        assert conv.user_message_count == 0
+        assert conv.assistant_message_count == 0
+        assert conv.tool_call_count == 0
+        assert conv.user_words == 0
+        assert conv.assistant_words == 0
+        assert conv.response_times == []
+        assert conv.tool_usage == {}
+        assert conv.assistant_msg_index == 0
+        assert conv.last_assistant_text == ""
+        assert conv.bookmarks == []
+        assert conv.refs == []
+        assert conv.pins == []
+        assert conv.notes == []
+        assert conv.created_at == ""
+        assert conv.system_prompt == ""
+        assert conv.system_preset_name == ""
+        assert conv.active_mode is None
+        # UI-only defaults
         assert ts.last_assistant_widget is None
-        assert ts.last_assistant_text == ""
-        assert ts.session_bookmarks == []
-        assert ts.session_refs == []
-        assert ts.message_pins == []
-        assert ts.session_notes == []
-        assert ts.created_at == ""
-        assert ts.system_prompt == ""
-        assert ts.system_preset_name == ""
-        assert ts.active_mode is None
         assert ts.input_text == ""
         assert ts.custom_name == ""
 
@@ -147,29 +150,29 @@ class TestTabState:
         """Each instance should get its own mutable containers."""
         ts1 = TabState(name="a", tab_id="1", container_id="c1")
         ts2 = TabState(name="b", tab_id="2", container_id="c2")
-        ts1.search_messages.append("x")
-        assert ts2.search_messages == []
+        ts1.conversation.search_messages.append("x")
+        assert ts2.conversation.search_messages == []
 
     def test_field_mutation(self):
         ts = TabState(name="a", tab_id="1", container_id="c1")
-        ts.user_message_count = 5
-        ts.assistant_message_count = 3
-        ts.total_words = 100
-        assert ts.user_message_count == 5
-        assert ts.assistant_message_count == 3
-        assert ts.total_words == 100
+        ts.conversation.user_message_count = 5
+        ts.conversation.assistant_message_count = 3
+        ts.conversation.total_words = 100
+        assert ts.conversation.user_message_count == 5
+        assert ts.conversation.assistant_message_count == 3
+        assert ts.conversation.total_words == 100
 
     def test_response_times_accumulation(self):
         ts = TabState(name="a", tab_id="1", container_id="c1")
-        ts.response_times.extend([1.2, 0.8, 2.5])
-        assert len(ts.response_times) == 3
-        assert sum(ts.response_times) == pytest.approx(4.5)
+        ts.conversation.response_times.extend([1.2, 0.8, 2.5])
+        assert len(ts.conversation.response_times) == 3
+        assert sum(ts.conversation.response_times) == pytest.approx(4.5)
 
     def test_tool_usage_tracking(self):
         ts = TabState(name="a", tab_id="1", container_id="c1")
-        ts.tool_usage["read_file"] = 10
-        ts.tool_usage["bash"] = 3
-        assert ts.tool_usage == {"read_file": 10, "bash": 3}
+        ts.conversation.tool_usage["read_file"] = 10
+        ts.conversation.tool_usage["bash"] = 3
+        assert ts.conversation.tool_usage == {"read_file": 10, "bash": 3}
 
 
 # =====================================================================
