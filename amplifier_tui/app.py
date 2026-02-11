@@ -1635,6 +1635,28 @@ class AmplifierTuiApp(
         sm = self.session_manager if hasattr(self, "session_manager") else None
         return getattr(sm, "session_id", None) if sm else None
 
+    def _get_session_project_dir(self) -> str:
+        """Return the active session's project directory, falling back to cwd.
+
+        Looks up the ``project_path`` from the cached session list using the
+        active session ID.  This means ``/commit``, ``/git``, and similar
+        commands operate in the *session's* project -- not the directory the
+        TUI was launched from.
+        """
+        import os
+
+        sid = self._get_session_id()
+        if sid:
+            from pathlib import Path
+
+            for s in getattr(self, "_session_list_data", []):
+                if s.get("session_id") == sid:
+                    pp = s.get("project_path")
+                    if pp and Path(pp).is_dir():
+                        return str(pp)
+                    break
+        return os.getcwd()
+
     def _load_bookmarks(self) -> dict[str, list[dict]]:
         """Load all bookmarks from the JSON file."""
         return self._bookmark_store.load_all()
@@ -2665,6 +2687,9 @@ class AmplifierTuiApp(
         """
         # Save any in-progress draft before exiting
         self._save_draft()
+
+        # Save workspace state (all tabs) so it can be restored on next launch
+        self._do_autosave()
 
         if self.session_manager and getattr(self.session_manager, "session", None):
             self._update_status("Saving session...")
@@ -4117,53 +4142,117 @@ class AmplifierTuiApp(
         self._add_system_message("\n".join(lines))
 
     def _cmd_commit(self, args: str) -> None:
-        """Smart commit with AI-generated message."""
+        """Smart commit: auto-stage, generate message, commit, and push.
+
+        Runs in the active session's project directory (not the TUI launch dir).
+
+        Usage:
+            /commit          Stage all, generate message, commit, and push
+            /commit nopush   Stage all, generate message, commit (skip push)
+        """
         import subprocess
 
         if not self._amplifier_ready:
             self._add_system_message("Amplifier not ready yet.")
             return
 
+        cwd = self._get_session_project_dir()
+        do_push = "nopush" not in args.lower()
+
         try:
-            # Check if there are staged changes
-            staged = subprocess.run(
+            # Verify we're in a git repo
+            check = subprocess.run(
+                ["git", "rev-parse", "--is-inside-work-tree"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=cwd,
+            )
+            if check.returncode != 0:
+                self._add_system_message(f"Not a git repository: {cwd}")
+                return
+
+            # Get current branch
+            branch_result = subprocess.run(
+                ["git", "branch", "--show-current"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=cwd,
+            )
+            branch = branch_result.stdout.strip() or "(detached)"
+
+            # Check for any changes (staged + unstaged + untracked)
+            status = subprocess.run(
+                ["git", "status", "--porcelain"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=cwd,
+            )
+            if not status.stdout.strip():
+                self._add_system_message("No changes to commit (working tree clean).")
+                return
+
+            # Auto-stage everything
+            stage_result = subprocess.run(
+                ["git", "add", "-A"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=cwd,
+            )
+            if stage_result.returncode != 0:
+                self._add_system_message(
+                    f"Failed to stage changes: {stage_result.stderr.strip()}"
+                )
+                return
+
+            # Get the diff summary and content for the LLM
+            diff_summary = subprocess.run(
                 ["git", "diff", "--staged", "--stat"],
                 capture_output=True,
                 text=True,
                 timeout=10,
-            )
-            if not staged.stdout.strip():
-                # Nothing staged - check for unstaged changes
-                unstaged = subprocess.run(
-                    ["git", "diff", "--stat"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                if not unstaged.stdout.strip():
-                    self._add_system_message("No changes to commit.")
-                    return
-                self._add_system_message(
-                    "No staged changes. Unstaged changes:\n"
-                    f"{unstaged.stdout.strip()}\n\n"
-                    "Stage all with: /! git add -A\n"
-                    "Then try /commit again."
-                )
-                return
+                cwd=cwd,
+            ).stdout.strip()
 
-            # Show staged changes and ask agent to generate commit message
-            diff_summary = staged.stdout.strip()
             diff_content = subprocess.run(
-                ["git", "diff", "--staged"], capture_output=True, text=True, timeout=30
-            ).stdout[:3000]  # Limit diff size
+                ["git", "diff", "--staged"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=cwd,
+            ).stdout[:4000]
+
+            from pathlib import Path
+
+            project_label = Path(cwd).name
+
+            # Show what we're doing
+            self._add_system_message(
+                f"Committing in **{project_label}** ({branch}):\n"
+                f"```\n{diff_summary}\n```"
+            )
+
+            # Ask the agent to generate a commit message and execute
+            push_instruction = (
+                f"After committing, push to origin with: "
+                f"`git -C {cwd} push origin {branch}`"
+                if do_push
+                else "Do NOT push after committing."
+            )
 
             msg = (
-                f"I have the following staged changes:\n\n"
-                f"```\n{diff_summary}\n```\n\n"
+                f"I'm committing changes in `{cwd}` on branch `{branch}`.\n\n"
+                f"Staged changes:\n```\n{diff_summary}\n```\n\n"
                 f"Diff (truncated):\n```\n{diff_content}\n```\n\n"
-                f"Please generate a concise, descriptive git commit message for these changes. "
-                f"Use conventional commit format (feat:, fix:, refactor:, etc). "
-                f"Then run the git commit with that message."
+                f"Please:\n"
+                f"1. Generate a concise git commit message using conventional commit "
+                f"format (feat:, fix:, refactor:, docs:, etc).\n"
+                f'2. Run the commit: `git -C {cwd} commit -m "<your message>"`\n'
+                f"3. {push_instruction}\n\n"
+                f"Use the Amplifier co-author trailer in the commit message."
             )
             self._add_user_message("/commit")
             self._start_processing("Generating commit")
