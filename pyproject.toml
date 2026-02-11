@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "amplifier-tui"
 version = "0.1.0"
 description = "Proof of concept: Textual TUI for Amplifier"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "amplifier-core @ git+https://github.com/microsoft/amplifier-core",
     "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation",
