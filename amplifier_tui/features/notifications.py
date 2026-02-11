@@ -1,14 +1,2 @@
-"""Notification helpers (mostly stateless).
-
-Terminal notification and bell functions that don't require app state.
-Delegates to the centralized platform module for cross-platform support.
-"""
-
-from __future__ import annotations
-
-from ..platform import play_bell, send_notification
-
-# Re-export with the original name for backward compatibility
-send_terminal_notification = send_notification
-
-__all__ = ["play_bell", "send_terminal_notification"]
+# Re-export shim — real module lives in amplifier_tui.core.features.notifications
+from amplifier_tui.core.features.notifications import *  # noqa: F401,F403

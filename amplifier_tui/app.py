@@ -665,6 +665,7 @@ class AmplifierTuiApp(
             try:
                 input_widget = self.query_one("#chat-input", ChatInput)
                 input_widget.insert(crash_draft)
+                self._last_saved_draft = input_widget.text.strip()
                 preview = crash_draft[:60].replace("\n", " ")
                 if len(crash_draft) > 60:
                     preview += "..."
@@ -894,7 +895,7 @@ class AmplifierTuiApp(
             input_widget.clear()
             if new_tab.input_text:
                 input_widget.insert(new_tab.input_text)
-            self._last_saved_draft = new_tab.input_text
+            self._last_saved_draft = (new_tab.input_text or "").strip()
         except NoMatches:
             logger.debug(
                 "Chat input widget not found when restoring tab input", exc_info=True
@@ -1380,7 +1381,7 @@ class AmplifierTuiApp(
                 input_widget = self.query_one("#chat-input", ChatInput)
                 input_widget.clear()
                 input_widget.insert(draft_text)
-                self._last_saved_draft = draft_text
+                self._last_saved_draft = draft_text.strip()
                 self._add_system_message(f"Draft restored ({len(draft_text)} chars)")
         except (OSError, KeyError):
             logger.debug("failed to restore draft", exc_info=True)
@@ -1404,13 +1405,13 @@ class AmplifierTuiApp(
         """
         try:
             input_widget = self.query_one("#chat-input", ChatInput)
-            current = input_widget.text
+            current = input_widget.text.strip()
             if current != self._last_saved_draft:
                 self._last_saved_draft = current
                 session_id = self._get_session_id()
                 if session_id:
                     self._save_draft()
-                    if current.strip():
+                    if current:
                         self.notify("Draft saved", timeout=1.5, severity="information")
         except (OSError, KeyError):
             logger.debug("failed to auto-save draft", exc_info=True)
@@ -3065,7 +3066,7 @@ class AmplifierTuiApp(
             "  /git          Quick git operations (/git status|log|diff|branch|stash|blame)\n"
             "  /gitstatus    Quick git status overview (alias: /gs)\n"
             "  /grep         Search with options (/grep <pattern>, /grep -c <pattern> for case-sensitive)\n"
-"  /help         Show this help\n"
+            "  /help         Show this help\n"
             "  /history      Browse input history (/history <N>, /history search <query>, /history clear)\n"
             "  /include      Include file contents (/include src/main.py, /include *.py --send)\n"
             "  /include tree Project directory tree (respects .gitignore)\n"

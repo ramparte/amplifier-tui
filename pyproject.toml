@@ -34,7 +34,17 @@ dev = [
 amplifier-tui = "amplifier_tui.__main__:main"
 
 [tool.setuptools]
-packages = ["amplifier_tui", "amplifier_tui.commands", "amplifier_tui.features", "amplifier_tui.widgets"]
+packages = [
+    "amplifier_tui",
+    "amplifier_tui.core",
+    "amplifier_tui.core.commands",
+    "amplifier_tui.core.features",
+    "amplifier_tui.core.persistence",
+    "amplifier_tui.commands",
+    "amplifier_tui.features",
+    "amplifier_tui.persistence",
+    "amplifier_tui.widgets",
+]
 
 [tool.pytest.ini_options]
 addopts = "--cov=amplifier_tui --cov-report=term-missing"

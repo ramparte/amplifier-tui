@@ -274,10 +274,10 @@ class TestCmdCompact:
 class TestCmdTheme:
     def _patch_saves(self, monkeypatch):
         monkeypatch.setattr(
-            "amplifier_tui.commands.theme_cmds.save_colors", lambda c: None
+            "amplifier_tui.core.commands.theme_cmds.save_colors", lambda c: None
         )
         monkeypatch.setattr(
-            "amplifier_tui.commands.theme_cmds.save_theme_name", lambda n: None
+            "amplifier_tui.core.commands.theme_cmds.save_theme_name", lambda n: None
         )
 
     def test_list_themes_no_arg(self, monkeypatch):
