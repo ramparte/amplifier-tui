@@ -348,7 +348,7 @@ theme:
                                   #   high-contrast, nord, dracula, gruvbox, catppuccin, midnight
 
 sidebar:
-  session_sort: "date"            # session sort order: date, name, project
+  session_sort: "date"            # session sort order: date, name, project, tag
 
 autosave:
   enabled: true                   # auto-save sessions periodically and after responses
@@ -594,7 +594,7 @@ def load_preferences(path: Path | None = None) -> Preferences:
                 sdata = data["sidebar"]
                 if "session_sort" in sdata:
                     val = str(sdata["session_sort"] or "date")
-                    if val in ("date", "name", "project"):
+                    if val in ("date", "name", "project", "tag"):
                         prefs.session_sort = val
             if isinstance(data.get("autosave"), dict):
                 adata = data["autosave"]

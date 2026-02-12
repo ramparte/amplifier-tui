@@ -2071,6 +2071,7 @@ class AmplifierTuiApp(
         s: dict,
         custom_names: dict[str, str],
         session_titles: dict[str, str] | None = None,
+        tags: list[str] | None = None,
     ) -> str:
         """Build the display string for a session tree node.
 
@@ -2084,19 +2085,24 @@ class AmplifierTuiApp(
         desc = s.get("description", "")
 
         if custom:
-            label = custom[:28] if len(custom) > 28 else custom
+            label = custom[:22] if len(custom) > 22 else custom
         elif title:
-            label = title[:28] if len(title) > 28 else title
+            label = title[:22] if len(title) > 22 else title
         elif name:
-            label = name[:28] if len(name) > 28 else name
+            label = name[:22] if len(name) > 22 else name
         elif desc:
-            label = desc[:28] if len(desc) > 28 else desc
+            label = desc[:22] if len(desc) > 22 else desc
         else:
             label = sid[:8]
 
         date = s["date_str"]
         pin = "▪ " if sid in self._pinned_sessions else ""
-        return f"{pin}{date}  {label}"
+        # Show up to 2 tags in dim styling
+        tag_suffix = ""
+        if tags:
+            shown = tags[:2]
+            tag_suffix = "  " + " ".join(f"[dim]#{t}[/dim]" for t in shown)
+        return f"{pin}{date}  {label}{tag_suffix}"
 
     def _sort_sessions(
         self, sessions: list[dict], custom_names: dict[str, str]
@@ -2119,6 +2125,13 @@ class AmplifierTuiApp(
         elif mode == "project":
             # Group by project (alphabetical), then by date within each group
             return sorted(sessions, key=lambda s: (s["project"].lower(), -s["mtime"]))
+        elif mode == "tag":
+            all_tags = self._tag_store.load()
+            def _tag_key(s: dict) -> tuple:
+                tags = all_tags.get(s["session_id"], [])
+                first_tag = tags[0] if tags else "~untagged"  # ~ sorts last
+                return (first_tag.lower(), -s["mtime"])
+            return sorted(sessions, key=_tag_key)
         else:
             # "date" default: most recent first
             return sorted(sessions, key=lambda s: s["mtime"], reverse=True)
@@ -2141,6 +2154,7 @@ class AmplifierTuiApp(
 
         custom_names = self._load_session_names()
         session_titles = self._load_session_titles()
+        all_tags = self._tag_store.load()
 
         # Partition into pinned / unpinned
         pinned = [s for s in sessions if s["session_id"] in self._pinned_sessions]
@@ -2154,29 +2168,55 @@ class AmplifierTuiApp(
             pin_group = tree.root.add("▪ Pinned", expand=True)
             for s in pinned:
                 sid = s["session_id"]
-                display = self._session_display_label(s, custom_names, session_titles)
+                session_tags = all_tags.get(sid, [])
+                display = self._session_display_label(s, custom_names, session_titles, tags=session_tags)
                 node = pin_group.add(display, data=sid)
-                node.add_leaf(f"id: {sid[:12]}...")
+                # Show full info in child node
+                tag_info = f"  {' '.join(f'#{t}' for t in session_tags)}" if session_tags else ""
+                node.add_leaf(f"id: {sid[:12]}...{tag_info}")
                 node.collapse()
                 self._session_list_data.append(s)
 
-        # ── Unpinned, grouped by project ──
-        current_group: str | None = None
-        group_node = tree.root
-        for s in unpinned:
-            project = s["project"]
-            if project != current_group:
-                current_group = project
-                parts = project.split("/")
-                short = "/".join(parts[-2:]) if len(parts) > 2 else project
-                group_node = tree.root.add(short, expand=True)
+        # ── Unpinned, grouped ──
+        mode = getattr(self._prefs, "session_sort", "date")
+        if mode == "tag":
+            # Group by first tag
+            current_group: str | None = None
+            group_node = tree.root
+            for s in unpinned:
+                sid = s["session_id"]
+                session_tags = all_tags.get(sid, [])
+                first_tag = session_tags[0] if session_tags else "Untagged"
+                group_label = f"#{first_tag}" if session_tags else "Untagged"
+                if group_label != current_group:
+                    current_group = group_label
+                    group_node = tree.root.add(group_label, expand=True)
+                display = self._session_display_label(s, custom_names, session_titles, tags=session_tags)
+                session_node = group_node.add(display, data=sid)
+                tag_info = f"  {' '.join(f'#{t}' for t in session_tags)}" if session_tags else ""
+                session_node.add_leaf(f"id: {sid[:12]}...{tag_info}")
+                session_node.collapse()
+                self._session_list_data.append(s)
+        else:
+            # Group by project (existing behavior)
+            current_group: str | None = None
+            group_node = tree.root
+            for s in unpinned:
+                project = s["project"]
+                if project != current_group:
+                    current_group = project
+                    parts = project.split("/")
+                    short = "/".join(parts[-2:]) if len(parts) > 2 else project
+                    group_node = tree.root.add(short, expand=True)
 
-            sid = s["session_id"]
-            display = self._session_display_label(s, custom_names, session_titles)
-            session_node = group_node.add(display, data=sid)
-            session_node.add_leaf(f"id: {sid[:12]}...")
-            session_node.collapse()
-            self._session_list_data.append(s)
+                sid = s["session_id"]
+                session_tags = all_tags.get(sid, [])
+                display = self._session_display_label(s, custom_names, session_titles, tags=session_tags)
+                session_node = group_node.add(display, data=sid)
+                tag_info = f"  {' '.join(f'#{t}' for t in session_tags)}" if session_tags else ""
+                session_node.add_leaf(f"id: {sid[:12]}...{tag_info}")
+                session_node.collapse()
+                self._session_list_data.append(s)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         """Filter the session tree as the user types in the filter input."""
@@ -2327,15 +2367,26 @@ class AmplifierTuiApp(
         q = query.lower().strip()
         custom_names = self._load_session_names()
         session_titles = self._load_session_titles()
+        all_tags = self._tag_store.load()
 
         def _matches(s: dict) -> bool:
             """Return True if the session matches the current filter query."""
             if not q:
                 return True
             sid = s["session_id"]
+            tags = all_tags.get(sid, [])
+            # #prefix means tag-only search
+            if q.startswith("#"):
+                tag_q = q[1:]
+                return any(tag_q in t for t in tags)
             display = self._session_display_label(s, custom_names, session_titles)
             project = s["project"]
-            return q in display.lower() or q in sid.lower() or q in project.lower()
+            return (
+                q in display.lower()
+                or q in sid.lower()
+                or q in project.lower()
+                or any(q in t for t in tags)
+            )
 
         # Partition into pinned / unpinned
         pinned = [
@@ -2358,9 +2409,11 @@ class AmplifierTuiApp(
             pin_group = tree.root.add("▪ Pinned", expand=True)
             for s in pinned:
                 sid = s["session_id"]
-                display = self._session_display_label(s, custom_names, session_titles)
+                session_tags = all_tags.get(sid, [])
+                display = self._session_display_label(s, custom_names, session_titles, tags=session_tags)
                 node = pin_group.add(display, data=sid)
-                node.add_leaf(f"id: {sid[:12]}...")
+                tag_info = f"  {' '.join(f'#{t}' for t in session_tags)}" if session_tags else ""
+                node.add_leaf(f"id: {sid[:12]}...{tag_info}")
                 node.collapse()
 
         # ── Unpinned, grouped by project ──
@@ -2375,9 +2428,11 @@ class AmplifierTuiApp(
                 group_node = tree.root.add(short, expand=True)
 
             sid = s["session_id"]
-            display = self._session_display_label(s, custom_names, session_titles)
+            session_tags = all_tags.get(sid, [])
+            display = self._session_display_label(s, custom_names, session_titles, tags=session_tags)
             session_node = group_node.add(display, data=sid)
-            session_node.add_leaf(f"id: {sid[:12]}...")
+            tag_info = f"  {' '.join(f'#{t}' for t in session_tags)}" if session_tags else ""
+            session_node.add_leaf(f"id: {sid[:12]}...{tag_info}")
             session_node.collapse()
 
         if q and matched == 0:
@@ -5204,7 +5259,7 @@ class AmplifierTuiApp(
             self._style_note(msg)
             self._search_messages.append(("note", note["text"], msg))
 
-    _SORT_MODES = ("date", "name", "project")
+    _SORT_MODES = ("date", "name", "project", "tag")
 
     def _execute_session_delete(self, session_id: str) -> None:
         """Delete session files from disk and update UI."""
