@@ -1,13 +1,16 @@
 """Amplifier session management for the TUI.
 
 Uses the distro Bridge as the single interface for session lifecycle.
-No direct imports of amplifier-core or amplifier-foundation for session
-creation -- everything goes through LocalBridge.
+Reads ``~/.amplifier/settings.yaml`` for bundle and provider configuration
+that the Bridge does not handle on its own (the Bridge reads only
+``distro.yaml``, which most users do not create).
 """
 
 from __future__ import annotations
 
 import json
+import os
+import re
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -123,13 +126,101 @@ class SessionManager:
         return results
 
     # ------------------------------------------------------------------
+    # Settings helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _read_settings() -> dict[str, Any]:
+        """Read ``~/.amplifier/settings.yaml``, returning ``{}`` if missing."""
+        settings_path = Path("~/.amplifier/settings.yaml").expanduser()
+        if not settings_path.exists():
+            return {}
+        try:
+            import yaml  # noqa: PLC0415 – deferred import
+
+            return yaml.safe_load(settings_path.read_text()) or {}
+        except Exception:  # noqa: BLE001
+            logger.debug("Failed to read settings.yaml", exc_info=True)
+            return {}
+
+    @staticmethod
+    def _expand_env_vars(value: Any) -> Any:
+        """Recursively expand ``${VAR}`` references in config values."""
+        if isinstance(value, str):
+            return re.sub(
+                r"\$\{(\w+)\}",
+                lambda m: os.environ.get(m.group(1), ""),
+                value,
+            )
+        if isinstance(value, dict):
+            return {k: SessionManager._expand_env_vars(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [SessionManager._expand_env_vars(v) for v in value]
+        return value
+
+    def _get_bundle_name(self) -> str | None:
+        """Return the active bundle name from ``settings.yaml``, or *None*."""
+        settings = self._read_settings()
+        return settings.get("bundle", {}).get("active") or None
+
+    async def _mount_providers_from_settings(self) -> None:
+        """Mount providers from ``settings.yaml`` when the bundle has none.
+
+        The standard Amplifier bundles (``amplifier-dev``, ``foundation``)
+        do **not** include provider definitions – the CLI injects them from
+        ``settings.yaml`` at the app layer.  The distro Bridge skips this
+        step, so we replicate it here.
+        """
+        if not self.session:
+            return
+
+        # Already has providers – nothing to do.
+        providers = self.session.coordinator.get("providers") or {}
+        if providers:
+            return
+
+        settings = self._read_settings()
+        provider_configs: list[dict[str, Any]] = settings.get("config", {}).get(
+            "providers", []
+        )
+        if not provider_configs:
+            logger.warning(
+                "No providers in bundle or settings.yaml – LLM calls will fail."
+            )
+            return
+
+        for pcfg in provider_configs:
+            module_id = pcfg.get("module")
+            if not module_id:
+                continue
+            source_hint = pcfg.get("source")
+            config = self._expand_env_vars(pcfg.get("config", {}))
+
+            try:
+                provider_mount = await self.session.loader.load(
+                    module_id,
+                    config,
+                    source_hint=source_hint,
+                )
+                cleanup = await provider_mount(self.session.coordinator)
+                if cleanup:
+                    self.session.coordinator.register_cleanup(cleanup)
+                logger.info("Mounted provider '%s' from settings.yaml", module_id)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Failed to mount provider '%s' from settings.yaml",
+                    module_id,
+                    exc_info=True,
+                )
+
+    # ------------------------------------------------------------------
     # Bridge helpers
     # ------------------------------------------------------------------
 
     def _get_bridge(self) -> Any:
         """Lazily create the LocalBridge singleton."""
         if self._bridge is None:
-            from amplifier_distro.bridge import LocalBridge
+            from amplifier_distro.bridge import LocalBridge  # noqa: PLC0415
 
             self._bridge = LocalBridge()
         return self._bridge
@@ -207,7 +298,7 @@ class SessionManager:
             If non-empty, override the provider's default model after
             session creation.
         """
-        from amplifier_distro.bridge import BridgeConfig
+        from amplifier_distro.bridge import BridgeConfig  # noqa: PLC0415
 
         if cwd is None:
             cwd = Path.cwd()
@@ -217,12 +308,16 @@ class SessionManager:
             working_dir=cwd,
             run_preflight=False,
             on_stream=self._on_stream,
+            bundle_name=self._get_bundle_name(),
         )
 
         handle = await bridge.create_session(config)
         self._handle = handle
         self.session = handle._session
         self.session_id = handle.session_id
+
+        # Mount providers from settings.yaml if the bundle didn't include any
+        await self._mount_providers_from_settings()
 
         if model_override:
             self.switch_model(model_override)
@@ -249,19 +344,23 @@ class SessionManager:
             the sidebar the caller should pass the original project path
             so the session CWD matches.  Falls back to ``Path.cwd()``.
         """
-        from amplifier_distro.bridge import BridgeConfig
+        from amplifier_distro.bridge import BridgeConfig  # noqa: PLC0415
 
         bridge = self._get_bridge()
         config = BridgeConfig(
             working_dir=working_dir or Path.cwd(),
             run_preflight=False,
             on_stream=self._on_stream,
+            bundle_name=self._get_bundle_name(),
         )
 
         handle = await bridge.resume_session(session_id, config)
         self._handle = handle
         self.session = handle._session
         self.session_id = handle.session_id
+
+        # Mount providers from settings.yaml if the bundle didn't include any
+        await self._mount_providers_from_settings()
 
         if model_override:
             self.switch_model(model_override)
