@@ -71,6 +71,7 @@ from .plugin_loader import PluginLoader, LoadedPlugin
 from .dashboard_stats import DashboardStats, DashboardData, SessionRecord
 from .session_scanner import SessionScanner, MonitoredSession, SessionState
 from .session_summarizer import SessionSummarizer, make_anthropic_summarizer
+from .auto_tagger import AutoTagger, AutoTagState, make_anthropic_auto_tagger
 
 __all__ = [
     # diff_view
@@ -147,4 +148,8 @@ __all__ = [
     "SessionState",
     "SessionSummarizer",
     "make_anthropic_summarizer",
+    # auto-tagger
+    "AutoTagger",
+    "AutoTagState",
+    "make_anthropic_auto_tagger",
 ]

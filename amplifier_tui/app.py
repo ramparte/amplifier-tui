@@ -133,6 +133,11 @@ from .persistence import (
     TagStore,
     TemplateStore,
 )
+from .core.features.auto_tagger import (
+    AutoTagger,
+    AutoTagState,
+    make_anthropic_auto_tagger,
+)
 from ._utils import _context_color, _copy_to_clipboard, _get_tool_label  # noqa: E402
 
 
@@ -480,6 +485,11 @@ class AmplifierTuiApp(
         self._template_store = TemplateStore(_amp_home / "tui-templates.json")
         self._tag_store = TagStore(_amp_home / "tui-session-tags.json")
         self._clipboard_store = ClipboardStore(_amp_home / "tui-clipboard-ring.json")
+
+        # ── Auto-tagging ──────────────────────────────────────────
+        self._auto_tag_state = AutoTagState(_amp_home / "tui-auto-tag-state.json")
+        self._auto_tagger: AutoTagger | None = None
+        self._auto_tag_timer: Timer | None = None
 
         # Recently included files (/include recent)
         self._recent_includes: list[str] = []
@@ -2127,10 +2137,12 @@ class AmplifierTuiApp(
             return sorted(sessions, key=lambda s: (s["project"].lower(), -s["mtime"]))
         elif mode == "tag":
             all_tags = self._tag_store.load()
+
             def _tag_key(s: dict) -> tuple:
                 tags = all_tags.get(s["session_id"], [])
                 first_tag = tags[0] if tags else "~untagged"  # ~ sorts last
                 return (first_tag.lower(), -s["mtime"])
+
             return sorted(sessions, key=_tag_key)
         else:
             # "date" default: most recent first
@@ -2169,10 +2181,16 @@ class AmplifierTuiApp(
             for s in pinned:
                 sid = s["session_id"]
                 session_tags = all_tags.get(sid, [])
-                display = self._session_display_label(s, custom_names, session_titles, tags=session_tags)
+                display = self._session_display_label(
+                    s, custom_names, session_titles, tags=session_tags
+                )
                 node = pin_group.add(display, data=sid)
                 # Show full info in child node
-                tag_info = f"  {' '.join(f'#{t}' for t in session_tags)}" if session_tags else ""
+                tag_info = (
+                    f"  {' '.join(f'#{t}' for t in session_tags)}"
+                    if session_tags
+                    else ""
+                )
                 node.add_leaf(f"id: {sid[:12]}...{tag_info}")
                 node.collapse()
                 self._session_list_data.append(s)
@@ -2191,9 +2209,15 @@ class AmplifierTuiApp(
                 if group_label != current_group:
                     current_group = group_label
                     group_node = tree.root.add(group_label, expand=True)
-                display = self._session_display_label(s, custom_names, session_titles, tags=session_tags)
+                display = self._session_display_label(
+                    s, custom_names, session_titles, tags=session_tags
+                )
                 session_node = group_node.add(display, data=sid)
-                tag_info = f"  {' '.join(f'#{t}' for t in session_tags)}" if session_tags else ""
+                tag_info = (
+                    f"  {' '.join(f'#{t}' for t in session_tags)}"
+                    if session_tags
+                    else ""
+                )
                 session_node.add_leaf(f"id: {sid[:12]}...{tag_info}")
                 session_node.collapse()
                 self._session_list_data.append(s)
@@ -2211,12 +2235,76 @@ class AmplifierTuiApp(
 
                 sid = s["session_id"]
                 session_tags = all_tags.get(sid, [])
-                display = self._session_display_label(s, custom_names, session_titles, tags=session_tags)
+                display = self._session_display_label(
+                    s, custom_names, session_titles, tags=session_tags
+                )
                 session_node = group_node.add(display, data=sid)
-                tag_info = f"  {' '.join(f'#{t}' for t in session_tags)}" if session_tags else ""
+                tag_info = (
+                    f"  {' '.join(f'#{t}' for t in session_tags)}"
+                    if session_tags
+                    else ""
+                )
                 session_node.add_leaf(f"id: {sid[:12]}...{tag_info}")
                 session_node.collapse()
                 self._session_list_data.append(s)
+
+        self._queue_auto_tagging(sessions, all_tags)
+        # Start auto-tag timer if not running and there's pending work
+        if (
+            self._auto_tagger is not None
+            and self._auto_tagger.has_pending
+            and self._auto_tag_timer is None
+        ):
+            self._auto_tag_timer = self.set_interval(30.0, self._process_auto_tags)
+
+    def _queue_auto_tagging(self, sessions: list[dict], all_tags: dict) -> None:
+        """Queue untagged sessions for auto-tagging."""
+        if not getattr(self._prefs, "auto_tagging_enabled", True):
+            return
+        if self._auto_tagger is None:
+            tag_fn = make_anthropic_auto_tagger()
+            self._auto_tagger = AutoTagger(
+                self._tag_store,
+                self._auto_tag_state,
+                tag_fn=tag_fn,
+            )
+        from .platform import amplifier_projects_dir
+
+        sessions_dir = amplifier_projects_dir()
+        for s in sessions:
+            sid = s["session_id"]
+            if all_tags.get(sid):
+                continue  # Already has tags
+            mtime = s["mtime"]
+            if not self._auto_tagger.needs_tagging(sid, mtime):
+                continue
+            # Resolve session directory
+            try:
+                for project_dir in sessions_dir.iterdir():
+                    session_dir = project_dir / "sessions" / sid
+                    if session_dir.is_dir():
+                        self._auto_tagger.queue_session(
+                            sid, s["project"], session_dir, mtime
+                        )
+                        break
+            except Exception:
+                pass
+
+    def _process_auto_tags(self) -> None:
+        """Process pending auto-tagging requests (slow timer)."""
+        if self._auto_tagger is None:
+            return
+        try:
+            processed = self._auto_tagger.process_pending(max_count=3)
+            if processed > 0:
+                # Refresh sidebar to show new tags
+                if self._session_list_data:
+                    self._populate_session_list(self._session_list_data)
+            if not self._auto_tagger.has_pending and self._auto_tag_timer is not None:
+                self._auto_tag_timer.stop()
+                self._auto_tag_timer = None
+        except Exception:
+            logger.debug("Auto-tag processing failed", exc_info=True)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         """Filter the session tree as the user types in the filter input."""
@@ -2410,9 +2498,15 @@ class AmplifierTuiApp(
             for s in pinned:
                 sid = s["session_id"]
                 session_tags = all_tags.get(sid, [])
-                display = self._session_display_label(s, custom_names, session_titles, tags=session_tags)
+                display = self._session_display_label(
+                    s, custom_names, session_titles, tags=session_tags
+                )
                 node = pin_group.add(display, data=sid)
-                tag_info = f"  {' '.join(f'#{t}' for t in session_tags)}" if session_tags else ""
+                tag_info = (
+                    f"  {' '.join(f'#{t}' for t in session_tags)}"
+                    if session_tags
+                    else ""
+                )
                 node.add_leaf(f"id: {sid[:12]}...{tag_info}")
                 node.collapse()
 
@@ -2429,9 +2523,13 @@ class AmplifierTuiApp(
 
             sid = s["session_id"]
             session_tags = all_tags.get(sid, [])
-            display = self._session_display_label(s, custom_names, session_titles, tags=session_tags)
+            display = self._session_display_label(
+                s, custom_names, session_titles, tags=session_tags
+            )
             session_node = group_node.add(display, data=sid)
-            tag_info = f"  {' '.join(f'#{t}' for t in session_tags)}" if session_tags else ""
+            tag_info = (
+                f"  {' '.join(f'#{t}' for t in session_tags)}" if session_tags else ""
+            )
             session_node.add_leaf(f"id: {sid[:12]}...{tag_info}")
             session_node.collapse()
 

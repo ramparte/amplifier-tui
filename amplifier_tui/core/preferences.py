@@ -350,6 +350,10 @@ theme:
 sidebar:
   session_sort: "date"            # session sort order: date, name, project, tag
 
+auto_tagging:
+  enabled: true                   # auto-generate tags for untagged sessions
+  max_tags: 3                     # max auto-generated tags per session
+
 autosave:
   enabled: true                   # auto-save sessions periodically and after responses
   interval: 120                   # seconds between periodic auto-saves (default 2 min)
@@ -461,6 +465,8 @@ class Preferences:
     preferred_model: str = ""  # Empty means use default from bundle config
     theme_name: str = "dark"  # Active theme name (persisted for display)
     session_sort: str = "date"  # Session sort order: date, name, project
+    auto_tagging_enabled: bool = True  # Auto-generate tags for untagged sessions
+    auto_tagging_max_tags: int = 3  # Max auto-generated tags per session
 
     def apply_theme(self, name: str) -> bool:
         """Apply a built-in theme by name. Returns False if unknown."""
@@ -596,6 +602,14 @@ def load_preferences(path: Path | None = None) -> Preferences:
                     val = str(sdata["session_sort"] or "date")
                     if val in ("date", "name", "project", "tag"):
                         prefs.session_sort = val
+            if isinstance(data.get("auto_tagging"), dict):
+                at_data = data["auto_tagging"]
+                if "enabled" in at_data:
+                    prefs.auto_tagging_enabled = bool(at_data["enabled"])
+                if "max_tags" in at_data:
+                    val = int(at_data.get("max_tags", 3))
+                    if 1 <= val <= 10:
+                        prefs.auto_tagging_max_tags = val
             if isinstance(data.get("autosave"), dict):
                 adata = data["autosave"]
                 if "enabled" in adata:
