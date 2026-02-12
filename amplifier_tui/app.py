@@ -74,7 +74,6 @@ from .widgets import (
     PinnedPanel,
     PinnedPanelHeader,
     PinnedPanelItem,
-    ProjectPanel,
     ProcessingIndicator,
     ShortcutOverlay,
     SuggestionBar,
@@ -109,9 +108,6 @@ from .commands.compare_cmds import CompareCommandsMixin
 from .commands.replay_cmds import ReplayCommandsMixin
 from .commands.plugin_cmds import PluginCommandsMixin
 from .commands.dashboard_cmds import DashboardCommandsMixin
-from .commands.project_cmds import ProjectCommandsMixin
-
-# ProjectorCommandsMixin removed -- absorbed into ProjectCommandsMixin
 from .commands.shell_cmds import ShellCommandsMixin
 from .commands.terminal_cmds import TerminalCommandsMixin
 from .commands.monitor_cmds import MonitorCommandsMixin
@@ -137,12 +133,6 @@ from .persistence import (
     TagStore,
     TemplateStore,
 )
-
-from .core.features.auto_tagger import (
-    AutoTagger,
-    AutoTagState,
-    make_anthropic_auto_tagger,
-)
 from ._utils import _context_color, _copy_to_clipboard, _get_tool_label  # noqa: E402
 
 
@@ -154,7 +144,6 @@ class AmplifierTuiApp(
     TerminalCommandsMixin,
     ShellCommandsMixin,
     DashboardCommandsMixin,
-    ProjectCommandsMixin,
     ReplayCommandsMixin,
     CompareCommandsMixin,
     BranchCommandsMixin,
@@ -303,22 +292,22 @@ class AmplifierTuiApp(
         Binding("alt+0", "switch_tab(0)", "Last Tab", show=False),
         Binding("f2", "rename_tab", "Rename Tab", show=False),
         Binding("alt+m", "toggle_multiline", "Multiline", show=False),
-        Binding("ctrl+p", "toggle_project_panel", "Projects", show=False),
         Binding("ctrl+q", "quit", "Quit", show=True),
     ]
 
     def __init__(
         self,
         resume_session_id: str | None = None,
-        resume_session_ids: list[str] | None = None,
         initial_prompt: str | None = None,
     ) -> None:
         super().__init__()
         self.resume_session_id = resume_session_id
-        self.resume_session_ids = resume_session_ids
         self.initial_prompt = initial_prompt
         self.session_manager: SessionManager | None = None
+        self.is_processing = False
+        self._queued_message: str | None = None
         self._auto_mode: str = "full"
+        self._got_stream_content = False
         self._amplifier_available = True
         self._amplifier_ready = False
         self._session_list_data: list[dict] = []
@@ -326,10 +315,13 @@ class AmplifierTuiApp(
         self._spinner_frame = 0
         self._spinner_timer: Timer | None = None
         self._timestamp_timer: Timer | None = None
+        self._processing_label: str | None = None
+        self._status_activity_label: str = "Ready"
         self._prefs = load_preferences()
         self._history = PromptHistory()
         self._stash_stack: list[str] = []
         self._last_assistant_text: str = ""
+        self._processing_start_time: float | None = None
 
         # Pending delete confirmation (two-step delete)
         self._pending_delete: str | None = None
@@ -346,6 +338,9 @@ class AmplifierTuiApp(
 
         # Word count tracking
         self._total_words: int = 0
+
+        # Per-turn tool counter (for progress labels like "[#3]")
+        self._tool_count_this_turn: int = 0
 
         # Session statistics counters
         self._user_message_count: int = 0
@@ -381,6 +376,13 @@ class AmplifierTuiApp(
 
         # URL/reference collector (/ref command)
         self._session_refs: list[dict] = []
+
+        # Streaming display state
+        self._stream_widget: Static | None = None
+        self._stream_container: Collapsible | None = None
+        self._stream_block_type: str | None = None
+        self._streaming_cancelled: bool = False
+        self._stream_accumulated_text: str = ""
 
         # Search index: parallel list of (role, text, widget) for /search
         self._search_messages: list[tuple[str, str, Static | None]] = []
@@ -495,11 +497,6 @@ class AmplifierTuiApp(
         self._tag_store = TagStore(_amp_home / "tui-session-tags.json")
         self._clipboard_store = ClipboardStore(_amp_home / "tui-clipboard-ring.json")
 
-        # ── Auto-tagging ──────────────────────────────────────────
-        self._auto_tag_state = AutoTagState(_amp_home / "tui-auto-tag-state.json")
-        self._auto_tagger: AutoTagger | None = None
-        self._auto_tag_timer: Timer | None = None
-
         # Recently included files (/include recent)
         self._recent_includes: list[str] = []
 
@@ -535,43 +532,10 @@ class AmplifierTuiApp(
 
     # ── Layout ──────────────────────────────────────────────────
 
-    @property
-    def is_processing(self) -> bool:
-        """Whether the active tab's conversation is currently processing."""
-        if not self._tabs:
-            return False
-        return self._tabs[self._active_tab_index].conversation.is_processing
-
-    @is_processing.setter
-    def is_processing(self, value: bool) -> None:
-        if self._tabs:
-            self._tabs[self._active_tab_index].conversation.is_processing = value
-
     def _active_chat_view(self) -> ScrollableContainer:
         """Return the chat container for the currently active tab."""
         tab = self._tabs[self._active_tab_index]
         return self.query_one(f"#{tab.container_id}", ScrollableContainer)
-
-    def _all_conversations(self) -> list:
-        """Return all active ConversationState objects (implements abstract)."""
-        return [tab.conversation for tab in self._tabs]
-
-    def _tab_for_conversation(self, conversation_id: str) -> "TabState | None":
-        """Look up a TabState by its conversation_id."""
-        for tab in self._tabs:
-            if tab.conversation.conversation_id == conversation_id:
-                return tab
-        return None
-
-    def _chat_view_for_conversation(self, conversation_id: str):
-        """Get the ScrollableContainer for a specific conversation."""
-        tab = self._tab_for_conversation(conversation_id)
-        if tab is None:
-            return self._active_chat_view()
-        try:
-            return self.query_one(f"#{tab.container_id}", ScrollableContainer)
-        except Exception:
-            return self._active_chat_view()
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="main-container"):
@@ -619,7 +583,6 @@ class AmplifierTuiApp(
                     yield Static("", id="status-model")
             yield TodoPanel(id="todo-panel")
             yield AgentTreePanel(id="agent-tree-panel")
-            yield ProjectPanel(id="project-panel")
 
     async def on_mount(self) -> None:
         # Register all built-in color themes
@@ -774,19 +737,14 @@ class AmplifierTuiApp(
         self._amplifier_ready = True
 
         # Now handle resume or initial prompt
-        if self.resume_session_ids:
-            self._restore_multi_sessions_worker(self.resume_session_ids)
-        elif self.resume_session_id:
+        if self.resume_session_id:
             self._resume_session_worker(self.resume_session_id)
         elif self.initial_prompt:
             prompt = self.initial_prompt
             self.initial_prompt = None
-            init_cid = self._tabs[self._active_tab_index].conversation.conversation_id
             self.call_from_thread(self._clear_welcome)
             self.call_from_thread(self._add_user_message, prompt)
-            self.call_from_thread(
-                self._start_processing, "Starting session", conversation_id=init_cid
-            )
+            self.call_from_thread(self._start_processing, "Starting session")
             self._send_message_worker(prompt)
         else:
             self.call_from_thread(self._update_status, "Ready")
@@ -833,6 +791,9 @@ class AmplifierTuiApp(
         """Save current app state into the active tab's TabState."""
         tab = self._tabs[self._active_tab_index]
         conv = tab.conversation
+        if self.session_manager:
+            conv.session = getattr(self.session_manager, "session", None)
+            conv.session_id = getattr(self.session_manager, "session_id", None)
         conv.title = self._session_title
         conv.search_messages = self._search_messages
         conv.total_words = self._total_words
@@ -854,9 +815,6 @@ class AmplifierTuiApp(
         conv.active_mode = self._active_mode
         # UI-only fields stay on tab
         tab.last_assistant_widget = self._last_assistant_widget
-        # Don't persist widget refs across tab switches (they belong to the DOM)
-        tab.stream_widget = None
-        tab.stream_container = None
         # Preserve unsent input text across tab switches
         try:
             tab.input_text = self.query_one("#chat-input", ChatInput).text
@@ -869,7 +827,8 @@ class AmplifierTuiApp(
         """Load a TabState's data into current app state."""
         conv = tab.conversation
         if self.session_manager:
-            self.session_manager._default_conversation_id = conv.conversation_id
+            self.session_manager.session = conv.session
+            self.session_manager.session_id = conv.session_id
         self._session_title = conv.title
         self._search_messages = conv.search_messages
         self._total_words = conv.total_words
@@ -898,6 +857,10 @@ class AmplifierTuiApp(
             return
         if index < 0 or index >= len(self._tabs):
             return
+        if self.is_processing:
+            self._add_system_message("Cannot switch tabs while processing.")
+            return
+
         # Exit tab split mode if active
         if self._tab_split_mode:
             self._exit_tab_split()
@@ -967,6 +930,10 @@ class AmplifierTuiApp(
                 f"Maximum {MAX_TABS} tabs allowed. Close a tab first."
             )
             return
+        if self.is_processing:
+            self._add_system_message("Cannot create tab while processing.")
+            return
+
         # Exit tab split mode before creating a new tab
         if self._tab_split_mode:
             self._exit_tab_split()
@@ -1018,6 +985,9 @@ class AmplifierTuiApp(
         self._active_tab_index = len(self._tabs) - 1
 
         # Reset app state for new tab
+        if self.session_manager:
+            self.session_manager.session = None
+            self.session_manager.session_id = None
         self._session_title = ""
         self._search_messages = []
         self._total_words = 0
@@ -1057,9 +1027,8 @@ class AmplifierTuiApp(
         if len(self._tabs) <= 1:
             self._add_system_message("Cannot close the last tab.")
             return
-        tab_to_close = self._tabs[index]
-        if tab_to_close.conversation.is_processing:
-            self._add_system_message("Cannot close tab while it is processing.")
+        if self.is_processing and index == self._active_tab_index:
+            self._add_system_message("Cannot close tab while processing.")
             return
 
         # Exit tab split mode if closing a tab that's part of the split
@@ -2093,7 +2062,6 @@ class AmplifierTuiApp(
         s: dict,
         custom_names: dict[str, str],
         session_titles: dict[str, str] | None = None,
-        tags: list[str] | None = None,
     ) -> str:
         """Build the display string for a session tree node.
 
@@ -2107,24 +2075,19 @@ class AmplifierTuiApp(
         desc = s.get("description", "")
 
         if custom:
-            label = custom[:22] if len(custom) > 22 else custom
+            label = custom[:28] if len(custom) > 28 else custom
         elif title:
-            label = title[:22] if len(title) > 22 else title
+            label = title[:28] if len(title) > 28 else title
         elif name:
-            label = name[:22] if len(name) > 22 else name
+            label = name[:28] if len(name) > 28 else name
         elif desc:
-            label = desc[:22] if len(desc) > 22 else desc
+            label = desc[:28] if len(desc) > 28 else desc
         else:
             label = sid[:8]
 
         date = s["date_str"]
         pin = "▪ " if sid in self._pinned_sessions else ""
-        # Show up to 2 tags in dim styling
-        tag_suffix = ""
-        if tags:
-            shown = tags[:2]
-            tag_suffix = "  " + " ".join(f"[dim]#{t}[/dim]" for t in shown)
-        return f"{pin}{date}  {label}{tag_suffix}"
+        return f"{pin}{date}  {label}"
 
     def _sort_sessions(
         self, sessions: list[dict], custom_names: dict[str, str]
@@ -2147,15 +2110,6 @@ class AmplifierTuiApp(
         elif mode == "project":
             # Group by project (alphabetical), then by date within each group
             return sorted(sessions, key=lambda s: (s["project"].lower(), -s["mtime"]))
-        elif mode == "tag":
-            all_tags = self._tag_store.load()
-
-            def _tag_key(s: dict) -> tuple:
-                tags = all_tags.get(s["session_id"], [])
-                first_tag = tags[0] if tags else "~untagged"  # ~ sorts last
-                return (first_tag.lower(), -s["mtime"])
-
-            return sorted(sessions, key=_tag_key)
         else:
             # "date" default: most recent first
             return sorted(sessions, key=lambda s: s["mtime"], reverse=True)
@@ -2178,7 +2132,6 @@ class AmplifierTuiApp(
 
         custom_names = self._load_session_names()
         session_titles = self._load_session_titles()
-        all_tags = self._tag_store.load()
 
         # Partition into pinned / unpinned
         pinned = [s for s in sessions if s["session_id"] in self._pinned_sessions]
@@ -2192,148 +2145,29 @@ class AmplifierTuiApp(
             pin_group = tree.root.add("▪ Pinned", expand=True)
             for s in pinned:
                 sid = s["session_id"]
-                session_tags = all_tags.get(sid, [])
-                display = self._session_display_label(
-                    s, custom_names, session_titles, tags=session_tags
-                )
+                display = self._session_display_label(s, custom_names, session_titles)
                 node = pin_group.add(display, data=sid)
-                # Show full info in child node
-                tag_info = (
-                    f"  {' '.join(f'#{t}' for t in session_tags)}"
-                    if session_tags
-                    else ""
-                )
-                node.add_leaf(f"id: {sid[:12]}...{tag_info}")
+                node.add_leaf(f"id: {sid[:12]}...")
                 node.collapse()
                 self._session_list_data.append(s)
 
-        # ── Unpinned, grouped ──
-        mode = getattr(self._prefs, "session_sort", "date")
-        if mode == "tag":
-            # Group by first tag — with counts
-            tag_counts: dict[str, int] = {}
-            for s in unpinned:
-                st = all_tags.get(s["session_id"], [])
-                label = f"#{st[0]}" if st else "Untagged"
-                tag_counts[label] = tag_counts.get(label, 0) + 1
+        # ── Unpinned, grouped by project ──
+        current_group: str | None = None
+        group_node = tree.root
+        for s in unpinned:
+            project = s["project"]
+            if project != current_group:
+                current_group = project
+                parts = project.split("/")
+                short = "/".join(parts[-2:]) if len(parts) > 2 else project
+                group_node = tree.root.add(short, expand=True)
 
-            current_group: str | None = None
-            group_node = tree.root
-            for s in unpinned:
-                sid = s["session_id"]
-                session_tags = all_tags.get(sid, [])
-                first_tag = session_tags[0] if session_tags else "Untagged"
-                group_label = f"#{first_tag}" if session_tags else "Untagged"
-                if group_label != current_group:
-                    current_group = group_label
-                    count = tag_counts.get(group_label, 0)
-                    group_node = tree.root.add(
-                        f"{group_label} [dim]({count})[/dim]", expand=True
-                    )
-                display = self._session_display_label(
-                    s, custom_names, session_titles, tags=session_tags
-                )
-                session_node = group_node.add(display, data=sid)
-                tag_info = (
-                    f"  {' '.join(f'#{t}' for t in session_tags)}"
-                    if session_tags
-                    else ""
-                )
-                session_node.add_leaf(f"id: {sid[:12]}...{tag_info}")
-                session_node.collapse()
-                self._session_list_data.append(s)
-        else:
-            # Group by project (existing behavior) — with counts
-            project_counts: dict[str, int] = {}
-            for s in unpinned:
-                p = s["project"]
-                project_counts[p] = project_counts.get(p, 0) + 1
-
-            current_group: str | None = None
-            group_node = tree.root
-            for s in unpinned:
-                project = s["project"]
-                if project != current_group:
-                    current_group = project
-                    parts = project.split("/")
-                    short = "/".join(parts[-2:]) if len(parts) > 2 else project
-                    count = project_counts.get(project, 0)
-                    group_node = tree.root.add(
-                        f"{short} [dim]({count})[/dim]", expand=True
-                    )
-
-                sid = s["session_id"]
-                session_tags = all_tags.get(sid, [])
-                display = self._session_display_label(
-                    s, custom_names, session_titles, tags=session_tags
-                )
-                session_node = group_node.add(display, data=sid)
-                tag_info = (
-                    f"  {' '.join(f'#{t}' for t in session_tags)}"
-                    if session_tags
-                    else ""
-                )
-                session_node.add_leaf(f"id: {sid[:12]}...{tag_info}")
-                session_node.collapse()
-                self._session_list_data.append(s)
-
-        self._queue_auto_tagging(sessions, all_tags)
-        # Start auto-tag timer if not running and there's pending work
-        if (
-            self._auto_tagger is not None
-            and self._auto_tagger.has_pending
-            and self._auto_tag_timer is None
-        ):
-            self._auto_tag_timer = self.set_interval(30.0, self._process_auto_tags)
-
-    def _queue_auto_tagging(self, sessions: list[dict], all_tags: dict) -> None:
-        """Queue untagged sessions for auto-tagging."""
-        if not getattr(self._prefs, "auto_tagging_enabled", True):
-            return
-        if self._auto_tagger is None:
-            tag_fn = make_anthropic_auto_tagger()
-            self._auto_tagger = AutoTagger(
-                self._tag_store,
-                self._auto_tag_state,
-                tag_fn=tag_fn,
-            )
-        from .platform import amplifier_projects_dir
-
-        sessions_dir = amplifier_projects_dir()
-        for s in sessions:
             sid = s["session_id"]
-            if all_tags.get(sid):
-                continue  # Already has tags
-            mtime = s["mtime"]
-            if not self._auto_tagger.needs_tagging(sid, mtime):
-                continue
-            # Resolve session directory
-            try:
-                for project_dir in sessions_dir.iterdir():
-                    session_dir = project_dir / "sessions" / sid
-                    if session_dir.is_dir():
-                        self._auto_tagger.queue_session(
-                            sid, s["project"], session_dir, mtime
-                        )
-                        break
-            except Exception:
-                pass
-
-    def _process_auto_tags(self) -> None:
-        """Process pending auto-tagging requests (slow timer)."""
-        if self._auto_tagger is None:
-            return
-        try:
-            processed = self._auto_tagger.process_pending(max_count=3)
-            if processed > 0:
-                # Refresh sidebar to show new tags
-                if self._session_list_data:
-                    self._populate_session_list(self._session_list_data)
-            if not self._auto_tagger.has_pending and self._auto_tag_timer is not None:
-                self._auto_tag_timer.stop()
-                self._auto_tag_timer = None
-        except Exception:
-            logger.debug("Auto-tag processing failed", exc_info=True)
+            display = self._session_display_label(s, custom_names, session_titles)
+            session_node = group_node.add(display, data=sid)
+            session_node.add_leaf(f"id: {sid[:12]}...")
+            session_node.collapse()
+            self._session_list_data.append(s)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         """Filter the session tree as the user types in the filter input."""
@@ -2484,26 +2318,15 @@ class AmplifierTuiApp(
         q = query.lower().strip()
         custom_names = self._load_session_names()
         session_titles = self._load_session_titles()
-        all_tags = self._tag_store.load()
 
         def _matches(s: dict) -> bool:
             """Return True if the session matches the current filter query."""
             if not q:
                 return True
             sid = s["session_id"]
-            tags = all_tags.get(sid, [])
-            # #prefix means tag-only search
-            if q.startswith("#"):
-                tag_q = q[1:]
-                return any(tag_q in t for t in tags)
             display = self._session_display_label(s, custom_names, session_titles)
             project = s["project"]
-            return (
-                q in display.lower()
-                or q in sid.lower()
-                or q in project.lower()
-                or any(q in t for t in tags)
-            )
+            return q in display.lower() or q in sid.lower() or q in project.lower()
 
         # Partition into pinned / unpinned
         pinned = [
@@ -2526,20 +2349,12 @@ class AmplifierTuiApp(
             pin_group = tree.root.add("▪ Pinned", expand=True)
             for s in pinned:
                 sid = s["session_id"]
-                session_tags = all_tags.get(sid, [])
-                display = self._session_display_label(
-                    s, custom_names, session_titles, tags=session_tags
-                )
+                display = self._session_display_label(s, custom_names, session_titles)
                 node = pin_group.add(display, data=sid)
-                tag_info = (
-                    f"  {' '.join(f'#{t}' for t in session_tags)}"
-                    if session_tags
-                    else ""
-                )
-                node.add_leaf(f"id: {sid[:12]}...{tag_info}")
+                node.add_leaf(f"id: {sid[:12]}...")
                 node.collapse()
 
-        # ── Unpinned, grouped by project — with counts ──
+        # ── Unpinned, grouped by project ──
         current_group: str | None = None
         group_node = tree.root
         for s in unpinned:
@@ -2548,19 +2363,12 @@ class AmplifierTuiApp(
                 current_group = project
                 parts = project.split("/")
                 short = "/".join(parts[-2:]) if len(parts) > 2 else project
-                count = sum(1 for x in unpinned if x["project"] == project)
-                group_node = tree.root.add(f"{short} [dim]({count})[/dim]", expand=True)
+                group_node = tree.root.add(short, expand=True)
 
             sid = s["session_id"]
-            session_tags = all_tags.get(sid, [])
-            display = self._session_display_label(
-                s, custom_names, session_titles, tags=session_tags
-            )
+            display = self._session_display_label(s, custom_names, session_titles)
             session_node = group_node.add(display, data=sid)
-            tag_info = (
-                f"  {' '.join(f'#{t}' for t in session_tags)}" if session_tags else ""
-            )
-            session_node.add_leaf(f"id: {sid[:12]}...{tag_info}")
+            session_node.add_leaf(f"id: {sid[:12]}...")
             session_node.collapse()
 
         if q and matched == 0:
@@ -3218,18 +3026,6 @@ class AmplifierTuiApp(
         except NoMatches:
             logger.debug("Chat input not found for focus", exc_info=True)
 
-    def action_toggle_project_panel(self) -> None:
-        """Toggle the Projector project panel."""
-        from amplifier_tui.widgets.project_panel import ProjectPanel
-
-        try:
-            panel = self.query_one("#project-panel", ProjectPanel)
-            panel.visible = not panel.visible
-            if panel.visible:
-                self._projector_refresh_panel()
-        except Exception:
-            logger.debug("Failed to toggle project panel", exc_info=True)
-
     def action_toggle_split_focus(self) -> None:
         """Switch focus between chat input, chat view, and split panel (Ctrl+T)."""
         if not self.has_class("split-mode"):
@@ -3466,11 +3262,10 @@ class AmplifierTuiApp(
         text = input_widget.text.strip()
         if not text:
             return
-        conv = self._tabs[self._active_tab_index].conversation
-        if conv.is_processing:
+        if self.is_processing:
             # Queue message for after current turn completes (mid-turn steering)
             input_widget.clear()
-            conv.queued_message = text
+            self._queued_message = text
             self._add_system_message(
                 f"Queued (will send after current response): {text[:80]}{'...' if len(text) > 80 else ''}"
             )
@@ -3586,7 +3381,6 @@ class AmplifierTuiApp(
             "/timestamps": self._cmd_timestamps,
             "/ts": self._cmd_timestamps,
             "/keys": self._cmd_keys,
-            "/last": lambda: self._cmd_last(args),
             "/stats": lambda: self._cmd_stats(args),
             "/tokens": self._cmd_tokens,
             "/context": lambda: self._cmd_context(args),
@@ -3661,9 +3455,6 @@ class AmplifierTuiApp(
             "/modes": lambda: self._cmd_mode(""),
             "/tag": lambda: self._cmd_tag(args),
             "/tags": lambda: self._cmd_tag("list-all"),
-            "/project": lambda: self._cmd_project(args),
-            "/projector": lambda: self._cmd_project(args),
-            "/projects": lambda: self._cmd_project(args),
             "/clipboard": lambda: self._cmd_clipboard(args),
             "/clip": lambda: self._cmd_clipboard(args),
             "/agents": lambda: self._cmd_agents(args),
@@ -3748,7 +3539,6 @@ class AmplifierTuiApp(
             "                Also: @./path/to/file in your prompt auto-includes\n"
             "  /info         Show session details (ID, model, project, counts)\n"
             "  /keys         Keyboard shortcut overlay\n"
-            "  /last         Scroll to last user prompt | /last N for Nth-last\n"
             "  /mode         Amplifier modes (/mode <name>, /mode off, /modes to list)\n"
             "  /model        Show/switch model | /model list | /model <name>\n"
             "  /monitor      Live session monitor (/monitor big|small|close)\n"
@@ -3765,8 +3555,6 @@ class AmplifierTuiApp(
             "  /plugins      List loaded plugins (/plugins reload, /plugins help)\n"
             "  /prefs        Show preferences\n"
             "  /progress     Toggle detailed progress labels (/progress on, /progress off)\n"
-            "  /project [ask|search]     Project intelligence (ask, search across sessions)\n"
-            "  /projector                Alias for /project (see /project help)\n"
             "  /quit         Quit\n"
             "  /recipe       Recipe pipeline view (/recipe status|history|clear)\n"
             "  /redo         Alias for /retry\n"
@@ -5406,7 +5194,7 @@ class AmplifierTuiApp(
             self._style_note(msg)
             self._search_messages.append(("note", note["text"], msg))
 
-    _SORT_MODES = ("date", "name", "project", "tag")
+    _SORT_MODES = ("date", "name", "project")
 
     def _execute_session_delete(self, session_id: str) -> None:
         """Delete session files from disk and update UI."""
@@ -5732,43 +5520,6 @@ class AmplifierTuiApp(
             f"Bookmark {num} widget not found (message may have been cleared)."
         )
 
-    def _cmd_last(self, args: str = "") -> None:
-        """Scroll to the last user prompt (or Nth from end)."""
-        user_msgs = [
-            (text, widget)
-            for role, text, widget in self._search_messages
-            if role == "user"
-        ]
-        if not user_msgs:
-            self._add_system_message("No user messages in this session.")
-            return
-
-        n = 1
-        stripped = args.strip()
-        if stripped:
-            if stripped.isdigit():
-                n = int(stripped)
-            else:
-                self._add_system_message(
-                    "Usage: /last [N]  (scroll to Nth-last prompt)"
-                )
-                return
-
-        if n < 1 or n > len(user_msgs):
-            self._add_system_message(
-                f"Out of range. This session has {len(user_msgs)} user message(s)."
-            )
-            return
-
-        text, widget = user_msgs[-n]
-        if widget is not None:
-            widget.scroll_visible()
-            preview = text.split("\n")[0][:80]
-            label = f"Prompt {len(user_msgs) - n + 1}/{len(user_msgs)}"
-            self._add_system_message(f"{label}: {preview}")
-        else:
-            self._add_system_message("Message widget no longer available.")
-
     def _get_message_preview(self, widget: Static) -> str:
         """Get a short preview of a message widget's content."""
         for _role, text, w in self._search_messages:
@@ -5995,9 +5746,8 @@ class AmplifierTuiApp(
         chat_view.mount(msg)
         # Peek at processing time for display (not consumed; _finish_processing handles that)
         response_time: float | None = None
-        conv = self._tabs[self._active_tab_index].conversation if self._tabs else None
-        if conv and conv.processing_start_time is not None:
-            response_time = time.monotonic() - conv.processing_start_time
+        if self._processing_start_time is not None:
+            response_time = time.monotonic() - self._processing_start_time
         meta = self._make_message_meta(text, ts, response_time=response_time)
         if meta:
             chat_view.mount(meta)
@@ -6014,15 +5764,8 @@ class AmplifierTuiApp(
         self._update_word_count_display()
         self._update_token_display()
 
-    def _add_system_message(
-        self, text: str, ts: datetime | None = None
-    ) -> SystemMessage:
-        """Display a system message (slash command output).
-
-        Returns the mounted :class:`SystemMessage` widget so callers can
-        update its content later (e.g. replacing a "thinking..." placeholder
-        with an LLM response).
-        """
+    def _add_system_message(self, text: str, ts: datetime | None = None) -> None:
+        """Display a system message (slash command output)."""
         chat_view = self._active_chat_view()
         msg = SystemMessage(text)
         chat_view.mount(msg)
@@ -6032,7 +5775,6 @@ class AmplifierTuiApp(
         self._style_system(msg)
         self._scroll_if_auto(msg)
         self._search_messages.append(("system", text, msg))
-        return msg
 
     def _add_thinking_block(self, text: str) -> None:
         chat_view = self._active_chat_view()
@@ -6207,13 +5949,11 @@ class AmplifierTuiApp(
 
     def _animate_spinner(self) -> None:
         """Timer callback: animate the processing indicator."""
-        tab = self._tabs[self._active_tab_index]
-        conv = tab.conversation
-        if not conv.is_processing:
+        if not self.is_processing:
             return
         self._spinner_frame = (self._spinner_frame + 1) % len(self._SPINNER)
         frame = self._SPINNER[self._spinner_frame]
-        label = tab.processing_label or "Thinking"
+        label = self._processing_label or "Thinking"
         elapsed_str = self._format_elapsed()
 
         # Build indicator text with optional elapsed timer
@@ -6229,7 +5969,7 @@ class AmplifierTuiApp(
 
         # Keep status bar in sync with elapsed time
         if elapsed_str:
-            status_label = tab.status_activity_label
+            status_label = self._status_activity_label
             self._update_status(f"{status_label}  [{elapsed_str}]")
 
     def _format_elapsed(self) -> str:
@@ -6238,11 +5978,9 @@ class AmplifierTuiApp(
         Returns an empty string for the first few seconds to avoid visual
         noise on fast responses.
         """
-        conv = self._tabs[self._active_tab_index].conversation if self._tabs else None
-        processing_start_time = conv.processing_start_time if conv else None
-        if processing_start_time is None:
+        if self._processing_start_time is None:
             return ""
-        elapsed = time.monotonic() - processing_start_time
+        elapsed = time.monotonic() - self._processing_start_time
         if elapsed < 3:
             return ""
         if elapsed < 60:
@@ -6251,22 +5989,13 @@ class AmplifierTuiApp(
         seconds = int(elapsed) % 60
         return f"{minutes}m {seconds:02d}s"
 
-    def _start_processing(
-        self, label: str = "Thinking", *, conversation_id: str = ""
-    ) -> None:
-        if conversation_id:
-            tab = self._tab_for_conversation(conversation_id)
-            if not tab:
-                tab = self._tabs[self._active_tab_index]
-        else:
-            tab = self._tabs[self._active_tab_index]
-        conv = tab.conversation
-        conv.is_processing = True
-        conv.got_stream_content = False
-        tab.processing_label = label
-        tab.status_activity_label = f"{label}..."
-        conv.processing_start_time = time.monotonic()
-        conv.tool_count_this_turn = 0
+    def _start_processing(self, label: str = "Thinking") -> None:
+        self.is_processing = True
+        self._got_stream_content = False
+        self._processing_label = label
+        self._status_activity_label = f"{label}..."
+        self._processing_start_time = time.monotonic()
+        self._tool_count_this_turn = 0
         inp = self.query_one("#chat-input", ChatInput)
         inp.placeholder = "Type to queue next message..."
 
@@ -6287,43 +6016,34 @@ class AmplifierTuiApp(
         If we're not processing, this is a no-op so it doesn't interfere
         with other Escape uses (modals, search, etc.).
         """
-        tab = self._tabs[self._active_tab_index]
-        conv = tab.conversation
-        if not conv.is_processing:
+        if not self.is_processing:
             return
-        conv.streaming_cancelled = True
+        self._streaming_cancelled = True
 
         # Finalize whatever has been streamed so far
-        if tab.stream_widget and conv.stream_accumulated_text:
-            block_type = tab.stream_block_type or "text"
-            self._finalize_streaming_block(block_type, conv.stream_accumulated_text)
+        if self._stream_widget and self._stream_accumulated_text:
+            block_type = self._stream_block_type or "text"
+            self._finalize_streaming_block(block_type, self._stream_accumulated_text)
 
-        # Cancel running workers (send_message_worker / resume_session_worker)
-        self.workers.cancel_group(self, "send-message")
+        # Cancel running workers (send_message_worker)
+        self.workers.cancel_group(self, "default")
 
         self._add_system_message("Generation cancelled.")
         self._finish_processing()
 
-    def _finish_processing(self, *, conversation_id: str = "") -> None:
-        if conversation_id:
-            tab = self._tab_for_conversation(conversation_id)
-            if not tab:
-                tab = self._tabs[self._active_tab_index]
-        else:
-            tab = self._tabs[self._active_tab_index]
-        conv = tab.conversation
-        if not conv.is_processing:
+    def _finish_processing(self) -> None:
+        if not self.is_processing:
             return  # Already finished (e.g. cancel + worker finally)
-        conv.is_processing = False
-        tab.processing_label = ""
-        tab.status_activity_label = "Ready"
-        conv.tool_count_this_turn = 0
-        conv.streaming_cancelled = False
-        conv.stream_accumulated_text = ""
+        self.is_processing = False
+        self._processing_label = None
+        self._status_activity_label = "Ready"
+        self._tool_count_this_turn = 0
+        self._streaming_cancelled = False
+        self._stream_accumulated_text = ""
         # Clean up any leftover streaming state
-        tab.stream_widget = None
-        tab.stream_container = None
-        tab.stream_block_type = ""
+        self._stream_widget = None
+        self._stream_container = None
+        self._stream_block_type = None
         inp = self.query_one("#chat-input", ChatInput)
         inp.placeholder = "Message..."
         inp.focus()
@@ -6332,55 +6052,35 @@ class AmplifierTuiApp(
         self._update_status("Ready")
         # Compute elapsed time once for both notification methods
         elapsed: float | None = None
-        if conv.processing_start_time is not None:
-            elapsed = time.monotonic() - conv.processing_start_time
-            conv.processing_start_time = None
+        if self._processing_start_time is not None:
+            elapsed = time.monotonic() - self._processing_start_time
+            self._processing_start_time = None
             self._response_times.append(elapsed)
         self._maybe_send_notification(elapsed)
         self._notify_sound(elapsed)
         # Auto-save after every completed response
         self._do_autosave()
         # Mid-turn steering: send queued message if any
-        if conv.queued_message:
-            queued = conv.queued_message
-            queued_cid = conv.conversation_id
-            conv.queued_message = None
+        if self._queued_message:
+            queued = self._queued_message
+            self._queued_message = None
             # Use set_timer to send after current processing cleanup completes
-            self.set_timer(
-                0.1,
-                lambda: self._send_queued_message(queued, conversation_id=queued_cid),
-            )
+            self.set_timer(0.1, lambda: self._send_queued_message(queued))
 
-    def _send_queued_message(self, message: str, *, conversation_id: str = "") -> None:
+    def _send_queued_message(self, message: str) -> None:
         """Send a previously queued mid-turn message."""
         if not self._amplifier_ready:
             return
-        # Resolve the tab for the original conversation, fall back to active tab
-        if conversation_id:
-            tab = self._tab_for_conversation(conversation_id)
-            if not tab:
-                return  # Tab was closed since message was queued
-        else:
-            tab = self._tabs[self._active_tab_index] if self._tabs else None
-            if not tab:
-                return
-            conversation_id = tab.conversation.conversation_id
         self._add_user_message(message)
         expanded = self._expand_snippet_mentions(message)
         expanded = self._expand_at_mentions(expanded)
         expanded = self._build_message_with_attachments(expanded)
         if self._active_mode:
             expanded = f"/mode {self._active_mode}\n{expanded}"
-        handle = (
-            self.session_manager.get_handle(conversation_id)
-            if self.session_manager
-            else None
+        has_session = self.session_manager and getattr(
+            self.session_manager, "session", None
         )
-        has_session = handle and handle.session
-        self._start_processing(
-            "Starting session" if not has_session else "Thinking",
-            conversation_id=conversation_id,
-        )
+        self._start_processing("Starting session" if not has_session else "Thinking")
         self._send_message_worker(expanded)
 
     def _maybe_send_notification(self, elapsed: float | None = None) -> None:
@@ -6480,10 +6180,9 @@ class AmplifierTuiApp(
         If the indicator widget exists, updates it in place.
         If it was removed (e.g. by streaming), re-mounts a fresh one.
         """
-        tab = self._tabs[self._active_tab_index]
         if label is not None:
-            tab.processing_label = label
-        display_label = tab.processing_label or "Thinking"
+            self._processing_label = label
+        display_label = self._processing_label or "Thinking"
         frame = self._SPINNER[self._spinner_frame % len(self._SPINNER)]
         elapsed_str = self._format_elapsed()
         text = f" {frame} {display_label}..."
@@ -6781,38 +6480,27 @@ class AmplifierTuiApp(
 
     def _setup_streaming_callbacks(self) -> None:
         """Wire streaming callbacks via SharedAppBase."""
-        tab = self._tabs[self._active_tab_index]
-        conv = tab.conversation
-        self._wire_streaming_callbacks(conv.conversation_id, conv)
+        self._wire_streaming_callbacks()
 
     # --- Streaming callback overrides (called from BACKGROUND THREAD) ---
     # These implement the abstract _on_stream_* methods from SharedAppBase.
     # All UI updates are marshalled to the main thread via call_from_thread.
 
     def _on_stream_block_start(self, conversation_id: str, block_type: str) -> None:
-        self.call_from_thread(self._begin_streaming_block, block_type, conversation_id)
+        self.call_from_thread(self._begin_streaming_block, block_type)
 
-    def _on_stream_block_delta(
-        self, conversation_id: str, block_type: str, accumulated_text: str
-    ) -> None:
+    def _on_stream_block_delta(self, conversation_id: str, block_type: str, accumulated_text: str) -> None:
         self.call_from_thread(
-            self._update_streaming_content,
-            block_type,
-            accumulated_text,
-            conversation_id,
+            self._update_streaming_content, block_type, accumulated_text
         )
 
     def _on_stream_block_end(
-        self,
-        conversation_id: str,
-        block_type: str,
-        final_text: str,
-        had_block_start: bool,
+        self, conversation_id: str, block_type: str, final_text: str, had_block_start: bool
     ) -> None:
         if had_block_start:
             # Streaming widget exists - finalize it with complete text
             self.call_from_thread(
-                self._finalize_streaming_block, block_type, final_text, conversation_id
+                self._finalize_streaming_block, block_type, final_text
             )
         else:
             # No start event received - direct display (fallback)
@@ -6822,9 +6510,7 @@ class AmplifierTuiApp(
             else:
                 self.call_from_thread(self._add_assistant_message, final_text)
 
-    def _on_stream_tool_start(
-        self, conversation_id: str, name: str, tool_input: dict
-    ) -> None:
+    def _on_stream_tool_start(self, conversation_id: str, name: str, tool_input: dict) -> None:
         # Feed todo tool calls to the TodoPanel
         if name == "todo" and isinstance(tool_input, dict):
             self.call_from_thread(self._update_todo_panel, tool_input)
@@ -6833,10 +6519,6 @@ class AmplifierTuiApp(
             agent_name = tool_input.get("agent", "unknown")
             agent_key = make_delegate_key(tool_input)
             self.call_from_thread(self._update_agent_tree_start, agent_name, agent_key)
-        # Look up per-conversation state for tool count
-        tab = self._tab_for_conversation(conversation_id)
-        conv = tab.conversation if tab else None
-        tool_count = conv.tool_count_this_turn if conv else 0
         # Compute display label
         if self._prefs.display.progress_labels:
             label = _get_tool_label(name, tool_input)
@@ -6844,20 +6526,17 @@ class AmplifierTuiApp(
             # Append raw tool name for extra detail
             bare = f"{bare} ({name})"
             # Show sequential counter when this isn't the first tool
-            if tool_count > 1:
-                bare = f"{bare} [#{tool_count}]"
+            if self._tool_count_this_turn > 1:
+                bare = f"{bare} [#{self._tool_count_this_turn}]"
         else:
             label = "Thinking..."
             bare = "Thinking"
-        if tab:
-            tab.processing_label = bare
-            tab.status_activity_label = label
+        self._processing_label = bare
+        self._status_activity_label = label
         self.call_from_thread(self._ensure_processing_indicator, bare)
         self.call_from_thread(self._update_status, label)
 
-    def _on_stream_tool_end(
-        self, conversation_id: str, name: str, tool_input: dict, result: str
-    ) -> None:
+    def _on_stream_tool_end(self, conversation_id: str, name: str, tool_input: dict, result: str) -> None:
         # Update AgentTreePanel on delegate completion
         if is_delegate_tool(name) and isinstance(tool_input, dict):
             agent_key = make_delegate_key(tool_input)
@@ -6866,10 +6545,8 @@ class AmplifierTuiApp(
             self.call_from_thread(
                 self._update_agent_tree_end, agent_key, d_status, summary
             )
-        tab = self._tab_for_conversation(conversation_id)
-        if tab:
-            tab.processing_label = "Thinking"
-            tab.status_activity_label = "Thinking..."
+        self._processing_label = "Thinking"
+        self._status_activity_label = "Thinking..."
         self.call_from_thread(self._add_tool_use, name, tool_input, result)
         self.call_from_thread(self._ensure_processing_indicator, "Thinking")
         self.call_from_thread(self._update_status, "Thinking...")
@@ -6880,28 +6557,14 @@ class AmplifierTuiApp(
 
     # ── Streaming Display ─────────────────────────────────────────
 
-    def _begin_streaming_block(
-        self, block_type: str, conversation_id: str = ""
-    ) -> None:
+    def _begin_streaming_block(self, block_type: str) -> None:
         """Create an empty widget to stream content into.
 
         Called on content_block:start. Removes the spinner immediately
         so the user knows content is arriving.
         """
-        tab = (
-            self._tab_for_conversation(conversation_id)
-            if conversation_id
-            else self._tabs[self._active_tab_index]
-        )
-        conv = (
-            tab.conversation if tab else self._tabs[self._active_tab_index].conversation
-        )
         self._remove_processing_indicator()
-        chat_view = (
-            self._chat_view_for_conversation(conversation_id)
-            if conversation_id
-            else self._active_chat_view()
-        )
+        chat_view = self._active_chat_view()
 
         if block_type in ("thinking", "reasoning"):
             inner = Static("\u258d", classes="thinking-text")
@@ -6913,8 +6576,8 @@ class AmplifierTuiApp(
             )
             chat_view.mount(container)
             self._style_thinking(container, inner)
-            tab.stream_widget = inner
-            tab.stream_container = container
+            self._stream_widget = inner
+            self._stream_container = container
         else:
             widget = Static(
                 "\u258d", classes="chat-message assistant-message streaming-content"
@@ -6924,16 +6587,14 @@ class AmplifierTuiApp(
             widget.styles.color = c.assistant_text
             widget.styles.border_left = ("wide", c.assistant_border)
             self._scroll_if_auto(widget)
-            tab.stream_widget = widget
-            tab.stream_container = None
+            self._stream_widget = widget
+            self._stream_container = None
 
-        tab.stream_block_type = block_type
-        conv.stream_accumulated_text = ""
+        self._stream_block_type = block_type
+        self._stream_accumulated_text = ""
         self._update_status("Streaming\u2026")
 
-    def _update_streaming_content(
-        self, block_type: str, text: str, conversation_id: str = ""
-    ) -> None:
+    def _update_streaming_content(self, block_type: str, text: str) -> None:
         """Update the streaming widget with accumulated text so far.
 
         Called on content_block:delta (throttled to ~50ms). Shows a
@@ -6943,12 +6604,7 @@ class AmplifierTuiApp(
         the user sees formatted output (headings, code, lists) as it
         streams in.  Falls back to plain text on any rendering error.
         """
-        tab = (
-            self._tab_for_conversation(conversation_id)
-            if conversation_id
-            else self._tabs[self._active_tab_index]
-        )
-        if not tab or not tab.stream_widget:
+        if not self._stream_widget:
             return
 
         display_text = text + " \u258d"
@@ -6957,55 +6613,41 @@ class AmplifierTuiApp(
             try:
                 from rich.markdown import Markdown as RichMarkdown
 
-                tab.stream_widget.update(RichMarkdown(display_text))
+                self._stream_widget.update(RichMarkdown(display_text))
             except Exception:
                 logger.debug(
                     "Rich Markdown rendering failed, falling back to plain text",
                     exc_info=True,
                 )
-                tab.stream_widget.update(display_text)
+                self._stream_widget.update(display_text)
         else:
-            tab.stream_widget.update(display_text)
+            self._stream_widget.update(display_text)
 
         self._check_smart_scroll_pause()
-        self._scroll_if_auto(tab.stream_widget)
+        self._scroll_if_auto(self._stream_widget)
 
-    def _finalize_streaming_block(
-        self, block_type: str, text: str, conversation_id: str = ""
-    ) -> None:
+    def _finalize_streaming_block(self, block_type: str, text: str) -> None:
         """Replace the streaming Static with the final rendered widget.
 
         Called on content_block:end. For text blocks, swaps the fast
         Static with a proper Markdown widget for rich rendering.
         For thinking blocks, collapses and sets the preview title.
         """
-        tab = (
-            self._tab_for_conversation(conversation_id)
-            if conversation_id
-            else self._tabs[self._active_tab_index]
-        )
-        conv = (
-            tab.conversation if tab else self._tabs[self._active_tab_index].conversation
-        )
-        chat_view = (
-            self._chat_view_for_conversation(conversation_id)
-            if conversation_id
-            else self._active_chat_view()
-        )
+        chat_view = self._active_chat_view()
 
         if block_type in ("thinking", "reasoning"):
             full_text = text[:800] + "\u2026" if len(text) > 800 else text
-            if tab.stream_widget:
-                tab.stream_widget.update(full_text)
-            if tab.stream_container:
+            if self._stream_widget:
+                self._stream_widget.update(full_text)
+            if self._stream_container:
                 preview = text.split("\n")[0][:55]
                 if len(text) > 55:
                     preview += "\u2026"
-                tab.stream_container.title = f"\u25b6 Thinking: {preview}"
-                tab.stream_container.collapsed = True
+                self._stream_container.title = f"\u25b6 Thinking: {preview}"
+                self._stream_container.collapsed = True
         else:
             self._last_assistant_text = text
-            old = tab.stream_widget
+            old = self._stream_widget
             if old:
                 msg = AssistantMessage(text)
                 msg.msg_index = self._assistant_msg_index  # type: ignore[attr-defined]
@@ -7013,8 +6655,8 @@ class AmplifierTuiApp(
                 chat_view.mount(msg, before=old)
                 # Peek at processing time for the meta label
                 response_time: float | None = None
-                if conv.processing_start_time is not None:
-                    response_time = time.monotonic() - conv.processing_start_time
+                if self._processing_start_time is not None:
+                    response_time = time.monotonic() - self._processing_start_time
                 meta = self._make_message_meta(text, response_time=response_time)
                 if meta:
                     chat_view.mount(meta, before=old)
@@ -7033,31 +6675,25 @@ class AmplifierTuiApp(
                 self._add_assistant_message(text)
 
         # Reset streaming state for next block
-        tab.stream_widget = None
-        tab.stream_container = None
-        tab.stream_block_type = ""
+        self._stream_widget = None
+        self._stream_container = None
+        self._stream_block_type = None
 
     # ── Workers (background execution) ──────────────────────────
 
-    @work(thread=True, group="send-message")
+    @work(thread=True)
     async def _send_message_worker(self, message: str) -> None:
         """Send a message to Amplifier in a background thread."""
-        # Capture conversation context at launch time (before any awaits)
-        tab = self._tabs[self._active_tab_index]
-        conv = tab.conversation
-        cid = conv.conversation_id
         if self.session_manager is None:
             self.call_from_thread(self._add_system_message, "No active session")
             return
         try:
             # Auto-create session on first message
-            handle = self.session_manager.get_handle(cid)
-            if not handle or not handle.session:
+            if not self.session_manager.session:
                 self.call_from_thread(self._update_status, "Starting session...")
                 model = self._prefs.preferred_model or ""
                 try:
                     await self.session_manager.start_new_session(
-                        conversation_id=cid,
                         model_override=model,
                     )
                 except Exception as session_err:
@@ -7084,39 +6720,33 @@ class AmplifierTuiApp(
                 self.call_from_thread(self._apply_session_title)
 
             if self._prefs.display.streaming_enabled:
-                self._wire_streaming_callbacks(cid, conv)
+                self._setup_streaming_callbacks()
             self.call_from_thread(self._update_status, "Thinking...")
 
             # Inject system prompt (if set) before the user message
             if self._system_prompt:
                 message = f"[System instructions: {self._system_prompt}]\n\n{message}"
 
-            response = await self.session_manager.send_message(
-                message, conversation_id=cid
-            )
+            response = await self.session_manager.send_message(message)
 
-            if conv.streaming_cancelled:
+            if self._streaming_cancelled:
                 return  # Already finalized in action_cancel_streaming
 
             # Fallback: if no hooks fired, show the full response
-            if not conv.got_stream_content and response:
+            if not self._got_stream_content and response:
                 self.call_from_thread(self._add_assistant_message, response)
 
         except Exception as e:
             logger.debug("send message worker failed", exc_info=True)
-            if conv.streaming_cancelled:
+            if self._streaming_cancelled:
                 return  # Suppress errors from cancelled workers
             self.call_from_thread(self._show_error, str(e))
         finally:
-            self.call_from_thread(self._finish_processing, conversation_id=cid)
+            self.call_from_thread(self._finish_processing)
 
-    @work(thread=True, group="send-message")
+    @work(thread=True)
     async def _resume_session_worker(self, session_id: str) -> None:
         """Resume a session in a background thread."""
-        # Capture conversation context at launch time (before any awaits)
-        tab = self._tabs[self._active_tab_index]
-        conv = tab.conversation
-        cid = conv.conversation_id
         if self.session_manager is None:
             self.call_from_thread(self._add_system_message, "No active session")
             return
@@ -7148,10 +6778,7 @@ class AmplifierTuiApp(
 
             model = self._prefs.preferred_model or ""
             await self.session_manager.resume_session(
-                session_id,
-                conversation_id=cid,
-                model_override=model,
-                working_dir=working_dir,
+                session_id, model_override=model, working_dir=working_dir
             )
 
             # Restore session title
@@ -7173,105 +6800,18 @@ class AmplifierTuiApp(
                 prompt = self.initial_prompt
                 self.initial_prompt = None
                 self.call_from_thread(self._add_user_message, prompt)
-                self.call_from_thread(
-                    self._start_processing, "Thinking", conversation_id=cid
-                )
+                self.call_from_thread(self._start_processing)
                 if self._prefs.display.streaming_enabled:
-                    self._wire_streaming_callbacks(cid, conv)
-                response = await self.session_manager.send_message(
-                    prompt, conversation_id=cid
-                )
-                if not conv.got_stream_content and response:
+                    self._setup_streaming_callbacks()
+                response = await self.session_manager.send_message(prompt)
+                if not self._got_stream_content and response:
                     self.call_from_thread(self._add_assistant_message, response)
-                self.call_from_thread(self._finish_processing, conversation_id=cid)
+                self.call_from_thread(self._finish_processing)
 
         except Exception as e:
             logger.debug("resume session worker failed", exc_info=True)
             self.call_from_thread(self._show_error, f"Failed to resume: {e}")
             self.call_from_thread(self._update_status, "Error")
-
-    @work(thread=True)
-    async def _restore_multi_sessions_worker(self, session_ids: list[str]) -> None:
-        """Restore multiple sessions, each in its own tab.
-
-        Called when the TUI is launched with ``--sessions id1,id2,...``.
-        The first session resumes in the initial "Main" tab; subsequent
-        sessions each get a new tab.  After all tabs are populated the
-        view switches back to the first tab.
-        """
-        if self.session_manager is None:
-            self.call_from_thread(
-                self._add_system_message, "Session manager not available"
-            )
-            return
-
-        total = len(session_ids)
-        for i, session_id in enumerate(session_ids):
-            # For sessions beyond the first, create a new tab
-            if i > 0:
-                self.call_from_thread(
-                    self._create_new_tab, session_id[:8], show_welcome=False
-                )
-
-            # Grab the now-active tab's conversation binding
-            tab = self._tabs[self._active_tab_index]
-            conv = tab.conversation
-            cid = conv.conversation_id
-
-            self.call_from_thread(self._clear_welcome)
-            self.call_from_thread(
-                self._update_status, f"Loading session {i + 1}/{total}..."
-            )
-
-            try:
-                # Render the transcript into the chat view
-                transcript_path = self.session_manager.get_session_transcript_path(
-                    session_id
-                )
-                self.call_from_thread(self._display_transcript, transcript_path)
-
-                # Best-effort working directory lookup
-                working_dir = None
-                for s in getattr(self, "_session_list_data", []):
-                    if s.get("session_id") == session_id:
-                        pp = s.get("project_path")
-                        if pp:
-                            candidate = Path(pp)
-                            if candidate.is_dir():
-                                working_dir = candidate
-                        break
-
-                model = self._prefs.preferred_model or ""
-                await self.session_manager.resume_session(
-                    session_id,
-                    conversation_id=cid,
-                    model_override=model,
-                    working_dir=working_dir,
-                )
-
-                # Use the session title as the tab name
-                title = self._load_session_title_for(session_id)
-                if title:
-                    self._session_title = title
-                    tab.name = title
-                    tab.custom_name = title
-                    self.call_from_thread(self._apply_session_title)
-
-            except Exception as e:
-                logger.debug("Failed to resume session %s", session_id, exc_info=True)
-                self.call_from_thread(
-                    self._add_system_message,
-                    f"Failed to resume {session_id}: {e}",
-                )
-
-        # Switch back to the first tab and refresh all chrome
-        if total > 1:
-            self.call_from_thread(self._switch_to_tab, 0)
-
-        self.call_from_thread(self._update_tab_bar)
-        self.call_from_thread(self._update_session_display)
-        self.call_from_thread(self._update_token_display)
-        self.call_from_thread(self._update_status, "Ready")
 
     # ── Transcript Display ──────────────────────────────────────
 
@@ -7402,13 +6942,11 @@ class AmplifierTuiApp(
 
 def run_app(
     resume_session_id: str | None = None,
-    resume_session_ids: list[str] | None = None,
     initial_prompt: str | None = None,
 ) -> None:
     """Run the Amplifier TUI application."""
     app = AmplifierTuiApp(
         resume_session_id=resume_session_id,
-        resume_session_ids=resume_session_ids,
         initial_prompt=initial_prompt,
     )
     app.run()

@@ -1,18 +1,15 @@
 """Amplifier session management for the TUI.
 Uses the distro Bridge as the single interface for session lifecycle.
-Reads ``~/.amplifier/settings.yaml`` for bundle and provider configuration
-that the Bridge does not handle on its own (the Bridge reads only
-``distro.yaml``, which most users do not create).
+No direct imports of amplifier-core or amplifier-foundation for session
+creation -- everything goes through LocalBridge.
 """
 
 from __future__ import annotations
 
 import json
-import os
-import re
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -43,10 +40,6 @@ class SessionHandle:
     session: AmplifierSession | None = None
     session_id: str | None = None
     _bridge_handle: Any = None  # bridge.SessionHandle returned by LocalBridge
-
-    # Tracks the block_type announced by content_block:start so that
-    # subsequent delta/end events (which may lack the field) inherit it.
-    _active_block_types: dict[int, str] = field(default_factory=dict)
 
     # --- Per-session streaming callbacks ---
     on_content_block_start: Callable[[str, int], None] | None = None
@@ -79,39 +72,25 @@ class SessionHandle:
         Called from the background thread where session.execute() runs.
         """
         if event == "content_block:start":
-            block_type = data.get("block_type", "text")
-            block_index = data.get("block_index", 0)
-            # Remember block_type so delta/end inherit it even when
-            # the bridge omits the field from later events.
-            self._active_block_types[block_index] = block_type
             if self.on_content_block_start:
-                self.on_content_block_start(block_type, block_index)
+                self.on_content_block_start(
+                    data.get("block_type", "text"),
+                    data.get("block_index", 0),
+                )
         elif event == "content_block:delta":
-            block_index = data.get("block_index", 0)
-            block_type = data.get(
-                "block_type",
-                self._active_block_types.get(block_index, "text"),
-            )
             delta = (
                 data.get("delta", "") or data.get("text", "") or data.get("content", "")
             )
             if delta and self.on_content_block_delta:
-                self.on_content_block_delta(block_type, delta)
+                self.on_content_block_delta(data.get("block_type", "text"), delta)
         elif event == "content_block:end":
-            block_index = data.get("block_index", 0)
             block = data.get("block", {})
-            # Prefer the nested block.type, fall back to the tracked type
-            # from the start event.
-            block_type = block.get("type") or self._active_block_types.get(
-                block_index, "text"
-            )
-            # Clean up tracking state.
-            self._active_block_types.pop(block_index, None)
-            if block_type in ("thinking", "reasoning") and self.on_content_block_end:
+            block_type = block.get("type", "")
+            if block_type == "text" and self.on_content_block_end:
+                self.on_content_block_end("text", block.get("text", ""))
+            elif block_type in ("thinking", "reasoning") and self.on_content_block_end:
                 text = block.get("thinking", "") or block.get("text", "")
                 self.on_content_block_end("thinking", text)
-            elif self.on_content_block_end:
-                self.on_content_block_end("text", block.get("text", ""))
         elif event == "tool:pre":
             if self.on_tool_pre:
                 self.on_tool_pre(
@@ -350,96 +329,6 @@ class SessionManager:
         return self._bridge
 
     # ------------------------------------------------------------------
-    # Settings helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _read_settings() -> dict[str, Any]:
-        """Read ``~/.amplifier/settings.yaml``, returning ``{}`` if missing."""
-        settings_path = Path("~/.amplifier/settings.yaml").expanduser()
-        if not settings_path.exists():
-            return {}
-        try:
-            import yaml  # noqa: PLC0415 – deferred import
-
-            return yaml.safe_load(settings_path.read_text()) or {}
-        except Exception:  # noqa: BLE001
-            logger.debug("Failed to read settings.yaml", exc_info=True)
-            return {}
-
-    @staticmethod
-    def _expand_env_vars(value: Any) -> Any:
-        """Recursively expand ``${VAR}`` references in config values."""
-        if isinstance(value, str):
-            return re.sub(
-                r"\$\{(\w+)\}",
-                lambda m: os.environ.get(m.group(1), ""),
-                value,
-            )
-        if isinstance(value, dict):
-            return {k: SessionManager._expand_env_vars(v) for k, v in value.items()}
-        if isinstance(value, list):
-            return [SessionManager._expand_env_vars(v) for v in value]
-        return value
-
-    def _get_bundle_name(self) -> str | None:
-        """Return the active bundle name from ``settings.yaml``, or *None*."""
-        settings = self._read_settings()
-        return settings.get("bundle", {}).get("active") or None
-
-    async def _mount_providers_from_settings(
-        self, session: AmplifierSession | None
-    ) -> None:
-        """Mount providers from ``settings.yaml`` when the bundle has none.
-
-        The standard Amplifier bundles (``amplifier-dev``, ``foundation``)
-        do **not** include provider definitions – the CLI injects them from
-        ``settings.yaml`` at the app layer.  The distro Bridge skips this
-        step, so we replicate it here.
-        """
-        if not session:
-            return
-
-        # Already has providers – nothing to do.
-        providers = session.coordinator.get("providers") or {}
-        if providers:
-            return
-
-        settings = self._read_settings()
-        provider_configs: list[dict[str, Any]] = settings.get("config", {}).get(
-            "providers", []
-        )
-        if not provider_configs:
-            logger.warning(
-                "No providers in bundle or settings.yaml – LLM calls will fail."
-            )
-            return
-
-        for pcfg in provider_configs:
-            module_id = pcfg.get("module")
-            if not module_id:
-                continue
-            source_hint = pcfg.get("source")
-            config = self._expand_env_vars(pcfg.get("config", {}))
-
-            try:
-                provider_mount = await session.loader.load(
-                    module_id,
-                    config,
-                    source_hint=source_hint,
-                )
-                cleanup = await provider_mount(session.coordinator)
-                if cleanup:
-                    session.coordinator.register_cleanup(cleanup)
-                logger.info("Mounted provider '%s' from settings.yaml", module_id)
-            except Exception:  # noqa: BLE001
-                logger.warning(
-                    "Failed to mount provider '%s' from settings.yaml",
-                    module_id,
-                    exc_info=True,
-                )
-
-    # ------------------------------------------------------------------
     # Session lifecycle (via Bridge)
     # ------------------------------------------------------------------
 
@@ -454,7 +343,7 @@ class SessionManager:
         If conversation_id is None, an ID is auto-generated and this handle
         becomes the default (backward compat).
         """
-        from amplifier_distro.bridge import BridgeConfig  # noqa: PLC0415
+        from amplifier_distro.bridge import BridgeConfig
 
         auto_generated = conversation_id is None
         if auto_generated:
@@ -470,15 +359,11 @@ class SessionManager:
             working_dir=cwd,
             run_preflight=False,
             on_stream=handle._on_stream,  # per-handle binding
-            bundle_name=self._get_bundle_name(),
         )
         bridge_handle = await bridge.create_session(config)
         handle._bridge_handle = bridge_handle
         handle.session = bridge_handle._session
         handle.session_id = bridge_handle.session_id
-
-        # Mount providers from settings.yaml if the bundle didn't include any
-        await self._mount_providers_from_settings(handle.session)
 
         if model_override:
             self._switch_model_on_handle(handle, model_override)
@@ -505,7 +390,7 @@ class SessionManager:
         If conversation_id is None, an ID is auto-generated and this handle
         becomes the default (backward compat).
         """
-        from amplifier_distro.bridge import BridgeConfig  # noqa: PLC0415
+        from amplifier_distro.bridge import BridgeConfig
 
         auto_generated = conversation_id is None
         if auto_generated:
@@ -518,15 +403,11 @@ class SessionManager:
             working_dir=working_dir or Path.cwd(),
             run_preflight=False,
             on_stream=handle._on_stream,  # per-handle binding
-            bundle_name=self._get_bundle_name(),
         )
         bridge_handle = await bridge.resume_session(session_id, config)
         handle._bridge_handle = bridge_handle
         handle.session = bridge_handle._session
         handle.session_id = bridge_handle.session_id
-
-        # Mount providers from settings.yaml if the bundle didn't include any
-        await self._mount_providers_from_settings(handle.session)
 
         if model_override:
             self._switch_model_on_handle(handle, model_override)
