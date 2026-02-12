@@ -174,6 +174,7 @@
     }
     if (ev.session_id) {
       statusEl.textContent = "Session: " + ev.session_id.substring(0, 8);
+      document.title = "Amplifier - " + ev.session_id.substring(0, 8);
     }
   }
 
@@ -209,11 +210,23 @@
   function renderMarkdown(text) {
     try {
       var html = marked.parse(text);
-      // Post-process: add copy buttons to code blocks
       var tmp = document.createElement("div");
       tmp.innerHTML = html;
       tmp.querySelectorAll("pre code").forEach(function (block) {
         hljs.highlightElement(block);
+        // Add copy button
+        var pre = block.parentNode;
+        pre.style.position = "relative";
+        var btn = document.createElement("button");
+        btn.className = "code-copy-btn";
+        btn.textContent = "Copy";
+        btn.addEventListener("click", function() {
+          navigator.clipboard.writeText(block.textContent).then(function() {
+            btn.textContent = "Copied!";
+            setTimeout(function() { btn.textContent = "Copy"; }, 2000);
+          });
+        });
+        pre.appendChild(btn);
       });
       return tmp.innerHTML;
     } catch (_) {
@@ -930,7 +943,7 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Global keyboard shortcuts (browser-safe, no Ctrl+B/H/T conflicts)
+  // Global keyboard shortcuts (web-safe, minimal — palette handles the rest)
   // ---------------------------------------------------------------------------
   document.addEventListener("keydown", function (e) {
     // Command palette: Ctrl+K or Cmd+K
@@ -944,72 +957,31 @@
       return;
     }
 
-    // Don't intercept when typing in input (unless it's a global shortcut)
-    var inInput = document.activeElement === inputEl;
-
-    // Ctrl+L or Cmd+L → focus input (like address bar, but for chat)
-    if ((e.ctrlKey || e.metaKey) && e.key === "l") {
+    // Focus input: Ctrl+L
+    if (e.ctrlKey && e.key === "l") {
       e.preventDefault();
       inputEl.focus();
-      inputEl.select();
       return;
     }
 
-    // Ctrl+/ or Cmd+/ → show help
-    if ((e.ctrlKey || e.metaKey) && e.key === "/") {
-      e.preventDefault();
-      sendMessage("/help");
-      return;
-    }
-
-    // Ctrl+Shift+N → new session
-    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "N") {
-      e.preventDefault();
-      sendMessage("/new");
-      return;
-    }
-
-    // Ctrl+Shift+S → session list
-    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "S") {
-      e.preventDefault();
-      sendMessage("/sessions");
-      return;
-    }
-
-    // Ctrl+Shift+K → clear chat
-    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "K") {
-      e.preventDefault();
-      sendMessage("/clear");
-      return;
-    }
-
-    // Ctrl+Shift+G → git status
-    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "G") {
-      e.preventDefault();
-      sendMessage("/git");
-      return;
-    }
-
-    // Ctrl+Shift+T → token info
-    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "T") {
-      e.preventDefault();
-      sendMessage("/tokens");
-      return;
-    }
-
-    // Ctrl+Shift+D → dashboard
-    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "D") {
-      e.preventDefault();
-      sendMessage("/dashboard");
-      return;
-    }
-
-    // / → focus input and start command (when not already in input)
-    if (!inInput && e.key === "/" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    // Slash shortcut: "/" when not in input focuses input with "/"
+    if (e.key === "/" && document.activeElement !== inputEl && document.activeElement !== paletteInput) {
       e.preventDefault();
       inputEl.focus();
       inputEl.value = "/";
       autoResizeInput();
+      return;
+    }
+
+    // Escape: close sidebar or palette if open, otherwise blur input
+    if (e.key === "Escape") {
+      if (!paletteOverlay.classList.contains("hidden")) {
+        closePalette();
+      } else if (!sidebarEl.classList.contains("hidden")) {
+        toggleSidebar();
+      } else if (document.activeElement === inputEl) {
+        inputEl.blur();
+      }
       return;
     }
   });
