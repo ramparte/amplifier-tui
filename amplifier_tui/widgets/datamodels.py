@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from textual.widgets import Static
 
@@ -27,6 +28,13 @@ class TabState:
     last_assistant_widget: Static | None = None
     input_text: str = ""  # unsent input text (preserved across tab switches)
     custom_name: str = ""  # user-assigned tab name (empty = use auto `name`)
+
+    # --- Per-tab streaming widget state (for concurrent sessions) ---
+    stream_widget: Static | None = None  # active streaming RichLog/Static widget
+    stream_container: Any | None = None  # Collapsible container for thinking blocks
+    stream_block_type: str = ""  # current block type being streamed ("text"/"thinking")
+    processing_label: str = ""  # "Thinking", "Reading file", etc.
+    status_activity_label: str = ""  # status bar activity text
 
 
 @dataclass
