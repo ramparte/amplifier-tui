@@ -67,6 +67,19 @@
                 </button>
             </div>
         </footer>
+
+        <!-- Command Palette -->
+        <div id="command-palette" class="palette-overlay hidden">
+          <div class="palette-container">
+            <input id="palette-input" class="palette-input" type="text" placeholder="Type a command..." autocomplete="off" />
+            <div id="palette-results" class="palette-results"></div>
+            <div class="palette-hint">
+              <span><kbd>↑↓</kbd> navigate</span>
+              <span><kbd>Enter</kbd> execute</span>
+              <span><kbd>Esc</kbd> close</span>
+            </div>
+          </div>
+        </div>
     </div>
 
     <script src="/static/app.js"></script>

@@ -32,6 +32,9 @@
   var newSessionBtn = document.getElementById("new-session-btn");
   var sidebarCloseBtn = document.getElementById("sidebar-close");
   var sessionListEl = document.getElementById("session-list");
+  var paletteOverlay = document.getElementById("command-palette");
+  var paletteInput = document.getElementById("palette-input");
+  var paletteResults = document.getElementById("palette-results");
 
   // ---------------------------------------------------------------------------
   // State
@@ -522,10 +525,181 @@
   });
   if (sidebarCloseBtn) sidebarCloseBtn.addEventListener("click", toggleSidebar);
 
+  // ── Command Palette ──
+  var commandPalette = [
+    { name: "New Session",     cmd: "/new",        keys: "",              cat: "session",  desc: "Start a new chat session" },
+    { name: "Clear Chat",      cmd: "/clear",      keys: "",              cat: "session",  desc: "Clear the chat display" },
+    { name: "Sessions",        cmd: "/sessions",   keys: "",              cat: "session",  desc: "List all sessions" },
+    { name: "Resume Session",  cmd: "/resume",     keys: "",              cat: "session",  desc: "Resume a previous session" },
+    { name: "Git Status",      cmd: "/git",        keys: "",              cat: "git",      desc: "Show git status" },
+    { name: "Git Diff",        cmd: "/diff",       keys: "",              cat: "git",      desc: "Show git diff" },
+    { name: "Token Usage",     cmd: "/tokens",     keys: "",              cat: "info",     desc: "Show token usage and cost" },
+    { name: "Statistics",      cmd: "/stats",      keys: "",              cat: "info",     desc: "Show session statistics" },
+    { name: "Model Info",      cmd: "/model",      keys: "",              cat: "info",     desc: "Show or switch LLM model" },
+    { name: "Dashboard",       cmd: "/dashboard",  keys: "",              cat: "info",     desc: "Show session dashboard" },
+    { name: "Context",         cmd: "/context",    keys: "",              cat: "info",     desc: "Show context information" },
+    { name: "Agents",          cmd: "/agents",     keys: "",              cat: "ai",       desc: "List active agents" },
+    { name: "Tools",           cmd: "/tools",      keys: "",              cat: "ai",       desc: "List available tools" },
+    { name: "Recipe",          cmd: "/recipe",     keys: "",              cat: "ai",       desc: "Manage recipes" },
+    { name: "System Prompt",   cmd: "/system",     keys: "",              cat: "config",   desc: "View or set system prompt" },
+    { name: "Mode",            cmd: "/mode",       keys: "",              cat: "config",   desc: "Switch operational mode" },
+    { name: "Theme",           cmd: "/theme",      keys: "",              cat: "config",   desc: "Change color theme" },
+    { name: "Help",            cmd: "/help",       keys: "",              cat: "info",     desc: "Show available commands" },
+    { name: "Toggle Sidebar",  cmd: null,          keys: "",              cat: "ui",       desc: "Show/hide session sidebar", action: "toggle-sidebar" },
+  ];
+
+  var paletteSelectedIdx = -1;
+
+  function openPalette() {
+    paletteOverlay.classList.remove("hidden");
+    paletteInput.value = "";
+    paletteSelectedIdx = -1;
+    renderPaletteResults("");
+    setTimeout(function() { paletteInput.focus(); }, 10);
+  }
+
+  function closePalette() {
+    paletteOverlay.classList.add("hidden");
+    paletteInput.value = "";
+    inputEl.focus();
+  }
+
+  function renderPaletteResults(query) {
+    var q = query.toLowerCase().trim();
+    var filtered = commandPalette.filter(function(c) {
+      if (!q) return true;
+      return c.name.toLowerCase().indexOf(q) !== -1
+          || (c.cmd && c.cmd.toLowerCase().indexOf(q) !== -1)
+          || c.desc.toLowerCase().indexOf(q) !== -1
+          || c.cat.toLowerCase().indexOf(q) !== -1;
+    });
+
+    paletteResults.innerHTML = "";
+    if (filtered.length === 0) {
+      paletteResults.innerHTML = '<div style="padding:12px 16px;color:var(--text-muted);font-size:13px;">No matching commands</div>';
+      return;
+    }
+
+    // Group by category
+    var groups = {};
+    filtered.forEach(function(c) {
+      if (!groups[c.cat]) groups[c.cat] = [];
+      groups[c.cat].push(c);
+    });
+
+    var idx = 0;
+    Object.keys(groups).forEach(function(cat) {
+      var catLabel = document.createElement("div");
+      catLabel.className = "palette-category";
+      catLabel.textContent = cat;
+      paletteResults.appendChild(catLabel);
+
+      groups[cat].forEach(function(c) {
+        var item = document.createElement("div");
+        item.className = "palette-item" + (idx === paletteSelectedIdx ? " selected" : "");
+        item.setAttribute("data-idx", idx);
+        item.innerHTML = '<div class="palette-item-left">'
+          + '<div class="palette-item-name">' + escapeHtml(c.name) + '</div>'
+          + '<div class="palette-item-desc">' + escapeHtml(c.desc) + '</div>'
+          + '</div>'
+          + '<div class="palette-item-right">'
+          + (c.cmd ? '<span class="palette-item-cmd">' + escapeHtml(c.cmd) + '</span>' : '')
+          + (c.keys ? '<span class="palette-item-keys">' + escapeHtml(c.keys) + '</span>' : '')
+          + '</div>';
+        item.addEventListener("click", function() { executePaletteItem(c); });
+        paletteResults.appendChild(item);
+        idx++;
+      });
+    });
+
+    // Auto-select first if nothing selected
+    if (paletteSelectedIdx < 0 && filtered.length > 0) {
+      paletteSelectedIdx = 0;
+      updatePaletteSelection();
+    }
+  }
+
+  function updatePaletteSelection() {
+    var items = paletteResults.querySelectorAll(".palette-item");
+    items.forEach(function(el, i) {
+      el.classList.toggle("selected", i === paletteSelectedIdx);
+    });
+    // Scroll selected into view
+    if (items[paletteSelectedIdx]) {
+      items[paletteSelectedIdx].scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  function executePaletteItem(c) {
+    closePalette();
+    if (c.action === "toggle-sidebar") {
+      toggleSidebar();
+    } else if (c.cmd) {
+      sendMessage(c.cmd);
+    }
+  }
+
+  function getFilteredPaletteItems() {
+    var q = (paletteInput.value || "").toLowerCase().trim();
+    return commandPalette.filter(function(c) {
+      if (!q) return true;
+      return c.name.toLowerCase().indexOf(q) !== -1
+          || (c.cmd && c.cmd.toLowerCase().indexOf(q) !== -1)
+          || c.desc.toLowerCase().indexOf(q) !== -1
+          || c.cat.toLowerCase().indexOf(q) !== -1;
+    });
+  }
+
+  if (paletteInput) {
+    paletteInput.addEventListener("input", function() {
+      paletteSelectedIdx = 0;
+      renderPaletteResults(paletteInput.value);
+    });
+
+    paletteInput.addEventListener("keydown", function(e) {
+      var items = getFilteredPaletteItems();
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        paletteSelectedIdx = Math.min(paletteSelectedIdx + 1, items.length - 1);
+        updatePaletteSelection();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        paletteSelectedIdx = Math.max(paletteSelectedIdx - 1, 0);
+        updatePaletteSelection();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        if (items[paletteSelectedIdx]) {
+          executePaletteItem(items[paletteSelectedIdx]);
+        }
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        closePalette();
+      }
+    });
+  }
+
+  // Close palette on backdrop click
+  if (paletteOverlay) {
+    paletteOverlay.addEventListener("click", function(e) {
+      if (e.target === paletteOverlay) closePalette();
+    });
+  }
+
   // ---------------------------------------------------------------------------
   // Global keyboard shortcuts (browser-safe, no Ctrl+B/H/T conflicts)
   // ---------------------------------------------------------------------------
   document.addEventListener("keydown", function (e) {
+    // Command palette: Ctrl+K or Cmd+K
+    if ((e.ctrlKey || e.metaKey) && e.key === "k") {
+      e.preventDefault();
+      if (paletteOverlay.classList.contains("hidden")) {
+        openPalette();
+      } else {
+        closePalette();
+      }
+      return;
+    }
+
     // Don't intercept when typing in input (unless it's a global shortcut)
     var inInput = document.activeElement === inputEl;
 
