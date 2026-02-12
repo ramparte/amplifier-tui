@@ -663,3 +663,189 @@ html, body {
   letter-spacing: 0.05em;
   padding: 8px 16px 4px;
 }
+
+/* ---------------------------------------------------------------------------
+   Structured cards (Stage 4 – /stats, /tokens, /agents, /git, /dashboard)
+   --------------------------------------------------------------------------- */
+.structured-card {
+  padding: 4px 0 0;
+}
+
+/* Stat grid (shared by stats, dashboard) */
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.card-stat {
+  text-align: center;
+  padding: 8px 4px;
+  background: var(--bg-primary);
+  border-radius: var(--radius-sm);
+}
+.card-stat-value {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-accent);
+  line-height: 1.2;
+}
+.card-stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-top: 2px;
+}
+
+/* Detail rows (key: value lines beneath the grid) */
+.card-detail-row {
+  font-size: 13px;
+  padding: 3px 0;
+  color: var(--text-secondary);
+}
+.card-detail-label {
+  color: var(--text-muted);
+}
+.card-detail-value {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.card-empty {
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 4px 0;
+}
+
+/* ---- Token card ---- */
+.token-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 0;
+}
+.token-row-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  min-width: 54px;
+  text-align: right;
+}
+.token-bar {
+  flex: 1;
+  height: 8px;
+  background: var(--bg-primary);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.token-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+.token-bar-input  { background: var(--text-accent); }
+.token-bar-output { background: var(--text-success); }
+.token-bar-context {
+  background: linear-gradient(90deg, var(--text-accent), var(--text-warning));
+}
+.token-row-value {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  min-width: 48px;
+  text-align: right;
+}
+
+/* ---- Git card ---- */
+.git-branch {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-accent);
+  margin-bottom: 6px;
+}
+.git-clean {
+  color: var(--text-success);
+  font-size: 13px;
+  padding: 4px 0;
+}
+.git-changes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+.git-badge {
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 10px;
+}
+.git-staged {
+  color: var(--text-success);
+  background: rgba(102, 187, 106, 0.12);
+}
+.git-modified {
+  color: var(--text-warning);
+  background: rgba(255, 167, 38, 0.12);
+}
+.git-untracked {
+  color: var(--text-muted);
+  background: rgba(107, 114, 128, 0.12);
+}
+.git-sync {
+  display: flex;
+  gap: 12px;
+  margin-top: 6px;
+  font-size: 13px;
+}
+.git-ahead  { color: var(--text-accent); }
+.git-behind { color: var(--text-error); }
+.git-last-commit {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+/* ---- Agent card ---- */
+.agent-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.agent-item:last-of-type {
+  border-bottom: none;
+}
+.agent-status-icon { font-size: 14px; }
+.agent-item.running .agent-status-icon { color: var(--text-warning); }
+.agent-item.done    .agent-status-icon { color: var(--text-success); }
+.agent-item.failed  .agent-status-icon { color: var(--text-error); }
+.agent-name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.agent-elapsed {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+.agent-instruction {
+  width: 100%;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-summary {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
