@@ -43,6 +43,7 @@ from amplifier_tui.core.persistence import (
     TemplateStore,
 )
 from amplifier_tui.core.preferences import load_preferences
+from amplifier_tui.core.conversation import ConversationState
 from amplifier_tui.core.session_manager import SessionManager
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,7 @@ class WebApp(
         self._ws = websocket
         self._loop: asyncio.AbstractEventLoop | None = None
         self.session_manager = SessionManager()
+        self._conversation = ConversationState()
 
         # ==============================================================
         # Category 1: Data Attributes
@@ -218,6 +220,10 @@ class WebApp(
         self._file_watcher = _WebFileWatcher()
         self._watched_files = self._file_watcher.watched_files
 
+    def _all_conversations(self) -> list:
+        """Return all conversations (web has exactly one)."""
+        return [self._conversation]
+
     # ------------------------------------------------------------------
     # Thread-safe WebSocket send
     # ------------------------------------------------------------------
@@ -239,37 +245,37 @@ class WebApp(
     # Abstract display methods (SharedAppBase)
     # ------------------------------------------------------------------
 
-    def _add_system_message(self, text: str, **kwargs: Any) -> None:  # type: ignore[no-untyped-def]
+    def _add_system_message(self, text: str, *, conversation_id: str = "", **kwargs: Any) -> None:  # type: ignore[no-untyped-def]
         self._send_event({"type": "system_message", "text": text})
 
-    def _add_user_message(self, text: str, **kwargs: Any) -> None:  # type: ignore[no-untyped-def]
+    def _add_user_message(self, text: str, *, conversation_id: str = "", **kwargs: Any) -> None:  # type: ignore[no-untyped-def]
         self._send_event({"type": "user_message", "text": text})
 
-    def _add_assistant_message(self, text: str, **kwargs: Any) -> None:  # type: ignore[no-untyped-def]
+    def _add_assistant_message(self, text: str, *, conversation_id: str = "", **kwargs: Any) -> None:  # type: ignore[no-untyped-def]
         self._send_event({"type": "assistant_message", "text": text})
 
-    def _show_error(self, text: str) -> None:
+    def _show_error(self, text: str, *, conversation_id: str = "") -> None:
         self._send_event({"type": "error", "text": text})
 
-    def _update_status(self, text: str) -> None:
+    def _update_status(self, text: str, *, conversation_id: str = "") -> None:
         self._send_event({"type": "status", "text": text})
 
-    def _start_processing(self, label: str = "Thinking") -> None:
-        self.is_processing = True
+    def _start_processing(self, label: str = "Thinking", *, conversation_id: str = "") -> None:
+        self._conversation.is_processing = True
         self._send_event({"type": "processing_start", "label": label})
 
-    def _finish_processing(self) -> None:
-        self.is_processing = False
+    def _finish_processing(self, *, conversation_id: str = "") -> None:
+        self._conversation.is_processing = False
         self._send_event({"type": "processing_end"})
 
     # ------------------------------------------------------------------
     # Abstract streaming methods (called from BACKGROUND THREAD)
     # ------------------------------------------------------------------
 
-    def _on_stream_block_start(self, block_type: str) -> None:
+    def _on_stream_block_start(self, conversation_id: str, block_type: str) -> None:
         self._send_event({"type": "stream_start", "block_type": block_type})
 
-    def _on_stream_block_delta(self, block_type: str, accumulated_text: str) -> None:
+    def _on_stream_block_delta(self, conversation_id: str, block_type: str, accumulated_text: str) -> None:
         self._send_event(
             {
                 "type": "stream_delta",
@@ -279,7 +285,7 @@ class WebApp(
         )
 
     def _on_stream_block_end(
-        self, block_type: str, final_text: str, had_block_start: bool
+        self, conversation_id: str, block_type: str, final_text: str, had_block_start: bool
     ) -> None:
         self._send_event(
             {
@@ -289,7 +295,7 @@ class WebApp(
             }
         )
 
-    def _on_stream_tool_start(self, name: str, tool_input: dict) -> None:  # type: ignore[type-arg]
+    def _on_stream_tool_start(self, conversation_id: str, name: str, tool_input: dict) -> None:  # type: ignore[type-arg]
         self._send_event(
             {
                 "type": "tool_start",
@@ -298,7 +304,7 @@ class WebApp(
             }
         )
 
-    def _on_stream_tool_end(self, name: str, tool_input: dict, result: str) -> None:  # type: ignore[type-arg]
+    def _on_stream_tool_end(self, conversation_id: str, name: str, tool_input: dict, result: str) -> None:  # type: ignore[type-arg]
         self._send_event(
             {
                 "type": "tool_end",
@@ -308,7 +314,7 @@ class WebApp(
             }
         )
 
-    def _on_stream_usage_update(self) -> None:
+    def _on_stream_usage_update(self, conversation_id: str) -> None:
         sm = self.session_manager
         if sm:
             self._send_event(
@@ -1128,7 +1134,7 @@ class WebApp(
         """Switch to an existing session by ID."""
         try:
             if self.session_manager and self.session_manager.session:
-                await self.session_manager.end_session()
+                await self.session_manager.end_session(conversation_id=self._conversation.conversation_id)
             await self.session_manager.resume_session(session_id)
             self._amplifier_ready = True
             self._send_event({"type": "clear"})
@@ -1160,13 +1166,15 @@ class WebApp(
         # Chat message
         self._add_user_message(text)
         self._start_processing()
-        self._wire_streaming_callbacks()
+        self._wire_streaming_callbacks(self._conversation.conversation_id, self._conversation)
         self._tool_count_this_turn = 0
         self._got_stream_content = False
 
         try:
             if not self.session_manager.session:
-                await self.session_manager.start_new_session()
+                await self.session_manager.start_new_session(
+                    conversation_id=self._conversation.conversation_id,
+                )
                 self._amplifier_ready = True
                 self._send_event(
                     {
@@ -1196,6 +1204,6 @@ class WebApp(
         """Clean up when WebSocket disconnects."""
         if self.session_manager and self.session_manager.session:
             try:
-                await self.session_manager.end_session()
+                await self.session_manager.end_session(conversation_id=self._conversation.conversation_id)
             except Exception:
                 logger.debug("Error ending session on disconnect", exc_info=True)

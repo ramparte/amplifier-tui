@@ -641,6 +641,48 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Slash-command hints popup
+  // ---------------------------------------------------------------------------
+  var SLASH_COMMANDS = [
+    { cmd: '/help',      desc: 'Show help information' },
+    { cmd: '/stats',     desc: 'Session statistics' },
+    { cmd: '/tokens',    desc: 'Token usage details' },
+    { cmd: '/agents',    desc: 'Available agents' },
+    { cmd: '/git',       desc: 'Git repository status' },
+    { cmd: '/dashboard', desc: 'Session dashboard' },
+    { cmd: '/clear',     desc: 'Clear conversation' },
+    { cmd: '/sessions',  desc: 'List sessions' },
+  ];
+
+  function showSlashHints() {
+    var hints = document.getElementById('slash-hints');
+    if (!hints) return;
+    var list = hints.querySelector('.slash-hints-list');
+    list.innerHTML = SLASH_COMMANDS.map(function(c) {
+      return '<div class="slash-hint-item" role="option" data-cmd="' + c.cmd + '">'
+        + '<span class="hint-cmd">' + c.cmd + '</span>'
+        + '<span class="hint-desc">' + c.desc + '</span>'
+        + '</div>';
+    }).join('');
+    // Click handler for each hint
+    list.querySelectorAll('.slash-hint-item').forEach(function(item) {
+      item.addEventListener('click', function() {
+        if (inputEl) {
+          inputEl.value = item.dataset.cmd;
+          inputEl.focus();
+        }
+        hideSlashHints();
+      });
+    });
+    hints.hidden = false;
+  }
+
+  function hideSlashHints() {
+    var hints = document.getElementById('slash-hints');
+    if (hints) hints.hidden = true;
+  }
+
+  // ---------------------------------------------------------------------------
   // Slash-command completion
   // ---------------------------------------------------------------------------
   var knownCommands = [
@@ -668,6 +710,7 @@
     // Enter → send (Shift+Enter → newline)
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      hideSlashHints();
       var text = inputEl.value;
       if (text.trim()) {
         pushHistory(text);
@@ -726,6 +769,7 @@
   });
 
   sendBtn.addEventListener("click", function () {
+    hideSlashHints();
     var text = inputEl.value;
     if (text.trim()) {
       pushHistory(text);
@@ -760,6 +804,8 @@
     sessions.forEach(function(s) {
       var item = document.createElement("div");
       item.className = "session-item" + (s.active ? " active" : "");
+      item.setAttribute("role", "option");
+      item.setAttribute("aria-label", s.title || s.id || "Untitled session");
       item.innerHTML = '<div class="session-item-title">' + escapeHtml(s.title || s.id || "Untitled") + '</div>'
                      + '<div class="session-item-date">' + escapeHtml(s.date || "") + '</div>';
       item.addEventListener("click", function() {
@@ -855,6 +901,8 @@
         var item = document.createElement("div");
         item.className = "palette-item" + (idx === paletteSelectedIdx ? " selected" : "");
         item.setAttribute("data-idx", idx);
+        item.setAttribute("role", "option");
+        item.setAttribute("aria-label", c.name + (c.cmd ? " " + c.cmd : ""));
         item.innerHTML = '<div class="palette-item-left">'
           + '<div class="palette-item-name">' + escapeHtml(c.name) + '</div>'
           + '<div class="palette-item-desc">' + escapeHtml(c.desc) + '</div>'
@@ -970,12 +1018,16 @@
       inputEl.focus();
       inputEl.value = "/";
       autoResizeInput();
+      showSlashHints();
       return;
     }
 
-    // Escape: close sidebar or palette if open, otherwise blur input
+    // Escape: close slash hints, palette, sidebar, or blur input
     if (e.key === "Escape") {
-      if (!paletteOverlay.classList.contains("hidden")) {
+      var slashHintsEl = document.getElementById('slash-hints');
+      if (slashHintsEl && !slashHintsEl.hidden) {
+        hideSlashHints();
+      } else if (!paletteOverlay.classList.contains("hidden")) {
         closePalette();
       } else if (!sidebarEl.classList.contains("hidden")) {
         toggleSidebar();
@@ -991,7 +1043,13 @@
     inputEl.style.height = "auto";
     inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + "px";
   }
-  inputEl.addEventListener("input", autoResizeInput);
+  inputEl.addEventListener("input", function() {
+    autoResizeInput();
+    // Dismiss slash hints when input no longer starts with "/"
+    if (!inputEl.value.startsWith("/")) {
+      hideSlashHints();
+    }
+  });
 
   // ---------------------------------------------------------------------------
   // Boot

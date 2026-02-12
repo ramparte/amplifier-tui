@@ -33,12 +33,12 @@
 
         <!-- Main content area -->
         <main id="main">
-            <aside id="sidebar" class="sidebar hidden">
+            <aside id="sidebar" class="sidebar hidden" role="complementary" aria-label="Session sidebar">
                 <div class="sidebar-header">
                     <h3>Sessions</h3>
                     <button id="new-session-btn" class="sidebar-action">+ New</button>
                 </div>
-                <div id="session-list" class="sidebar-list"></div>
+                <div id="session-list" class="sidebar-list" role="listbox" aria-label="Session list"></div>
                 <div class="sidebar-footer">
                     <button id="sidebar-close" class="sidebar-action">Close</button>
                 </div>
@@ -53,6 +53,10 @@
 
         <!-- Input area -->
         <footer id="input-area">
+            <div id="slash-hints" class="slash-hints" hidden>
+              <div class="slash-hints-title">Commands</div>
+              <div class="slash-hints-list"></div>
+            </div>
             <div class="input-wrapper">
                 <textarea
                     id="chat-input"
@@ -70,10 +74,10 @@
         </footer>
 
         <!-- Command Palette -->
-        <div id="command-palette" class="palette-overlay hidden">
+        <div id="command-palette" class="palette-overlay hidden" role="dialog" aria-label="Command palette">
           <div class="palette-container">
             <input id="palette-input" class="palette-input" type="text" placeholder="Type a command..." autocomplete="off" />
-            <div id="palette-results" class="palette-results"></div>
+            <div id="palette-results" class="palette-results" role="listbox" aria-label="Command results"></div>
             <div class="palette-hint">
               <span><kbd>↑↓</kbd> navigate</span>
               <span><kbd>Enter</kbd> execute</span>
