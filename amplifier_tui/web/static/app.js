@@ -168,10 +168,10 @@
 
     var body = document.createElement("div");
     body.className = "message-body";
-    if (role === "assistant") {
-      body.innerHTML = renderMarkdown(text);
+    if (role === "user") {
+      body.textContent = text;  // User messages stay plain text
     } else {
-      body.textContent = text;
+      body.innerHTML = renderMarkdown(text);  // Everything else renders markdown
     }
     el.appendChild(body);
 
