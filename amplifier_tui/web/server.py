@@ -42,29 +42,17 @@ def create_app(resume_session_id: str | None = None) -> FastAPI:
     @app.get("/api/sessions")
     async def list_sessions(limit: int = 50) -> dict:
         """List available sessions, normalized for the web frontend."""
-        from amplifier_tui.core.persistence.tags import TagStore
-        from amplifier_tui.core.persistence.pinned_sessions import PinnedSessionStore
-
         raw = SessionManager.list_all_sessions(limit=limit)
-        amp_home = Path.home() / ".amplifier"
-        tag_store = TagStore(amp_home / "tui-session-tags.json")
-        pinned_store = PinnedSessionStore(amp_home / "tui-pinned-sessions.json")
-        all_tags = tag_store.load()
-        pinned_ids = pinned_store.load()
-
         sessions = []
         for s in raw:
-            sid = s.get("session_id", "")
             sessions.append(
                 {
-                    "id": sid,
-                    "title": s.get("name") or s.get("description") or sid[:12],
+                    "id": s.get("session_id", ""),
+                    "title": s.get("name")
+                    or s.get("description")
+                    or s.get("session_id", "")[:12],
                     "date": s.get("date_str", ""),
                     "active": False,
-                    "project": s.get("project", ""),
-                    "project_path": s.get("project_path", ""),
-                    "tags": all_tags.get(sid, []),
-                    "pinned": sid in pinned_ids,
                 }
             )
         return {"sessions": sessions}

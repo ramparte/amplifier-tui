@@ -32,9 +32,6 @@
   var newSessionBtn = document.getElementById("new-session-btn");
   var sidebarCloseBtn = document.getElementById("sidebar-close");
   var sessionListEl = document.getElementById("session-list");
-  var paletteOverlay = document.getElementById("command-palette");
-  var paletteInput = document.getElementById("palette-input");
-  var paletteResults = document.getElementById("palette-results");
 
   // ---------------------------------------------------------------------------
   // State
@@ -145,24 +142,6 @@
       case "session_list":
         renderSessionList(ev.sessions);
         break;
-      case "stats_panel":
-        renderStatsPanel(ev);
-        break;
-      case "token_usage":
-        renderTokenUsage(ev);
-        break;
-      case "agent_tree":
-        renderAgentTree(ev);
-        break;
-      case "git_status":
-        renderGitStatus(ev);
-        break;
-      case "dashboard":
-        renderDashboard(ev);
-        break;
-      case "project_summary":
-        renderProjectSummary(ev);
-        break;
       default:
         console.log("Unknown event:", ev);
     }
@@ -177,7 +156,6 @@
     }
     if (ev.session_id) {
       statusEl.textContent = "Session: " + ev.session_id.substring(0, 8);
-      document.title = "Amplifier - " + ev.session_id.substring(0, 8);
     }
   }
 
@@ -213,23 +191,11 @@
   function renderMarkdown(text) {
     try {
       var html = marked.parse(text);
+      // Post-process: add copy buttons to code blocks
       var tmp = document.createElement("div");
       tmp.innerHTML = html;
       tmp.querySelectorAll("pre code").forEach(function (block) {
         hljs.highlightElement(block);
-        // Add copy button
-        var pre = block.parentNode;
-        pre.style.position = "relative";
-        var btn = document.createElement("button");
-        btn.className = "code-copy-btn";
-        btn.textContent = "Copy";
-        btn.addEventListener("click", function() {
-          navigator.clipboard.writeText(block.textContent).then(function() {
-            btn.textContent = "Copied!";
-            setTimeout(function() { btn.textContent = "Copy"; }, 2000);
-          });
-        });
-        pre.appendChild(btn);
       });
       return tmp.innerHTML;
     } catch (_) {
@@ -376,276 +342,6 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Structured card renderers
-  // ---------------------------------------------------------------------------
-
-  function renderStatsPanel(ev) {
-    var el = document.createElement("div");
-    el.className = "message message-system";
-    var label = document.createElement("div");
-    label.className = "message-label";
-    label.textContent = "Session Statistics";
-    el.appendChild(label);
-
-    var body = document.createElement("div");
-    body.className = "message-body structured-card stats-card";
-    var html = '<div class="card-grid">'
-      + '<div class="card-stat"><div class="card-stat-value">' + escapeHtml(ev.duration || "\u2014") + '</div><div class="card-stat-label">Duration</div></div>'
-      + '<div class="card-stat"><div class="card-stat-value">' + (ev.messages || 0) + '</div><div class="card-stat-label">Messages</div></div>'
-      + '<div class="card-stat"><div class="card-stat-value">' + formatTokens(ev.total_tokens || 0) + '</div><div class="card-stat-label">Tokens</div></div>'
-      + '<div class="card-stat"><div class="card-stat-value">' + (ev.tool_calls || 0) + '</div><div class="card-stat-label">Tool Calls</div></div>'
-      + '<div class="card-stat"><div class="card-stat-value">' + escapeHtml(ev.model || "\u2014") + '</div><div class="card-stat-label">Model</div></div>'
-      + '<div class="card-stat"><div class="card-stat-value">' + escapeHtml(ev.cost || "\u2014") + '</div><div class="card-stat-label">Est. Cost</div></div>'
-      + '<div class="card-stat"><div class="card-stat-value">' + escapeHtml(ev.avg_response_time || "\u2014") + '</div><div class="card-stat-label">Avg Response</div></div>'
-      + '</div>';
-
-    // Token breakdown
-    var inp = ev.input_tokens || 0;
-    var out = ev.output_tokens || 0;
-    html += '<div class="card-detail-row"><span class="card-detail-label">Tokens:</span> '
-      + '<span class="card-detail-value">' + formatTokens(inp) + ' in / ' + formatTokens(out) + ' out</span></div>';
-
-    // Top tools
-    if (ev.top_tools && ev.top_tools.length > 0) {
-      html += '<div class="card-detail-row"><span class="card-detail-label">Top Tools:</span> '
-        + '<span class="card-detail-value">'
-        + ev.top_tools.map(function (t) { return escapeHtml(t.name) + " (" + t.count + ")"; }).join(", ")
-        + '</span></div>';
-    }
-
-    body.innerHTML = html;
-    el.appendChild(body);
-    messagesEl.appendChild(el);
-    scrollToBottom();
-  }
-
-  function renderTokenUsage(ev) {
-    var el = document.createElement("div");
-    el.className = "message message-system";
-    var label = document.createElement("div");
-    label.className = "message-label";
-    label.textContent = "Token Usage";
-    el.appendChild(label);
-
-    var body = document.createElement("div");
-    body.className = "message-body structured-card token-card";
-    var inp = ev.input_tokens || 0;
-    var out = ev.output_tokens || 0;
-    var total = ev.total_tokens || 0;
-    var window = ev.context_window || 200000;
-    var pct = ev.usage_pct || 0;
-    var maxBar = inp + out || 1;
-
-    var html = '<div class="card-detail-row" style="margin-bottom:4px">'
-      + '<span class="card-detail-label">Model:</span> '
-      + '<span class="card-detail-value" style="color:var(--text-accent)">' + escapeHtml(ev.model || "\u2014") + '</span></div>';
-
-    // Input bar
-    html += '<div class="token-row"><span class="token-row-label">Input</span>'
-      + '<div class="token-bar"><div class="token-bar-fill token-bar-input" style="width:' + Math.round(inp / maxBar * 100) + '%"></div></div>'
-      + '<span class="token-row-value">' + formatTokens(inp) + '</span></div>';
-
-    // Output bar
-    html += '<div class="token-row"><span class="token-row-label">Output</span>'
-      + '<div class="token-bar"><div class="token-bar-fill token-bar-output" style="width:' + Math.round(out / maxBar * 100) + '%"></div></div>'
-      + '<span class="token-row-value">' + formatTokens(out) + '</span></div>';
-
-    // Context usage bar
-    html += '<div class="token-row" style="margin-top:8px"><span class="token-row-label">Context</span>'
-      + '<div class="token-bar"><div class="token-bar-fill token-bar-context" style="width:' + Math.min(pct, 100) + '%"></div></div>'
-      + '<span class="token-row-value">' + pct + '%</span></div>';
-
-    // Summary line
-    html += '<div class="card-detail-row" style="margin-top:8px">'
-      + '<span class="card-detail-label">Total:</span> '
-      + '<span class="card-detail-value">' + formatTokens(total) + ' / ' + formatTokens(window) + '</span>'
-      + ' &nbsp; <span class="card-detail-label">Cost:</span> '
-      + '<span class="card-detail-value">' + escapeHtml(ev.cost || "\u2014") + '</span></div>';
-
-    body.innerHTML = html;
-    el.appendChild(body);
-    messagesEl.appendChild(el);
-    scrollToBottom();
-  }
-
-  function renderAgentTree(ev) {
-    var el = document.createElement("div");
-    el.className = "message message-system";
-    var label = document.createElement("div");
-    label.className = "message-label";
-    label.textContent = "Agent Delegations";
-    el.appendChild(label);
-
-    var body = document.createElement("div");
-    body.className = "message-body structured-card agent-card";
-    var agents = ev.agents || [];
-
-    if (agents.length === 0) {
-      body.innerHTML = '<div class="card-empty">No agent delegations in this session.</div>';
-    } else {
-      var html = '';
-      for (var i = 0; i < agents.length; i++) {
-        var a = agents[i];
-        var statusClass = a.status === "running" ? "running"
-                        : a.status === "completed" ? "done"
-                        : a.status === "failed" ? "failed" : "";
-        var statusIcon = a.status === "running" ? "\u27f3"
-                       : a.status === "completed" ? "\u2713"
-                       : a.status === "failed" ? "\u2717" : "?";
-        html += '<div class="agent-item ' + statusClass + '">'
-          + '<span class="agent-status-icon">' + statusIcon + '</span> '
-          + '<span class="agent-name">' + escapeHtml(a.name) + '</span>'
-          + '<span class="agent-elapsed">' + escapeHtml(a.elapsed || "") + '</span>'
-          + '<div class="agent-instruction">' + escapeHtml(a.instruction || "") + '</div>'
-          + '</div>';
-      }
-      // Summary
-      var parts = [];
-      if (ev.total) parts.push(ev.total + " total");
-      if (ev.running) parts.push(ev.running + " running");
-      if (ev.completed) parts.push(ev.completed + " completed");
-      if (ev.failed) parts.push(ev.failed + " failed");
-      if (parts.length) {
-        html += '<div class="agent-summary">' + parts.join(" \u00b7 ") + '</div>';
-      }
-      body.innerHTML = html;
-    }
-
-    el.appendChild(body);
-    messagesEl.appendChild(el);
-    scrollToBottom();
-  }
-
-  function renderGitStatus(ev) {
-    var el = document.createElement("div");
-    el.className = "message message-system";
-    var label = document.createElement("div");
-    label.className = "message-label";
-    label.textContent = "Git Status";
-    el.appendChild(label);
-
-    var body = document.createElement("div");
-    body.className = "message-body structured-card git-card";
-
-    var html = '<div class="git-branch">\ud83c\udf3f ' + escapeHtml(ev.branch || "unknown") + '</div>';
-
-    if (ev.clean) {
-      html += '<div class="git-clean">\u2713 Clean working tree</div>';
-    } else {
-      html += '<div class="git-changes">';
-      if (ev.staged) {
-        html += '<span class="git-badge git-staged">' + ev.staged + ' staged</span>';
-      }
-      if (ev.modified) {
-        html += '<span class="git-badge git-modified">' + ev.modified + ' modified</span>';
-      }
-      if (ev.untracked) {
-        html += '<span class="git-badge git-untracked">' + ev.untracked + ' untracked</span>';
-      }
-      html += '</div>';
-    }
-
-    if (ev.ahead || ev.behind) {
-      html += '<div class="git-sync">';
-      if (ev.ahead) html += '<span class="git-ahead">\u2191 ' + ev.ahead + ' ahead</span>';
-      if (ev.behind) html += '<span class="git-behind">\u2193 ' + ev.behind + ' behind</span>';
-      html += '</div>';
-    }
-
-    if (ev.last_commit) {
-      html += '<div class="git-last-commit">Last: ' + escapeHtml(ev.last_commit) + '</div>';
-    }
-
-    body.innerHTML = html;
-    el.appendChild(body);
-    messagesEl.appendChild(el);
-    scrollToBottom();
-  }
-
-  function renderDashboard(ev) {
-    var el = document.createElement("div");
-    el.className = "message message-system";
-    var label = document.createElement("div");
-    label.className = "message-label";
-    label.textContent = "Dashboard";
-    el.appendChild(label);
-
-    var body = document.createElement("div");
-    body.className = "message-body structured-card dashboard-card";
-
-    var html = '<div class="card-grid">'
-      + '<div class="card-stat"><div class="card-stat-value">' + (ev.total_sessions || 0) + '</div><div class="card-stat-label">Sessions</div></div>'
-      + '<div class="card-stat"><div class="card-stat-value">' + formatTokens(ev.total_tokens || 0) + '</div><div class="card-stat-label">Total Tokens</div></div>'
-      + '<div class="card-stat"><div class="card-stat-value">' + escapeHtml(ev.total_duration || "\u2014") + '</div><div class="card-stat-label">Total Time</div></div>'
-      + '<div class="card-stat"><div class="card-stat-value">' + escapeHtml(ev.avg_duration || "\u2014") + '</div><div class="card-stat-label">Avg Session</div></div>'
-      + '<div class="card-stat"><div class="card-stat-value">' + (ev.streak_days || 0) + '</div><div class="card-stat-label">Current Streak</div></div>'
-      + '<div class="card-stat"><div class="card-stat-value">' + (ev.longest_streak || 0) + '</div><div class="card-stat-label">Longest Streak</div></div>'
-      + '</div>';
-
-    // Top models
-    if (ev.top_models && ev.top_models.length > 0) {
-      html += '<div class="card-detail-row"><span class="card-detail-label">Models:</span> '
-        + '<span class="card-detail-value">'
-        + ev.top_models.map(function (m) { return escapeHtml(m.name) + " (" + m.count + ")"; }).join(", ")
-        + '</span></div>';
-    }
-
-    // Top projects
-    if (ev.top_projects && ev.top_projects.length > 0) {
-      html += '<div class="card-detail-row"><span class="card-detail-label">Projects:</span> '
-        + '<span class="card-detail-value">'
-        + ev.top_projects.map(function (p) { return escapeHtml(p.name) + " (" + p.count + ")"; }).join(", ")
-        + '</span></div>';
-    }
-
-    body.innerHTML = html;
-    el.appendChild(body);
-    messagesEl.appendChild(el);
-    scrollToBottom();
-  }
-
-  function renderProjectSummary(ev) {
-    var projects = ev.projects || [];
-    if (projects.length === 0) {
-      appendMessage("system", "No projects found.");
-      return;
-    }
-    var html = '<div class="project-summary-grid">';
-    projects.forEach(function(p) {
-      html += '<div class="project-card">';
-      html += '<div class="project-card-header">';
-      html += '<span class="project-card-name">' + escapeHtml(p.name) + '</span>';
-      html += '<span class="project-card-count">' + p.session_count + ' sessions</span>';
-      html += '</div>';
-      if (p.tags && p.tags.length > 0) {
-        html += '<div class="project-card-tags">';
-        p.tags.slice(0, 5).forEach(function(t) {
-          html += '<span class="tag-pill">#' + escapeHtml(t) + '</span>';
-        });
-        html += '</div>';
-      }
-      if (p.last_active) {
-        html += '<div class="project-card-date">Last active: ' + escapeHtml(p.last_active) + '</div>';
-      }
-      html += '</div>';
-    });
-    html += '</div>';
-
-    var card = document.createElement("div");
-    card.className = "message message-system";
-    var label = document.createElement("div");
-    label.className = "message-label";
-    label.textContent = "PROJECTS";
-    card.appendChild(label);
-    var body = document.createElement("div");
-    body.className = "message-body";
-    body.innerHTML = html;
-    card.appendChild(body);
-    messagesEl.appendChild(card);
-    scrollToBottom();
-  }
-
-  // ---------------------------------------------------------------------------
   // Indicator
   // ---------------------------------------------------------------------------
   function showIndicator(label) {
@@ -685,48 +381,6 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Slash-command hints popup
-  // ---------------------------------------------------------------------------
-  var SLASH_COMMANDS = [
-    { cmd: '/help',      desc: 'Show help information' },
-    { cmd: '/stats',     desc: 'Session statistics' },
-    { cmd: '/tokens',    desc: 'Token usage details' },
-    { cmd: '/agents',    desc: 'Available agents' },
-    { cmd: '/git',       desc: 'Git repository status' },
-    { cmd: '/dashboard', desc: 'Session dashboard' },
-    { cmd: '/clear',     desc: 'Clear conversation' },
-    { cmd: '/sessions',  desc: 'List sessions' },
-  ];
-
-  function showSlashHints() {
-    var hints = document.getElementById('slash-hints');
-    if (!hints) return;
-    var list = hints.querySelector('.slash-hints-list');
-    list.innerHTML = SLASH_COMMANDS.map(function(c) {
-      return '<div class="slash-hint-item" role="option" data-cmd="' + c.cmd + '">'
-        + '<span class="hint-cmd">' + c.cmd + '</span>'
-        + '<span class="hint-desc">' + c.desc + '</span>'
-        + '</div>';
-    }).join('');
-    // Click handler for each hint
-    list.querySelectorAll('.slash-hint-item').forEach(function(item) {
-      item.addEventListener('click', function() {
-        if (inputEl) {
-          inputEl.value = item.dataset.cmd;
-          inputEl.focus();
-        }
-        hideSlashHints();
-      });
-    });
-    hints.hidden = false;
-  }
-
-  function hideSlashHints() {
-    var hints = document.getElementById('slash-hints');
-    if (hints) hints.hidden = true;
-  }
-
-  // ---------------------------------------------------------------------------
   // Slash-command completion
   // ---------------------------------------------------------------------------
   var knownCommands = [
@@ -754,7 +408,6 @@
     // Enter → send (Shift+Enter → newline)
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      hideSlashHints();
       var text = inputEl.value;
       if (text.trim()) {
         pushHistory(text);
@@ -813,7 +466,6 @@
   });
 
   sendBtn.addEventListener("click", function () {
-    hideSlashHints();
     var text = inputEl.value;
     if (text.trim()) {
       pushHistory(text);
@@ -842,82 +494,19 @@
   function renderSessionList(sessions) {
     sessionListEl.innerHTML = "";
     if (!sessions || sessions.length === 0) {
-      sessionListEl.innerHTML = '<div style="padding:1rem;color:var(--text-secondary);text-align:center">No sessions yet</div>';
+      sessionListEl.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:13px;">No sessions yet</div>';
       return;
     }
-
-    // Separate pinned from unpinned
-    var pinned = sessions.filter(function(s) { return s.pinned; });
-    var unpinned = sessions.filter(function(s) { return !s.pinned; });
-
-    // Render pinned group
-    if (pinned.length > 0) {
-      var pinnedHeader = document.createElement("div");
-      pinnedHeader.className = "session-group-header";
-      pinnedHeader.textContent = "Pinned";
-      sessionListEl.appendChild(pinnedHeader);
-      pinned.forEach(function(s) { sessionListEl.appendChild(makeSessionItem(s)); });
-    }
-
-    // Group unpinned by project
-    var groups = {};
-    var groupOrder = [];
-    unpinned.forEach(function(s) {
-      var proj = s.project || "Unknown";
-      if (!groups[proj]) { groups[proj] = []; groupOrder.push(proj); }
-      groups[proj].push(s);
-    });
-
-    groupOrder.forEach(function(proj) {
-      var items = groups[proj];
-      var header = document.createElement("div");
-      header.className = "session-group-header";
-      header.textContent = proj + " (" + items.length + ")";
-      sessionListEl.appendChild(header);
-      items.forEach(function(s) { sessionListEl.appendChild(makeSessionItem(s)); });
-    });
-  }
-
-  function makeSessionItem(s) {
-    var item = document.createElement("div");
-    item.className = "session-item" + (s.active ? " active" : "");
-    item.setAttribute("role", "option");
-    item.setAttribute("aria-label", s.title || s.id || "Untitled session");
-
-    var titleDiv = document.createElement("div");
-    titleDiv.className = "session-item-title";
-    titleDiv.textContent = s.title || s.id || "Untitled";
-    item.appendChild(titleDiv);
-
-    var metaDiv = document.createElement("div");
-    metaDiv.className = "session-item-meta";
-
-    var dateSpan = document.createElement("span");
-    dateSpan.className = "session-item-date";
-    dateSpan.textContent = s.date || "";
-    metaDiv.appendChild(dateSpan);
-
-    // Tag pills
-    if (s.tags && s.tags.length > 0) {
-      s.tags.slice(0, 3).forEach(function(tag) {
-        var pill = document.createElement("span");
-        pill.className = "tag-pill";
-        pill.textContent = "#" + tag;
-        pill.addEventListener("click", function(e) {
-          e.stopPropagation();
-          // Filter by clicking a tag -- populate input
-          var input = document.getElementById("chat-input");
-          if (input) { input.value = "/tag filter " + tag; }
-        });
-        metaDiv.appendChild(pill);
+    sessions.forEach(function(s) {
+      var item = document.createElement("div");
+      item.className = "session-item" + (s.active ? " active" : "");
+      item.innerHTML = '<div class="session-item-title">' + escapeHtml(s.title || s.id || "Untitled") + '</div>'
+                     + '<div class="session-item-date">' + escapeHtml(s.date || "") + '</div>';
+      item.addEventListener("click", function() {
+        sendRaw({ type: "switch_session", id: s.id });
       });
-    }
-    item.appendChild(metaDiv);
-
-    item.addEventListener("click", function() {
-      sendRaw({ type: "switch_session", id: s.id });
+      sessionListEl.appendChild(item);
     });
-    return item;
   }
 
   function sendRaw(obj) {
@@ -933,212 +522,76 @@
   });
   if (sidebarCloseBtn) sidebarCloseBtn.addEventListener("click", toggleSidebar);
 
-  // ── Command Palette ──
-  var commandPalette = [
-    { name: "New Session",     cmd: "/new",        keys: "",              cat: "session",  desc: "Start a new chat session" },
-    { name: "Clear Chat",      cmd: "/clear",      keys: "",              cat: "session",  desc: "Clear the chat display" },
-    { name: "Sessions",        cmd: "/sessions",   keys: "",              cat: "session",  desc: "List all sessions" },
-    { name: "Resume Session",  cmd: "/resume",     keys: "",              cat: "session",  desc: "Resume a previous session" },
-    { name: "Git Status",      cmd: "/git",        keys: "",              cat: "git",      desc: "Show git status" },
-    { name: "Git Diff",        cmd: "/diff",       keys: "",              cat: "git",      desc: "Show git diff" },
-    { name: "Token Usage",     cmd: "/tokens",     keys: "",              cat: "info",     desc: "Show token usage and cost" },
-    { name: "Statistics",      cmd: "/stats",      keys: "",              cat: "info",     desc: "Show session statistics" },
-    { name: "Model Info",      cmd: "/model",      keys: "",              cat: "info",     desc: "Show or switch LLM model" },
-    { name: "Dashboard",       cmd: "/dashboard",  keys: "",              cat: "info",     desc: "Show session dashboard" },
-    { name: "Context",         cmd: "/context",    keys: "",              cat: "info",     desc: "Show context information" },
-    { name: "Agents",          cmd: "/agents",     keys: "",              cat: "ai",       desc: "List active agents" },
-    { name: "Tools",           cmd: "/tools",      keys: "",              cat: "ai",       desc: "List available tools" },
-    { name: "Recipe",          cmd: "/recipe",     keys: "",              cat: "ai",       desc: "Manage recipes" },
-    { name: "System Prompt",   cmd: "/system",     keys: "",              cat: "config",   desc: "View or set system prompt" },
-    { name: "Mode",            cmd: "/mode",       keys: "",              cat: "config",   desc: "Switch operational mode" },
-    { name: "Theme",           cmd: "/theme",      keys: "",              cat: "config",   desc: "Change color theme" },
-    { name: "Help",            cmd: "/help",       keys: "",              cat: "info",     desc: "Show available commands" },
-    { name: "Toggle Sidebar",  cmd: null,          keys: "",              cat: "ui",       desc: "Show/hide session sidebar", action: "toggle-sidebar" },
-  ];
-
-  var paletteSelectedIdx = -1;
-
-  function openPalette() {
-    paletteOverlay.classList.remove("hidden");
-    paletteInput.value = "";
-    paletteSelectedIdx = -1;
-    renderPaletteResults("");
-    setTimeout(function() { paletteInput.focus(); }, 10);
-  }
-
-  function closePalette() {
-    paletteOverlay.classList.add("hidden");
-    paletteInput.value = "";
-    inputEl.focus();
-  }
-
-  function renderPaletteResults(query) {
-    var q = query.toLowerCase().trim();
-    var filtered = commandPalette.filter(function(c) {
-      if (!q) return true;
-      return c.name.toLowerCase().indexOf(q) !== -1
-          || (c.cmd && c.cmd.toLowerCase().indexOf(q) !== -1)
-          || c.desc.toLowerCase().indexOf(q) !== -1
-          || c.cat.toLowerCase().indexOf(q) !== -1;
-    });
-
-    paletteResults.innerHTML = "";
-    if (filtered.length === 0) {
-      paletteResults.innerHTML = '<div style="padding:12px 16px;color:var(--text-muted);font-size:13px;">No matching commands</div>';
-      return;
-    }
-
-    // Group by category
-    var groups = {};
-    filtered.forEach(function(c) {
-      if (!groups[c.cat]) groups[c.cat] = [];
-      groups[c.cat].push(c);
-    });
-
-    var idx = 0;
-    Object.keys(groups).forEach(function(cat) {
-      var catLabel = document.createElement("div");
-      catLabel.className = "palette-category";
-      catLabel.textContent = cat;
-      paletteResults.appendChild(catLabel);
-
-      groups[cat].forEach(function(c) {
-        var item = document.createElement("div");
-        item.className = "palette-item" + (idx === paletteSelectedIdx ? " selected" : "");
-        item.setAttribute("data-idx", idx);
-        item.setAttribute("role", "option");
-        item.setAttribute("aria-label", c.name + (c.cmd ? " " + c.cmd : ""));
-        item.innerHTML = '<div class="palette-item-left">'
-          + '<div class="palette-item-name">' + escapeHtml(c.name) + '</div>'
-          + '<div class="palette-item-desc">' + escapeHtml(c.desc) + '</div>'
-          + '</div>'
-          + '<div class="palette-item-right">'
-          + (c.cmd ? '<span class="palette-item-cmd">' + escapeHtml(c.cmd) + '</span>' : '')
-          + (c.keys ? '<span class="palette-item-keys">' + escapeHtml(c.keys) + '</span>' : '')
-          + '</div>';
-        item.addEventListener("click", function() { executePaletteItem(c); });
-        paletteResults.appendChild(item);
-        idx++;
-      });
-    });
-
-    // Auto-select first if nothing selected
-    if (paletteSelectedIdx < 0 && filtered.length > 0) {
-      paletteSelectedIdx = 0;
-      updatePaletteSelection();
-    }
-  }
-
-  function updatePaletteSelection() {
-    var items = paletteResults.querySelectorAll(".palette-item");
-    items.forEach(function(el, i) {
-      el.classList.toggle("selected", i === paletteSelectedIdx);
-    });
-    // Scroll selected into view
-    if (items[paletteSelectedIdx]) {
-      items[paletteSelectedIdx].scrollIntoView({ block: "nearest" });
-    }
-  }
-
-  function executePaletteItem(c) {
-    closePalette();
-    if (c.action === "toggle-sidebar") {
-      toggleSidebar();
-    } else if (c.cmd) {
-      sendMessage(c.cmd);
-    }
-  }
-
-  function getFilteredPaletteItems() {
-    var q = (paletteInput.value || "").toLowerCase().trim();
-    return commandPalette.filter(function(c) {
-      if (!q) return true;
-      return c.name.toLowerCase().indexOf(q) !== -1
-          || (c.cmd && c.cmd.toLowerCase().indexOf(q) !== -1)
-          || c.desc.toLowerCase().indexOf(q) !== -1
-          || c.cat.toLowerCase().indexOf(q) !== -1;
-    });
-  }
-
-  if (paletteInput) {
-    paletteInput.addEventListener("input", function() {
-      paletteSelectedIdx = 0;
-      renderPaletteResults(paletteInput.value);
-    });
-
-    paletteInput.addEventListener("keydown", function(e) {
-      var items = getFilteredPaletteItems();
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        paletteSelectedIdx = Math.min(paletteSelectedIdx + 1, items.length - 1);
-        updatePaletteSelection();
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        paletteSelectedIdx = Math.max(paletteSelectedIdx - 1, 0);
-        updatePaletteSelection();
-      } else if (e.key === "Enter") {
-        e.preventDefault();
-        if (items[paletteSelectedIdx]) {
-          executePaletteItem(items[paletteSelectedIdx]);
-        }
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        closePalette();
-      }
-    });
-  }
-
-  // Close palette on backdrop click
-  if (paletteOverlay) {
-    paletteOverlay.addEventListener("click", function(e) {
-      if (e.target === paletteOverlay) closePalette();
-    });
-  }
-
   // ---------------------------------------------------------------------------
-  // Global keyboard shortcuts (web-safe, minimal — palette handles the rest)
+  // Global keyboard shortcuts (browser-safe, no Ctrl+B/H/T conflicts)
   // ---------------------------------------------------------------------------
   document.addEventListener("keydown", function (e) {
-    // Command palette: Ctrl+K or Cmd+K
-    if ((e.ctrlKey || e.metaKey) && e.key === "k") {
-      e.preventDefault();
-      if (paletteOverlay.classList.contains("hidden")) {
-        openPalette();
-      } else {
-        closePalette();
-      }
-      return;
-    }
+    // Don't intercept when typing in input (unless it's a global shortcut)
+    var inInput = document.activeElement === inputEl;
 
-    // Focus input: Ctrl+L
-    if (e.ctrlKey && e.key === "l") {
+    // Ctrl+L or Cmd+L → focus input (like address bar, but for chat)
+    if ((e.ctrlKey || e.metaKey) && e.key === "l") {
       e.preventDefault();
       inputEl.focus();
+      inputEl.select();
       return;
     }
 
-    // Slash shortcut: "/" when not in input focuses input with "/"
-    if (e.key === "/" && document.activeElement !== inputEl && document.activeElement !== paletteInput) {
+    // Ctrl+/ or Cmd+/ → show help
+    if ((e.ctrlKey || e.metaKey) && e.key === "/") {
+      e.preventDefault();
+      sendMessage("/help");
+      return;
+    }
+
+    // Ctrl+Shift+N → new session
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "N") {
+      e.preventDefault();
+      sendMessage("/new");
+      return;
+    }
+
+    // Ctrl+Shift+S → session list
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "S") {
+      e.preventDefault();
+      sendMessage("/sessions");
+      return;
+    }
+
+    // Ctrl+Shift+K → clear chat
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "K") {
+      e.preventDefault();
+      sendMessage("/clear");
+      return;
+    }
+
+    // Ctrl+Shift+G → git status
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "G") {
+      e.preventDefault();
+      sendMessage("/git");
+      return;
+    }
+
+    // Ctrl+Shift+T → token info
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "T") {
+      e.preventDefault();
+      sendMessage("/tokens");
+      return;
+    }
+
+    // Ctrl+Shift+D → dashboard
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "D") {
+      e.preventDefault();
+      sendMessage("/dashboard");
+      return;
+    }
+
+    // / → focus input and start command (when not already in input)
+    if (!inInput && e.key === "/" && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault();
       inputEl.focus();
       inputEl.value = "/";
       autoResizeInput();
-      showSlashHints();
-      return;
-    }
-
-    // Escape: close slash hints, palette, sidebar, or blur input
-    if (e.key === "Escape") {
-      var slashHintsEl = document.getElementById('slash-hints');
-      if (slashHintsEl && !slashHintsEl.hidden) {
-        hideSlashHints();
-      } else if (!paletteOverlay.classList.contains("hidden")) {
-        closePalette();
-      } else if (!sidebarEl.classList.contains("hidden")) {
-        toggleSidebar();
-      } else if (document.activeElement === inputEl) {
-        inputEl.blur();
-      }
       return;
     }
   });
@@ -1148,13 +601,7 @@
     inputEl.style.height = "auto";
     inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + "px";
   }
-  inputEl.addEventListener("input", function() {
-    autoResizeInput();
-    // Dismiss slash hints when input no longer starts with "/"
-    if (!inputEl.value.startsWith("/")) {
-      hideSlashHints();
-    }
-  });
+  inputEl.addEventListener("input", autoResizeInput);
 
   // ---------------------------------------------------------------------------
   // Boot
