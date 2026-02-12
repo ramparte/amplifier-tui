@@ -18,9 +18,20 @@ class ConversationState:
 
     conversation_id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
-    # Amplifier session
-    session: Any = None  # was TabState.sm_session
-    session_id: str | None = None  # was TabState.sm_session_id
+    # Amplifier session -- DEPRECATED: sessions now live on SessionHandle,
+    # looked up by conversation_id. Kept for backward compat until Commit 2.
+    session: Any = None
+    session_id: str | None = None
+
+    # --- Processing state (per-conversation, moved from SharedAppBase) ---
+    is_processing: bool = False
+    streaming_cancelled: bool = False
+    stream_accumulated_text: str = ""
+    tool_count_this_turn: int = 0
+    got_stream_content: bool = False
+    queued_message: str | None = None
+    processing_start_time: float | None = None
+
     title: str = ""  # was TabState.session_title
 
     # System prompt / mode
