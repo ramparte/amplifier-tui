@@ -17,6 +17,8 @@ dependencies = [
     "pyyaml>=6.0",
     "pyte>=0.8.2",
     "textual>=0.47.0",
+    "amplifier-core",
+    "amplifier-foundation",
 ]
 
 [project.optional-dependencies]
@@ -34,6 +36,10 @@ dev = [
 ]
 
 # The TUI uses the distro Bridge for session lifecycle.
+
+[tool.uv.sources]
+amplifier-core = { git = "https://github.com/microsoft/amplifier-core" }
+amplifier-foundation = { git = "https://github.com/microsoft/amplifier-foundation" }
 
 [project.scripts]
 amplifier-tui = "amplifier_tui.__main__:main"
