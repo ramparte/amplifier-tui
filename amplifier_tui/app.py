@@ -6486,16 +6486,16 @@ class AmplifierTuiApp(
     # These implement the abstract _on_stream_* methods from SharedAppBase.
     # All UI updates are marshalled to the main thread via call_from_thread.
 
-    def _on_stream_block_start(self, block_type: str) -> None:
+    def _on_stream_block_start(self, conversation_id: str, block_type: str) -> None:
         self.call_from_thread(self._begin_streaming_block, block_type)
 
-    def _on_stream_block_delta(self, block_type: str, accumulated_text: str) -> None:
+    def _on_stream_block_delta(self, conversation_id: str, block_type: str, accumulated_text: str) -> None:
         self.call_from_thread(
             self._update_streaming_content, block_type, accumulated_text
         )
 
     def _on_stream_block_end(
-        self, block_type: str, final_text: str, had_block_start: bool
+        self, conversation_id: str, block_type: str, final_text: str, had_block_start: bool
     ) -> None:
         if had_block_start:
             # Streaming widget exists - finalize it with complete text
@@ -6510,7 +6510,7 @@ class AmplifierTuiApp(
             else:
                 self.call_from_thread(self._add_assistant_message, final_text)
 
-    def _on_stream_tool_start(self, name: str, tool_input: dict) -> None:
+    def _on_stream_tool_start(self, conversation_id: str, name: str, tool_input: dict) -> None:
         # Feed todo tool calls to the TodoPanel
         if name == "todo" and isinstance(tool_input, dict):
             self.call_from_thread(self._update_todo_panel, tool_input)
@@ -6536,7 +6536,7 @@ class AmplifierTuiApp(
         self.call_from_thread(self._ensure_processing_indicator, bare)
         self.call_from_thread(self._update_status, label)
 
-    def _on_stream_tool_end(self, name: str, tool_input: dict, result: str) -> None:
+    def _on_stream_tool_end(self, conversation_id: str, name: str, tool_input: dict, result: str) -> None:
         # Update AgentTreePanel on delegate completion
         if is_delegate_tool(name) and isinstance(tool_input, dict):
             agent_key = make_delegate_key(tool_input)
@@ -6551,7 +6551,7 @@ class AmplifierTuiApp(
         self.call_from_thread(self._ensure_processing_indicator, "Thinking")
         self.call_from_thread(self._update_status, "Thinking...")
 
-    def _on_stream_usage_update(self) -> None:
+    def _on_stream_usage_update(self, conversation_id: str) -> None:
         self.call_from_thread(self._update_token_display)
         self.call_from_thread(self._record_context_snapshot)
 

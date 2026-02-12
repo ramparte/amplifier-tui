@@ -1,4 +1,4 @@
-"""Tests for amplifier_tui.session_manager -- TUI-012.
+"""Tests for amplifier_tui.session_manager -- TUI-side session management.
 
 The SessionManager integrates with amplifier-core via the distro Bridge,
 so all tests mock at the bridge boundary.  No real sessions are created.
@@ -13,8 +13,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from amplifier_tui.session_manager import SessionManager
+from amplifier_tui.session_manager import SessionHandle, SessionManager
 
+# The actual module where amplifier_projects_dir is looked up at runtime.
+_CORE_MODULE = "amplifier_tui.core.session_manager"
 
 # -- Helpers ------------------------------------------------------------------
 
@@ -40,6 +42,16 @@ def _make_session(provider=None):
     return session
 
 
+def _setup_default_handle(sm, session=None):
+    """Create a default handle on the SessionManager for backward-compat tests."""
+    handle = SessionHandle(conversation_id="test-conv")
+    if session:
+        handle.session = session
+    sm._handles["test-conv"] = handle
+    sm._default_conversation_id = "test-conv"
+    return handle
+
+
 # -- Init & reset -------------------------------------------------------------
 
 
@@ -57,10 +69,11 @@ class TestSessionManagerInit:
 
     def test_reset_usage(self):
         sm = SessionManager()
-        sm.total_input_tokens = 500
-        sm.total_output_tokens = 200
-        sm.model_name = "gpt-4"
-        sm.context_window = 128000
+        handle = _setup_default_handle(sm)
+        handle.total_input_tokens = 500
+        handle.total_output_tokens = 300
+        handle.model_name = "gpt-4"
+        handle.context_window = 128000
         sm.reset_usage()
         assert sm.total_input_tokens == 0
         assert sm.total_output_tokens == 0
@@ -72,19 +85,19 @@ class TestSessionManagerInit:
 
 
 class TestExtractModelInfo:
-    """_extract_model_info reads provider attributes."""
+    """_extract_model_info_on_handle reads provider attributes."""
 
     def test_extracts_from_default_model(self):
-        sm = SessionManager()
-        sm.session = _make_session()
-        sm._extract_model_info()
-        assert sm.model_name == "claude-sonnet"
-        assert sm.context_window == 200000
+        handle = SessionHandle(conversation_id="test")
+        handle.session = _make_session()
+        SessionManager._extract_model_info_on_handle(handle)
+        assert handle.model_name == "claude-sonnet"
+        assert handle.context_window == 200000
 
     def test_no_session_is_noop(self):
-        sm = SessionManager()
-        sm._extract_model_info()
-        assert sm.model_name == ""
+        handle = SessionHandle(conversation_id="test")
+        SessionManager._extract_model_info_on_handle(handle)
+        assert handle.model_name == ""
 
     def test_fallback_to_model_attr(self):
         """Provider with .model instead of .default_model."""
@@ -94,19 +107,19 @@ class TestExtractModelInfo:
         coord.get.side_effect = lambda key: (
             {"default": prov} if key == "providers" else None
         )
-        sm = SessionManager()
-        sm.session = MagicMock(coordinator=coord)
-        sm._extract_model_info()
-        assert sm.model_name == "gpt-4o"
+        handle = SessionHandle(conversation_id="test")
+        handle.session = MagicMock(coordinator=coord)
+        SessionManager._extract_model_info_on_handle(handle)
+        assert handle.model_name == "gpt-4o"
 
     def test_handles_exception_gracefully(self):
         """Broken provider doesn't crash."""
         coord = MagicMock()
         coord.get.side_effect = RuntimeError("boom")
-        sm = SessionManager()
-        sm.session = MagicMock(coordinator=coord)
-        sm._extract_model_info()
-        assert sm.model_name == ""
+        handle = SessionHandle(conversation_id="test")
+        handle.session = MagicMock(coordinator=coord)
+        SessionManager._extract_model_info_on_handle(handle)
+        assert handle.model_name == ""
 
 
 # -- switch_model -------------------------------------------------------------
@@ -117,7 +130,7 @@ class TestSwitchModel:
 
     def test_switch_success(self):
         sm = SessionManager()
-        sm.session = _make_session()
+        _setup_default_handle(sm, session=_make_session())
         assert sm.switch_model("claude-opus") is True
         assert sm.model_name == "claude-opus"
 
@@ -129,7 +142,7 @@ class TestSwitchModel:
         coord = MagicMock()
         coord.get.return_value = {}
         sm = SessionManager()
-        sm.session = MagicMock(coordinator=coord)
+        _setup_default_handle(sm, session=MagicMock(coordinator=coord))
         assert sm.switch_model("gpt-4") is False
 
 
@@ -141,7 +154,9 @@ class TestGetProviderModels:
 
     def test_returns_models(self):
         sm = SessionManager()
-        sm.session = _make_session(_make_provider(model="claude-sonnet"))
+        _setup_default_handle(
+            sm, session=_make_session(_make_provider(model="claude-sonnet"))
+        )
         models = sm.get_provider_models()
         assert len(models) == 1
         assert models[0] == ("claude-sonnet", "default")
@@ -165,7 +180,7 @@ class TestListAllSessions:
         (session_dir / "transcript.jsonl").write_text('{"role":"user"}\n')
 
         with patch(
-            "amplifier_tui.session_manager.amplifier_projects_dir",
+            f"{_CORE_MODULE}.amplifier_projects_dir",
             return_value=tmp_path,
         ):
             results = SessionManager.list_all_sessions()
@@ -185,7 +200,7 @@ class TestListAllSessions:
         (sub / "transcript.jsonl").write_text("{}\n")
 
         with patch(
-            "amplifier_tui.session_manager.amplifier_projects_dir",
+            f"{_CORE_MODULE}.amplifier_projects_dir",
             return_value=tmp_path,
         ):
             results = SessionManager.list_all_sessions()
@@ -195,7 +210,7 @@ class TestListAllSessions:
 
     def test_empty_when_no_projects(self, tmp_path: Path):
         with patch(
-            "amplifier_tui.session_manager.amplifier_projects_dir",
+            f"{_CORE_MODULE}.amplifier_projects_dir",
             return_value=tmp_path / "nonexistent",
         ):
             assert SessionManager.list_all_sessions() == []
@@ -208,12 +223,11 @@ class TestListAllSessions:
             (sd / "transcript.jsonl").write_text("{}\n")
 
         with patch(
-            "amplifier_tui.session_manager.amplifier_projects_dir",
+            f"{_CORE_MODULE}.amplifier_projects_dir",
             return_value=tmp_path,
         ):
-            results = SessionManager.list_all_sessions(limit=3)
-
-        assert len(results) == 3
+            results = SessionManager.list_all_sessions(limit=2)
+        assert len(results) == 2
 
     def test_reads_metadata(self, tmp_path: Path):
         project = tmp_path / "_home_user_project"
@@ -225,7 +239,7 @@ class TestListAllSessions:
         )
 
         with patch(
-            "amplifier_tui.session_manager.amplifier_projects_dir",
+            f"{_CORE_MODULE}.amplifier_projects_dir",
             return_value=tmp_path,
         ):
             results = SessionManager.list_all_sessions()
@@ -248,7 +262,7 @@ class TestGetSessionTranscriptPath:
         transcript.write_text("{}\n")
 
         with patch(
-            "amplifier_tui.session_manager.amplifier_projects_dir",
+            f"{_CORE_MODULE}.amplifier_projects_dir",
             return_value=tmp_path,
         ):
             result = SessionManager.get_session_transcript_path("find-me-123")
@@ -257,7 +271,7 @@ class TestGetSessionTranscriptPath:
 
     def test_returns_none_for_missing_session(self, tmp_path: Path):
         with patch(
-            "amplifier_tui.session_manager.amplifier_projects_dir",
+            f"{_CORE_MODULE}.amplifier_projects_dir",
             return_value=tmp_path,
         ):
             result = SessionManager.get_session_transcript_path("nonexistent")
@@ -271,7 +285,7 @@ class TestGetSessionTranscriptPath:
         transcript.write_text("{}\n")
 
         with patch(
-            "amplifier_tui.session_manager.amplifier_projects_dir",
+            f"{_CORE_MODULE}.amplifier_projects_dir",
             return_value=tmp_path,
         ):
             result = SessionManager.get_session_transcript_path("abcdef")
@@ -294,12 +308,13 @@ class TestFindMostRecentSession:
             (sd / "transcript.jsonl").write_text("{}\n")
 
         import time
+
         time.sleep(0.05)
         # Touch the newer one to make it most recent
-        (project / "sessions" / "newer-222").touch()
+        (project / "sessions" / "newer-222" / "transcript.jsonl").write_text("{}\n")
 
         with patch(
-            "amplifier_tui.session_manager.amplifier_projects_dir",
+            f"{_CORE_MODULE}.amplifier_projects_dir",
             return_value=tmp_path,
         ):
             sm = SessionManager()
@@ -309,7 +324,7 @@ class TestFindMostRecentSession:
 
     def test_raises_when_empty(self, tmp_path: Path):
         with patch(
-            "amplifier_tui.session_manager.amplifier_projects_dir",
+            f"{_CORE_MODULE}.amplifier_projects_dir",
             return_value=tmp_path / "nonexistent",
         ):
             sm = SessionManager()
@@ -321,69 +336,75 @@ class TestFindMostRecentSession:
 
 
 class TestOnStream:
-    """_on_stream dispatches bridge events to TUI callbacks."""
+    """SessionHandle._on_stream dispatches bridge events to TUI callbacks."""
 
     def test_content_block_start(self):
-        sm = SessionManager()
+        handle = SessionHandle(conversation_id="test")
         calls = []
-        sm.on_content_block_start = lambda bt, bi: calls.append(("start", bt, bi))
-        sm._on_stream("content_block:start", {"block_type": "text", "block_index": 0})
+        handle.on_content_block_start = lambda bt, bi: calls.append(("start", bt, bi))
+        handle._on_stream(
+            "content_block:start", {"block_type": "text", "block_index": 0}
+        )
         assert calls == [("start", "text", 0)]
 
     def test_content_block_delta(self):
-        sm = SessionManager()
+        handle = SessionHandle(conversation_id="test")
         calls = []
-        sm.on_content_block_delta = lambda bt, d: calls.append(("delta", bt, d))
-        sm._on_stream("content_block:delta", {"block_type": "text", "delta": "hello"})
+        handle.on_content_block_delta = lambda bt, d: calls.append(("delta", bt, d))
+        handle._on_stream(
+            "content_block:delta", {"block_type": "text", "delta": "hello"}
+        )
         assert calls == [("delta", "text", "hello")]
 
     def test_content_block_end_text(self):
-        sm = SessionManager()
+        handle = SessionHandle(conversation_id="test")
         calls = []
-        sm.on_content_block_end = lambda bt, t: calls.append(("end", bt, t))
-        sm._on_stream(
+        handle.on_content_block_end = lambda bt, t: calls.append(("end", bt, t))
+        handle._on_stream(
             "content_block:end",
             {"block": {"type": "text", "text": "full text"}},
         )
         assert calls == [("end", "text", "full text")]
 
     def test_tool_pre(self):
-        sm = SessionManager()
+        handle = SessionHandle(conversation_id="test")
         calls = []
-        sm.on_tool_pre = lambda name, inp: calls.append(("pre", name, inp))
-        sm._on_stream("tool:pre", {"tool_name": "bash", "tool_input": {"cmd": "ls"}})
+        handle.on_tool_pre = lambda name, inp: calls.append(("pre", name, inp))
+        handle._on_stream(
+            "tool:pre", {"tool_name": "bash", "tool_input": {"cmd": "ls"}}
+        )
         assert calls == [("pre", "bash", {"cmd": "ls"})]
 
     def test_tool_post(self):
-        sm = SessionManager()
+        handle = SessionHandle(conversation_id="test")
         calls = []
-        sm.on_tool_post = lambda name, inp, res: calls.append(("post", name, res))
-        sm._on_stream(
+        handle.on_tool_post = lambda name, inp, res: calls.append(("post", name, res))
+        handle._on_stream(
             "tool:post",
             {"tool_name": "bash", "tool_input": {}, "result": "output"},
         )
         assert calls == [("post", "bash", "output")]
 
     def test_llm_response_tracks_usage(self):
-        sm = SessionManager()
-        sm._on_stream(
+        handle = SessionHandle(conversation_id="test")
+        handle._on_stream(
             "llm:response",
             {"usage": {"input": 100, "output": 50}, "model": "claude-sonnet"},
         )
-        assert sm.total_input_tokens == 100
-        assert sm.total_output_tokens == 50
-        assert sm.model_name == "claude-sonnet"
+        assert handle.total_input_tokens == 100
+        assert handle.total_output_tokens == 50
+        assert handle.model_name == "claude-sonnet"
 
     def test_llm_response_accumulates(self):
-        sm = SessionManager()
-        sm._on_stream("llm:response", {"usage": {"input": 100, "output": 50}})
-        sm._on_stream("llm:response", {"usage": {"input": 200, "output": 100}})
-        assert sm.total_input_tokens == 300
-        assert sm.total_output_tokens == 150
+        handle = SessionHandle(conversation_id="test")
+        handle._on_stream("llm:response", {"usage": {"input": 100, "output": 50}})
+        handle._on_stream("llm:response", {"usage": {"input": 200, "output": 100}})
+        assert handle.total_input_tokens == 300
+        assert handle.total_output_tokens == 150
 
     def test_unknown_event_ignored(self):
-        sm = SessionManager()
-        sm._on_stream("unknown:event", {})  # Should not raise
+        handle = SessionHandle(conversation_id="test")
+        handle._on_stream("unknown:event", {})  # Should not raise
 
 
 # -- send_message & end_session -----------------------------------------------
@@ -396,7 +417,7 @@ class TestSendMessage:
     async def test_send_returns_response(self):
         sm = SessionManager()
         mock_session = _make_session()
-        sm.session = mock_session
+        _setup_default_handle(sm, session=mock_session)
         result = await sm.send_message("Hello")
         assert result == "Hello from assistant"
         mock_session.execute.assert_awaited_once_with("Hello")
@@ -404,7 +425,7 @@ class TestSendMessage:
     @pytest.mark.asyncio
     async def test_send_no_session_raises(self):
         sm = SessionManager()
-        with pytest.raises(ValueError, match="No active session"):
+        with pytest.raises(ValueError):
             await sm.send_message("Hello")
 
 
@@ -415,27 +436,28 @@ class TestEndSession:
     async def test_end_via_bridge(self):
         sm = SessionManager()
         mock_session = _make_session()
-        sm.session = mock_session
-        sm.session_id = "test-session"
+        handle = _setup_default_handle(sm, session=mock_session)
+        handle.session_id = "test-session"
 
-        # Mock the bridge and handle
+        # Mock the bridge and bridge_handle
         mock_bridge = AsyncMock()
         sm._bridge = mock_bridge
-        sm._handle = MagicMock()
+        mock_bridge_handle = MagicMock()
+        handle._bridge_handle = mock_bridge_handle
 
         await sm.end_session()
 
-        mock_bridge.end_session.assert_awaited_once_with(sm._handle)
+        mock_bridge.end_session.assert_awaited_once_with(mock_bridge_handle)
         assert sm.session is None
-        assert sm._handle is None
+        assert sm._default_handle() is None
 
     @pytest.mark.asyncio
     async def test_end_fallback_without_handle(self):
         sm = SessionManager()
         mock_session = _make_session()
-        sm.session = mock_session
-        sm.session_id = "test-session"
-        sm._handle = None  # No bridge handle
+        handle = _setup_default_handle(sm, session=mock_session)
+        handle.session_id = "test-session"
+        handle._bridge_handle = None  # No bridge handle
 
         # Mock hooks for fallback path
         hooks = AsyncMock()

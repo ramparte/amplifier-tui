@@ -1,5 +1,4 @@
 """Amplifier session management for the TUI.
-
 Uses the distro Bridge as the single interface for session lifecycle.
 Reads ``~/.amplifier/settings.yaml`` for bundle and provider configuration
 that the Bridge does not handle on its own (the Bridge reads only
@@ -11,7 +10,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import uuid
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -26,36 +27,42 @@ if TYPE_CHECKING:
     from amplifier_core import AmplifierSession
 
 
-class SessionManager:
-    """Manages Amplifier session lifecycle via the distro Bridge."""
+@dataclass
+class SessionHandle:
+    """Isolated per-session state, owned by SessionManager, keyed by conversation_id.
 
-    def __init__(self):
-        self.session: AmplifierSession | None = None
-        self.session_id: str | None = None
+    Each handle carries its own session object, streaming callbacks, and token
+    counters.  The Bridge's ``on_stream`` is bound to ``self._on_stream`` at
+    session creation, so streaming events dispatch to THIS handle's callbacks
+    with zero cross-talk between concurrent sessions.
+    """
 
-        # Bridge internals
-        self._bridge: Any | None = None
-        self._handle: Any | None = None
+    conversation_id: str = ""
 
-        # Tracks the block_type announced by content_block:start so that
-        # subsequent delta/end events (which may lack the field) inherit it.
-        self._active_block_types: dict[int, str] = {}
+    # --- Amplifier session ---
+    session: AmplifierSession | None = None
+    session_id: str | None = None
+    _bridge_handle: Any = None  # bridge.SessionHandle returned by LocalBridge
 
-        # Streaming callbacks - set by the app before execute()
-        self.on_content_block_start: Callable[[str, int], None] | None = None
-        self.on_content_block_delta: Callable[[str, str], None] | None = None
-        self.on_content_block_end: Callable[[str, str], None] | None = None
-        self.on_tool_pre: Callable[[str, dict], None] | None = None
-        self.on_tool_post: Callable[[str, dict, str], None] | None = None
-        self.on_execution_start: Callable[[], None] | None = None
-        self.on_execution_end: Callable[[], None] | None = None
+    # Tracks the block_type announced by content_block:start so that
+    # subsequent delta/end events (which may lack the field) inherit it.
+    _active_block_types: dict[int, str] = field(default_factory=dict)
 
-        # Token usage tracking
-        self.on_usage_update: Callable[[], None] | None = None
-        self.total_input_tokens: int = 0
-        self.total_output_tokens: int = 0
-        self.model_name: str = ""
-        self.context_window: int = 0
+    # --- Per-session streaming callbacks ---
+    on_content_block_start: Callable[[str, int], None] | None = None
+    on_content_block_delta: Callable[[str, str], None] | None = None
+    on_content_block_end: Callable[[str, str], None] | None = None
+    on_tool_pre: Callable[[str, dict], None] | None = None
+    on_tool_post: Callable[[str, dict, str], None] | None = None
+    on_execution_start: Callable[[], None] | None = None
+    on_execution_end: Callable[[], None] | None = None
+    on_usage_update: Callable[[], None] | None = None
+
+    # --- Per-session token usage ---
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    model_name: str = ""
+    context_window: int = 0
 
     def reset_usage(self) -> None:
         """Reset token usage counters for a new session."""
@@ -64,173 +71,13 @@ class SessionManager:
         self.model_name = ""
         self.context_window = 0
 
-    def _extract_model_info(self) -> None:
-        """Extract model name and context window from the session's provider."""
-        if not self.session:
-            return
-        try:
-            providers = self.session.coordinator.get("providers") or {}
-            for prov in providers.values():
-                if hasattr(prov, "default_model"):
-                    self.model_name = prov.default_model
-                elif hasattr(prov, "model"):
-                    self.model_name = prov.model
-                if hasattr(prov, "get_info"):
-                    info = prov.get_info()
-                    if hasattr(info, "defaults") and isinstance(info.defaults, dict):
-                        self.context_window = info.defaults.get("context_window", 0)
-                break  # Use the first provider
-        except Exception:  # noqa: BLE001
-            logger.debug("Failed to extract model info", exc_info=True)
-
-    def switch_model(self, model_name: str) -> bool:
-        """Switch the active model on the current session's provider.
-
-        Mutates the provider's ``default_model`` attribute so the next LLM
-        call uses *model_name*.  Returns ``True`` on success.
-        """
-        if not self.session:
-            return False
-        try:
-            providers = self.session.coordinator.get("providers") or {}
-            for prov in providers.values():
-                if hasattr(prov, "default_model"):
-                    prov.default_model = model_name
-                    self.model_name = model_name
-                    return True
-                if hasattr(prov, "model"):
-                    prov.model = model_name
-                    self.model_name = model_name
-                    return True
-            return False
-        except Exception:  # noqa: BLE001
-            logger.debug("Failed to switch model to %s", model_name, exc_info=True)
-            return False
-
-    def get_provider_models(self) -> list[tuple[str, str]]:
-        """Return ``(model_name, provider_module)`` pairs from the session.
-
-        Falls back to an empty list when no session is active.
-        """
-        results: list[tuple[str, str]] = []
-        if not self.session:
-            return results
-        try:
-            providers = self.session.coordinator.get("providers") or {}
-            for name, prov in providers.items():
-                model = ""
-                if hasattr(prov, "default_model"):
-                    model = prov.default_model
-                elif hasattr(prov, "model"):
-                    model = prov.model
-                if model:
-                    results.append((model, name))
-        except Exception:  # noqa: BLE001
-            logger.debug("Failed to get provider models", exc_info=True)
-        return results
-
-    # ------------------------------------------------------------------
-    # Settings helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _read_settings() -> dict[str, Any]:
-        """Read ``~/.amplifier/settings.yaml``, returning ``{}`` if missing."""
-        settings_path = Path("~/.amplifier/settings.yaml").expanduser()
-        if not settings_path.exists():
-            return {}
-        try:
-            import yaml  # noqa: PLC0415 – deferred import
-
-            return yaml.safe_load(settings_path.read_text()) or {}
-        except Exception:  # noqa: BLE001
-            logger.debug("Failed to read settings.yaml", exc_info=True)
-            return {}
-
-    @staticmethod
-    def _expand_env_vars(value: Any) -> Any:
-        """Recursively expand ``${VAR}`` references in config values."""
-        if isinstance(value, str):
-            return re.sub(
-                r"\$\{(\w+)\}",
-                lambda m: os.environ.get(m.group(1), ""),
-                value,
-            )
-        if isinstance(value, dict):
-            return {k: SessionManager._expand_env_vars(v) for k, v in value.items()}
-        if isinstance(value, list):
-            return [SessionManager._expand_env_vars(v) for v in value]
-        return value
-
-    def _get_bundle_name(self) -> str | None:
-        """Return the active bundle name from ``settings.yaml``, or *None*."""
-        settings = self._read_settings()
-        return settings.get("bundle", {}).get("active") or None
-
-    async def _mount_providers_from_settings(self) -> None:
-        """Mount providers from ``settings.yaml`` when the bundle has none.
-
-        The standard Amplifier bundles (``amplifier-dev``, ``foundation``)
-        do **not** include provider definitions – the CLI injects them from
-        ``settings.yaml`` at the app layer.  The distro Bridge skips this
-        step, so we replicate it here.
-        """
-        if not self.session:
-            return
-
-        # Already has providers – nothing to do.
-        providers = self.session.coordinator.get("providers") or {}
-        if providers:
-            return
-
-        settings = self._read_settings()
-        provider_configs: list[dict[str, Any]] = settings.get("config", {}).get(
-            "providers", []
-        )
-        if not provider_configs:
-            logger.warning(
-                "No providers in bundle or settings.yaml – LLM calls will fail."
-            )
-            return
-
-        for pcfg in provider_configs:
-            module_id = pcfg.get("module")
-            if not module_id:
-                continue
-            source_hint = pcfg.get("source")
-            config = self._expand_env_vars(pcfg.get("config", {}))
-
-            try:
-                provider_mount = await self.session.loader.load(
-                    module_id,
-                    config,
-                    source_hint=source_hint,
-                )
-                cleanup = await provider_mount(self.session.coordinator)
-                if cleanup:
-                    self.session.coordinator.register_cleanup(cleanup)
-                logger.info("Mounted provider '%s' from settings.yaml", module_id)
-            except Exception:  # noqa: BLE001
-                logger.warning(
-                    "Failed to mount provider '%s' from settings.yaml",
-                    module_id,
-                    exc_info=True,
-                )
-
-    # ------------------------------------------------------------------
-    # Bridge helpers
-    # ------------------------------------------------------------------
-
-    def _get_bridge(self) -> Any:
-        """Lazily create the LocalBridge singleton."""
-        if self._bridge is None:
-            from amplifier_distro.bridge import LocalBridge  # noqa: PLC0415
-
-            self._bridge = LocalBridge()
-        return self._bridge
-
     def _on_stream(self, event: str, data: dict[str, Any]) -> None:
-        """Dispatch bridge streaming events to the TUI callbacks."""
+        """Dispatch bridge streaming events to THIS handle's callbacks.
+
+        Exact port of the old SessionManager._on_stream, but reading/writing
+        this handle's callbacks and token counters instead of a shared singleton.
+        Called from the background thread where session.execute() runs.
+        """
         if event == "content_block:start":
             block_type = data.get("block_type", "text")
             block_index = data.get("block_index", 0)
@@ -297,132 +144,458 @@ class SessionManager:
             if self.on_usage_update:
                 self.on_usage_update()
 
+
+class SessionManager:
+    """Manages Amplifier session lifecycle via the distro Bridge.
+
+    Sessions are stored as SessionHandle objects in a registry, keyed by
+    conversation_id. Backward-compat properties delegate to the "default"
+    handle for single-session callers.
+    """
+
+    def __init__(self) -> None:
+        self._bridge: Any | None = None
+        self._handles: dict[str, SessionHandle] = {}
+        self._default_conversation_id: str | None = None
+
+    # ------------------------------------------------------------------
+    # Registry API
+    # ------------------------------------------------------------------
+
+    def _default_handle(self) -> SessionHandle | None:
+        if self._default_conversation_id is None:
+            return None
+        return self._handles.get(self._default_conversation_id)
+
+    def get_handle(self, conversation_id: str) -> SessionHandle | None:
+        """Look up a session handle by conversation_id."""
+        return self._handles.get(conversation_id)
+
+    @property
+    def active_handles(self) -> dict[str, SessionHandle]:
+        """Read-only snapshot of all registered handles."""
+        return dict(self._handles)
+
+    def remove_handle(self, conversation_id: str) -> None:
+        """Remove a handle without ending the session."""
+        self._handles.pop(conversation_id, None)
+        if self._default_conversation_id == conversation_id:
+            self._default_conversation_id = None
+
+    # ------------------------------------------------------------------
+    # Backward-compat properties (delegate to default handle)
+    # ------------------------------------------------------------------
+
+    @property
+    def session(self) -> AmplifierSession | None:
+        h = self._default_handle()
+        return h.session if h else None
+
+    @session.setter
+    def session(self, value: AmplifierSession | None) -> None:
+        h = self._default_handle()
+        if h:
+            h.session = value
+
+    @property
+    def session_id(self) -> str | None:
+        h = self._default_handle()
+        return h.session_id if h else None
+
+    @session_id.setter
+    def session_id(self, value: str | None) -> None:
+        h = self._default_handle()
+        if h:
+            h.session_id = value
+
+    @property
+    def total_input_tokens(self) -> int:
+        h = self._default_handle()
+        return h.total_input_tokens if h else 0
+
+    @total_input_tokens.setter
+    def total_input_tokens(self, value: int) -> None:
+        h = self._default_handle()
+        if h:
+            h.total_input_tokens = value
+
+    @property
+    def total_output_tokens(self) -> int:
+        h = self._default_handle()
+        return h.total_output_tokens if h else 0
+
+    @total_output_tokens.setter
+    def total_output_tokens(self, value: int) -> None:
+        h = self._default_handle()
+        if h:
+            h.total_output_tokens = value
+
+    @property
+    def model_name(self) -> str:
+        h = self._default_handle()
+        return h.model_name if h else ""
+
+    @model_name.setter
+    def model_name(self, value: str) -> None:
+        h = self._default_handle()
+        if h:
+            h.model_name = value
+
+    @property
+    def context_window(self) -> int:
+        h = self._default_handle()
+        return h.context_window if h else 0
+
+    @context_window.setter
+    def context_window(self, value: int) -> None:
+        h = self._default_handle()
+        if h:
+            h.context_window = value
+
+    def reset_usage(self) -> None:
+        """Reset token usage counters on the default handle."""
+        h = self._default_handle()
+        if h:
+            h.reset_usage()
+
+    def switch_model(self, model_name: str) -> bool:
+        """Switch model on the default handle (backward compat)."""
+        h = self._default_handle()
+        if h:
+            return self._switch_model_on_handle(h, model_name)
+        return False
+
+    def get_provider_models(self) -> list[tuple[str, str]]:
+        """Return (model_name, provider_module) pairs from default handle."""
+        h = self._default_handle()
+        if not h or not h.session:
+            return []
+        return self._get_provider_models_from_session(h.session)
+
+    # ------------------------------------------------------------------
+    # Model helpers (static, operate on handle or session)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_model_info_on_handle(handle: SessionHandle) -> None:
+        """Extract model name and context window from the handle's session."""
+        if not handle.session:
+            return
+        try:
+            providers = handle.session.coordinator.get("providers") or {}
+            for prov in providers.values():
+                if hasattr(prov, "default_model"):
+                    handle.model_name = prov.default_model
+                elif hasattr(prov, "model"):
+                    handle.model_name = prov.model
+                if hasattr(prov, "get_info"):
+                    info = prov.get_info()
+                    if hasattr(info, "defaults") and isinstance(info.defaults, dict):
+                        handle.context_window = info.defaults.get("context_window", 0)
+                break  # Use the first provider
+        except Exception:  # noqa: BLE001
+            logger.debug("Failed to extract model info", exc_info=True)
+
+    @staticmethod
+    def _switch_model_on_handle(handle: SessionHandle, model_name: str) -> bool:
+        """Switch the active model on a handle's session provider."""
+        if not handle.session:
+            return False
+        try:
+            providers = handle.session.coordinator.get("providers") or {}
+            for prov in providers.values():
+                if hasattr(prov, "default_model"):
+                    prov.default_model = model_name
+                    handle.model_name = model_name
+                    return True
+                if hasattr(prov, "model"):
+                    prov.model = model_name
+                    handle.model_name = model_name
+                    return True
+            return False
+        except Exception:  # noqa: BLE001
+            logger.debug("Failed to switch model to %s", model_name, exc_info=True)
+            return False
+
+    @staticmethod
+    def _get_provider_models_from_session(
+        session: AmplifierSession,
+    ) -> list[tuple[str, str]]:
+        """Return (model_name, provider_module) pairs from a session."""
+        results: list[tuple[str, str]] = []
+        try:
+            providers = session.coordinator.get("providers") or {}
+            for name, prov in providers.items():
+                model = ""
+                if hasattr(prov, "default_model"):
+                    model = prov.default_model
+                elif hasattr(prov, "model"):
+                    model = prov.model
+                if model:
+                    results.append((model, name))
+        except Exception:  # noqa: BLE001
+            logger.debug("Failed to get provider models", exc_info=True)
+        return results
+
+    # ------------------------------------------------------------------
+    # Bridge helpers
+    # ------------------------------------------------------------------
+
+    def _get_bridge(self) -> Any:
+        """Lazily create the LocalBridge singleton."""
+        if self._bridge is None:
+            from amplifier_distro.bridge import LocalBridge
+
+            self._bridge = LocalBridge()
+        return self._bridge
+
+    # ------------------------------------------------------------------
+    # Settings helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _read_settings() -> dict[str, Any]:
+        """Read ``~/.amplifier/settings.yaml``, returning ``{}`` if missing."""
+        settings_path = Path("~/.amplifier/settings.yaml").expanduser()
+        if not settings_path.exists():
+            return {}
+        try:
+            import yaml  # noqa: PLC0415 – deferred import
+
+            return yaml.safe_load(settings_path.read_text()) or {}
+        except Exception:  # noqa: BLE001
+            logger.debug("Failed to read settings.yaml", exc_info=True)
+            return {}
+
+    @staticmethod
+    def _expand_env_vars(value: Any) -> Any:
+        """Recursively expand ``${VAR}`` references in config values."""
+        if isinstance(value, str):
+            return re.sub(
+                r"\$\{(\w+)\}",
+                lambda m: os.environ.get(m.group(1), ""),
+                value,
+            )
+        if isinstance(value, dict):
+            return {k: SessionManager._expand_env_vars(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [SessionManager._expand_env_vars(v) for v in value]
+        return value
+
+    def _get_bundle_name(self) -> str | None:
+        """Return the active bundle name from ``settings.yaml``, or *None*."""
+        settings = self._read_settings()
+        return settings.get("bundle", {}).get("active") or None
+
+    async def _mount_providers_from_settings(
+        self, session: AmplifierSession | None
+    ) -> None:
+        """Mount providers from ``settings.yaml`` when the bundle has none.
+
+        The standard Amplifier bundles (``amplifier-dev``, ``foundation``)
+        do **not** include provider definitions – the CLI injects them from
+        ``settings.yaml`` at the app layer.  The distro Bridge skips this
+        step, so we replicate it here.
+        """
+        if not session:
+            return
+
+        # Already has providers – nothing to do.
+        providers = session.coordinator.get("providers") or {}
+        if providers:
+            return
+
+        settings = self._read_settings()
+        provider_configs: list[dict[str, Any]] = settings.get("config", {}).get(
+            "providers", []
+        )
+        if not provider_configs:
+            logger.warning(
+                "No providers in bundle or settings.yaml – LLM calls will fail."
+            )
+            return
+
+        for pcfg in provider_configs:
+            module_id = pcfg.get("module")
+            if not module_id:
+                continue
+            source_hint = pcfg.get("source")
+            config = self._expand_env_vars(pcfg.get("config", {}))
+
+            try:
+                provider_mount = await session.loader.load(
+                    module_id,
+                    config,
+                    source_hint=source_hint,
+                )
+                cleanup = await provider_mount(session.coordinator)
+                if cleanup:
+                    session.coordinator.register_cleanup(cleanup)
+                logger.info("Mounted provider '%s' from settings.yaml", module_id)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Failed to mount provider '%s' from settings.yaml",
+                    module_id,
+                    exc_info=True,
+                )
+
     # ------------------------------------------------------------------
     # Session lifecycle (via Bridge)
     # ------------------------------------------------------------------
 
     async def start_new_session(
         self,
+        conversation_id: str | None = None,
         cwd: Path | None = None,
         model_override: str = "",
-    ) -> None:
-        """Start a new Amplifier session via the distro Bridge.
+    ) -> SessionHandle:
+        """Start a new Amplifier session, returning its SessionHandle.
 
-        Parameters
-        ----------
-        cwd:
-            Working directory for the session.
-        model_override:
-            If non-empty, override the provider's default model after
-            session creation.
+        If conversation_id is None, an ID is auto-generated and this handle
+        becomes the default (backward compat).
         """
         from amplifier_distro.bridge import BridgeConfig  # noqa: PLC0415
 
+        auto_generated = conversation_id is None
+        if auto_generated:
+            conversation_id = str(uuid.uuid4())
+
         if cwd is None:
             cwd = Path.cwd()
+
+        handle = SessionHandle(conversation_id=conversation_id)
 
         bridge = self._get_bridge()
         config = BridgeConfig(
             working_dir=cwd,
             run_preflight=False,
-            on_stream=self._on_stream,
+            on_stream=handle._on_stream,  # per-handle binding
             bundle_name=self._get_bundle_name(),
         )
-
-        handle = await bridge.create_session(config)
-        self._handle = handle
-        self.session = handle._session
-        self.session_id = handle.session_id
+        bridge_handle = await bridge.create_session(config)
+        handle._bridge_handle = bridge_handle
+        handle.session = bridge_handle._session
+        handle.session_id = bridge_handle.session_id
 
         # Mount providers from settings.yaml if the bundle didn't include any
-        await self._mount_providers_from_settings()
+        await self._mount_providers_from_settings(handle.session)
 
         if model_override:
-            self.switch_model(model_override)
+            self._switch_model_on_handle(handle, model_override)
 
-        self.reset_usage()
-        self._extract_model_info()
+        handle.reset_usage()
+        self._extract_model_info_on_handle(handle)
+
+        self._handles[conversation_id] = handle
+
+        if auto_generated:
+            self._default_conversation_id = conversation_id
+
+        return handle
 
     async def resume_session(
         self,
         session_id: str,
+        conversation_id: str | None = None,
         model_override: str = "",
         working_dir: Path | None = None,
-    ) -> None:
-        """Resume an existing Amplifier session via the distro Bridge.
+    ) -> SessionHandle:
+        """Resume an existing Amplifier session, returning its SessionHandle.
 
-        Parameters
-        ----------
-        session_id:
-            The session to resume.
-        model_override:
-            If non-empty, override the provider's default model.
-        working_dir:
-            Working directory for the resumed session.  When resuming from
-            the sidebar the caller should pass the original project path
-            so the session CWD matches.  Falls back to ``Path.cwd()``.
+        If conversation_id is None, an ID is auto-generated and this handle
+        becomes the default (backward compat).
         """
         from amplifier_distro.bridge import BridgeConfig  # noqa: PLC0415
+
+        auto_generated = conversation_id is None
+        if auto_generated:
+            conversation_id = str(uuid.uuid4())
+
+        handle = SessionHandle(conversation_id=conversation_id)
 
         bridge = self._get_bridge()
         config = BridgeConfig(
             working_dir=working_dir or Path.cwd(),
             run_preflight=False,
-            on_stream=self._on_stream,
+            on_stream=handle._on_stream,  # per-handle binding
             bundle_name=self._get_bundle_name(),
         )
-
-        handle = await bridge.resume_session(session_id, config)
-        self._handle = handle
-        self.session = handle._session
-        self.session_id = handle.session_id
+        bridge_handle = await bridge.resume_session(session_id, config)
+        handle._bridge_handle = bridge_handle
+        handle.session = bridge_handle._session
+        handle.session_id = bridge_handle.session_id
 
         # Mount providers from settings.yaml if the bundle didn't include any
-        await self._mount_providers_from_settings()
+        await self._mount_providers_from_settings(handle.session)
 
         if model_override:
-            self.switch_model(model_override)
+            self._switch_model_on_handle(handle, model_override)
 
-        self.reset_usage()
-        self._extract_model_info()
+        handle.reset_usage()
+        self._extract_model_info_on_handle(handle)
 
-    async def end_session(self) -> None:
-        """End the current session cleanly via the Bridge.
+        self._handles[conversation_id] = handle
 
-        Emits SESSION_END, writes handoff, and cleans up resources.
-        """
-        if not self.session:
+        if auto_generated:
+            self._default_conversation_id = conversation_id
+
+        return handle
+
+    async def end_session(self, conversation_id: str | None = None) -> None:
+        """End a session by conversation_id (or the default)."""
+        cid = conversation_id or self._default_conversation_id
+        if cid is None:
+            return
+        handle = self._handles.get(cid)
+        if handle is None:
+            return
+
+        if not handle.session:
+            self._handles.pop(cid, None)
+            if self._default_conversation_id == cid:
+                self._default_conversation_id = None
             return
 
         try:
-            if self._handle:
+            if handle._bridge_handle:
                 bridge = self._get_bridge()
-                await bridge.end_session(self._handle)
+                await bridge.end_session(handle._bridge_handle)
             else:
-                # Fallback: direct cleanup when no handle (e.g. tab-swapped session)
+                # Fallback: direct cleanup when no bridge handle
                 try:
-                    hooks = self.session.coordinator.get("hooks")
+                    hooks = handle.session.coordinator.get("hooks")
                     if hooks:
                         from amplifier_core.events import SESSION_END  # type: ignore[import-not-found]
 
-                        await hooks.emit(SESSION_END, {"session_id": self.session_id})
+                        await hooks.emit(SESSION_END, {"session_id": handle.session_id})
                 except Exception:  # noqa: BLE001
                     logger.debug("Failed to emit SESSION_END", exc_info=True)
                 try:
-                    await self.session.cleanup()
+                    await handle.session.cleanup()
                 except Exception:  # noqa: BLE001
                     logger.debug("Failed to clean up session", exc_info=True)
         except Exception:  # noqa: BLE001
             logger.debug("Failed to end session via bridge", exc_info=True)
 
-        self.session = None
-        self._handle = None
+        handle.session = None
+        handle._bridge_handle = None
+        self._handles.pop(cid, None)
+        if self._default_conversation_id == cid:
+            self._default_conversation_id = None
 
-    async def send_message(self, message: str) -> str:
-        """Send a message to the current session."""
-        if not self.session:
-            raise ValueError("No active session")
-        response = await self.session.execute(message)
+    async def send_message(
+        self,
+        message: str,
+        conversation_id: str | None = None,
+    ) -> str:
+        """Send a message to a specific conversation's session."""
+        cid = conversation_id or self._default_conversation_id
+        if cid is None:
+            raise ValueError("No conversation_id and no default session")
+        handle = self._handles.get(cid)
+        if handle is None or handle.session is None:
+            raise ValueError(f"No active session for conversation {cid!r}")
+        response = await handle.session.execute(message)
         return response
 
     # ------------------------------------------------------------------
@@ -473,8 +646,6 @@ class SessionManager:
                     continue
 
                 # Use transcript mtime for accurate "last activity" sorting.
-                # Directory mtime on Linux only updates when entries are
-                # added/removed, not when files inside are modified.
                 mtime = transcript_path.stat().st_mtime
                 info: dict[str, Any] = {
                     "session_id": session_dir.name,
@@ -500,7 +671,6 @@ class SessionManager:
                             metadata_path,
                             exc_info=True,
                         )
-
                 results.append(info)
 
         results.sort(key=lambda x: x["mtime"], reverse=True)
