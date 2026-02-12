@@ -209,14 +209,39 @@ def check_environment(workspace_pref: str = "") -> EnvironmentStatus:
 
             import asyncio
 
+            # Use BundleRegistry (same path as the bridge)
+            try:
+                from amplifier_foundation import BundleRegistry  # type: ignore[import-not-found]
+
+                registry = BundleRegistry()
+            except ImportError:
+                registry = None
+
             loop = asyncio.new_event_loop()
             try:
-                loop.run_until_complete(load_bundle(active_bundle))
+                if registry is not None:
+                    loop.run_until_complete(
+                        load_bundle(active_bundle, registry=registry)
+                    )
+                else:
+                    loop.run_until_complete(load_bundle(active_bundle))
                 status.bundle_loadable = True
             finally:
                 loop.close()
         except Exception as exc:
-            status.bundle_error = str(exc)
+            err = str(exc)
+            # Detect the common "short name not in registry" case
+            if "No handler for URI" in err:
+                status.bundle_error = (
+                    f"'{active_bundle}' is set as active but can't be resolved.\n"
+                    "The CLI knows this name, but the bundle isn't cached yet.\n"
+                    "Fix: run the CLI once to populate the cache:\n"
+                    "  amplifier run 'hello'\n"
+                    "Or add the bundle by full URI:\n"
+                    "  amplifier bundle add <git+https://...>"
+                )
+            else:
+                status.bundle_error = err
             logger.debug("Bundle load failed for %s", active_bundle, exc_info=True)
     elif active_bundle:
         status.bundle_error = "Cannot test (missing libraries)"
