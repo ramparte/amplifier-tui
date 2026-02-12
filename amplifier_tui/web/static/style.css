@@ -458,6 +458,9 @@ html, body {
   #input-area { padding: 8px 10px; }
   .message { padding: 10px 12px; }
   .sidebar { position: absolute; z-index: 100; height: 100%; }
+  .palette-container { width: 95vw; }
+  .card-grid { grid-template-columns: repeat(2, 1fr); }
+  .structured-card { font-size: 13px; }
 }
 
 /* ===== Sidebar ===== */
@@ -848,4 +851,39 @@ html, body {
   color: var(--text-secondary);
   padding-top: 6px;
   border-top: 1px solid var(--border);
+}
+
+/* ===== Code Copy Button ===== */
+.code-copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+pre:hover .code-copy-btn {
+  opacity: 1;
+}
+.code-copy-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+/* ===== Tablet Breakpoint ===== */
+@media (max-width: 1024px) {
+  .sidebar { width: 240px; }
+}
+
+/* ===== Touch-friendly Tap Targets ===== */
+.sidebar-action, .header-btn, .session-item, .palette-item {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
 }
