@@ -592,7 +592,9 @@ class WebApp(
     def _clear_welcome(self) -> None:
         pass
 
-    def _populate_session_list(self) -> None:
+    def _populate_session_list(
+        self, sessions: list[dict[str, Any]] | None = None
+    ) -> None:
         pass
 
     def _play_bell(self) -> None:
@@ -685,6 +687,21 @@ class WebApp(
             self._add_system_message(f"Model set to: **{new_model}**")
         else:
             self._show_error("No session manager available")
+
+    # Web-only: /resume handler (not in a mixin)
+    def _cmd_resume(self, args: str) -> None:
+        """Resume a previous session by ID."""
+        session_id = args.strip()
+        if not session_id:
+            self._add_system_message(
+                "Usage: /resume <session_id>\n"
+                "Use /sessions or the sidebar to find session IDs."
+            )
+            return
+        if self._loop is None:
+            self._show_error("Event loop not available")
+            return
+        asyncio.run_coroutine_threadsafe(self.switch_to_session(session_id), self._loop)
 
     # Web-only: /sessions handler (not in a mixin)
     def _cmd_sessions(self, args: str) -> None:
@@ -1035,6 +1052,7 @@ class WebApp(
             # Session management
             "/new": lambda: self._handle_new_session(),
             "/clear": lambda: self._send_event({"type": "clear"}),
+            "/resume": lambda: self._cmd_resume(args),
             "/sessions": lambda: self._cmd_sessions(args),
             "/session": lambda: self._cmd_sessions(args),
             "/list": lambda: self._cmd_sessions(args),
