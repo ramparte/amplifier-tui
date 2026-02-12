@@ -108,6 +108,7 @@ from .commands.compare_cmds import CompareCommandsMixin
 from .commands.replay_cmds import ReplayCommandsMixin
 from .commands.plugin_cmds import PluginCommandsMixin
 from .commands.dashboard_cmds import DashboardCommandsMixin
+from .commands.project_cmds import ProjectCommandsMixin
 from .commands.shell_cmds import ShellCommandsMixin
 from .commands.terminal_cmds import TerminalCommandsMixin
 from .commands.monitor_cmds import MonitorCommandsMixin
@@ -149,6 +150,7 @@ class AmplifierTuiApp(
     TerminalCommandsMixin,
     ShellCommandsMixin,
     DashboardCommandsMixin,
+    ProjectCommandsMixin,
     ReplayCommandsMixin,
     CompareCommandsMixin,
     BranchCommandsMixin,
@@ -2198,7 +2200,13 @@ class AmplifierTuiApp(
         # ── Unpinned, grouped ──
         mode = getattr(self._prefs, "session_sort", "date")
         if mode == "tag":
-            # Group by first tag
+            # Group by first tag — with counts
+            tag_counts: dict[str, int] = {}
+            for s in unpinned:
+                st = all_tags.get(s["session_id"], [])
+                label = f"#{st[0]}" if st else "Untagged"
+                tag_counts[label] = tag_counts.get(label, 0) + 1
+
             current_group: str | None = None
             group_node = tree.root
             for s in unpinned:
@@ -2208,7 +2216,10 @@ class AmplifierTuiApp(
                 group_label = f"#{first_tag}" if session_tags else "Untagged"
                 if group_label != current_group:
                     current_group = group_label
-                    group_node = tree.root.add(group_label, expand=True)
+                    count = tag_counts.get(group_label, 0)
+                    group_node = tree.root.add(
+                        f"{group_label} [dim]({count})[/dim]", expand=True
+                    )
                 display = self._session_display_label(
                     s, custom_names, session_titles, tags=session_tags
                 )
@@ -2222,7 +2233,12 @@ class AmplifierTuiApp(
                 session_node.collapse()
                 self._session_list_data.append(s)
         else:
-            # Group by project (existing behavior)
+            # Group by project (existing behavior) — with counts
+            project_counts: dict[str, int] = {}
+            for s in unpinned:
+                p = s["project"]
+                project_counts[p] = project_counts.get(p, 0) + 1
+
             current_group: str | None = None
             group_node = tree.root
             for s in unpinned:
@@ -2231,7 +2247,10 @@ class AmplifierTuiApp(
                     current_group = project
                     parts = project.split("/")
                     short = "/".join(parts[-2:]) if len(parts) > 2 else project
-                    group_node = tree.root.add(short, expand=True)
+                    count = project_counts.get(project, 0)
+                    group_node = tree.root.add(
+                        f"{short} [dim]({count})[/dim]", expand=True
+                    )
 
                 sid = s["session_id"]
                 session_tags = all_tags.get(sid, [])
@@ -2510,7 +2529,7 @@ class AmplifierTuiApp(
                 node.add_leaf(f"id: {sid[:12]}...{tag_info}")
                 node.collapse()
 
-        # ── Unpinned, grouped by project ──
+        # ── Unpinned, grouped by project — with counts ──
         current_group: str | None = None
         group_node = tree.root
         for s in unpinned:
@@ -2519,7 +2538,10 @@ class AmplifierTuiApp(
                 current_group = project
                 parts = project.split("/")
                 short = "/".join(parts[-2:]) if len(parts) > 2 else project
-                group_node = tree.root.add(short, expand=True)
+                count = sum(1 for x in unpinned if x["project"] == project)
+                group_node = tree.root.add(
+                    f"{short} [dim]({count})[/dim]", expand=True
+                )
 
             sid = s["session_id"]
             session_tags = all_tags.get(sid, [])
@@ -3618,6 +3640,8 @@ class AmplifierTuiApp(
             "/modes": lambda: self._cmd_mode(""),
             "/tag": lambda: self._cmd_tag(args),
             "/tags": lambda: self._cmd_tag("list-all"),
+            "/project": lambda: self._cmd_project(args),
+            "/projects": lambda: self._cmd_project(args),
             "/clipboard": lambda: self._cmd_clipboard(args),
             "/clip": lambda: self._cmd_clipboard(args),
             "/agents": lambda: self._cmd_agents(args),

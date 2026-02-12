@@ -16,6 +16,7 @@ from amplifier_tui.core.commands.shell_cmds import ShellCommandsMixin  # noqa: F
 from amplifier_tui.core.commands.theme_cmds import ThemeCommandsMixin  # noqa: F401
 from amplifier_tui.core.commands.token_cmds import TokenCommandsMixin  # noqa: F401
 from amplifier_tui.core.commands.tool_cmds import ToolCommandsMixin  # noqa: F401
+from amplifier_tui.core.commands.project_cmds import ProjectCommandsMixin  # noqa: F401
 from amplifier_tui.core.commands.watch_cmds import WatchCommandsMixin  # noqa: F401
 
 # TUI-only commands (stay local)
@@ -40,6 +41,7 @@ __all__ = [
     "MonitorCommandsMixin",
     "PersistenceCommandsMixin",
     "PluginCommandsMixin",
+    "ProjectCommandsMixin",
     "RecipeCommandsMixin",
     "ReplayCommandsMixin",
     "SearchCommandsMixin",

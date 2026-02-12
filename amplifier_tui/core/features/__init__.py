@@ -72,6 +72,7 @@ from .dashboard_stats import DashboardStats, DashboardData, SessionRecord
 from .session_scanner import SessionScanner, MonitoredSession, SessionState
 from .session_summarizer import SessionSummarizer, make_anthropic_summarizer
 from .auto_tagger import AutoTagger, AutoTagState, make_anthropic_auto_tagger
+from .project_aggregator import ProjectAggregator, ProjectInfo
 
 __all__ = [
     # diff_view
@@ -152,4 +153,7 @@ __all__ = [
     "AutoTagger",
     "AutoTagState",
     "make_anthropic_auto_tagger",
+    # project aggregator
+    "ProjectAggregator",
+    "ProjectInfo",
 ]
