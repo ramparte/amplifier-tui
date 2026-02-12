@@ -145,6 +145,21 @@
       case "session_list":
         renderSessionList(ev.sessions);
         break;
+      case "stats_panel":
+        renderStatsPanel(ev);
+        break;
+      case "token_usage":
+        renderTokenUsage(ev);
+        break;
+      case "agent_tree":
+        renderAgentTree(ev);
+        break;
+      case "git_status":
+        renderGitStatus(ev);
+        break;
+      case "dashboard":
+        renderDashboard(ev);
+        break;
       default:
         console.log("Unknown event:", ev);
     }
@@ -342,6 +357,235 @@
     if (n >= 1000000) return (n / 1000000).toFixed(1) + "M";
     if (n >= 1000) return (n / 1000).toFixed(1) + "k";
     return String(n);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Structured card renderers
+  // ---------------------------------------------------------------------------
+
+  function renderStatsPanel(ev) {
+    var el = document.createElement("div");
+    el.className = "message message-system";
+    var label = document.createElement("div");
+    label.className = "message-label";
+    label.textContent = "Session Statistics";
+    el.appendChild(label);
+
+    var body = document.createElement("div");
+    body.className = "message-body structured-card stats-card";
+    var html = '<div class="card-grid">'
+      + '<div class="card-stat"><div class="card-stat-value">' + escapeHtml(ev.duration || "\u2014") + '</div><div class="card-stat-label">Duration</div></div>'
+      + '<div class="card-stat"><div class="card-stat-value">' + (ev.messages || 0) + '</div><div class="card-stat-label">Messages</div></div>'
+      + '<div class="card-stat"><div class="card-stat-value">' + formatTokens(ev.total_tokens || 0) + '</div><div class="card-stat-label">Tokens</div></div>'
+      + '<div class="card-stat"><div class="card-stat-value">' + (ev.tool_calls || 0) + '</div><div class="card-stat-label">Tool Calls</div></div>'
+      + '<div class="card-stat"><div class="card-stat-value">' + escapeHtml(ev.model || "\u2014") + '</div><div class="card-stat-label">Model</div></div>'
+      + '<div class="card-stat"><div class="card-stat-value">' + escapeHtml(ev.cost || "\u2014") + '</div><div class="card-stat-label">Est. Cost</div></div>'
+      + '<div class="card-stat"><div class="card-stat-value">' + escapeHtml(ev.avg_response_time || "\u2014") + '</div><div class="card-stat-label">Avg Response</div></div>'
+      + '</div>';
+
+    // Token breakdown
+    var inp = ev.input_tokens || 0;
+    var out = ev.output_tokens || 0;
+    html += '<div class="card-detail-row"><span class="card-detail-label">Tokens:</span> '
+      + '<span class="card-detail-value">' + formatTokens(inp) + ' in / ' + formatTokens(out) + ' out</span></div>';
+
+    // Top tools
+    if (ev.top_tools && ev.top_tools.length > 0) {
+      html += '<div class="card-detail-row"><span class="card-detail-label">Top Tools:</span> '
+        + '<span class="card-detail-value">'
+        + ev.top_tools.map(function (t) { return escapeHtml(t.name) + " (" + t.count + ")"; }).join(", ")
+        + '</span></div>';
+    }
+
+    body.innerHTML = html;
+    el.appendChild(body);
+    messagesEl.appendChild(el);
+    scrollToBottom();
+  }
+
+  function renderTokenUsage(ev) {
+    var el = document.createElement("div");
+    el.className = "message message-system";
+    var label = document.createElement("div");
+    label.className = "message-label";
+    label.textContent = "Token Usage";
+    el.appendChild(label);
+
+    var body = document.createElement("div");
+    body.className = "message-body structured-card token-card";
+    var inp = ev.input_tokens || 0;
+    var out = ev.output_tokens || 0;
+    var total = ev.total_tokens || 0;
+    var window = ev.context_window || 200000;
+    var pct = ev.usage_pct || 0;
+    var maxBar = inp + out || 1;
+
+    var html = '<div class="card-detail-row" style="margin-bottom:4px">'
+      + '<span class="card-detail-label">Model:</span> '
+      + '<span class="card-detail-value" style="color:var(--text-accent)">' + escapeHtml(ev.model || "\u2014") + '</span></div>';
+
+    // Input bar
+    html += '<div class="token-row"><span class="token-row-label">Input</span>'
+      + '<div class="token-bar"><div class="token-bar-fill token-bar-input" style="width:' + Math.round(inp / maxBar * 100) + '%"></div></div>'
+      + '<span class="token-row-value">' + formatTokens(inp) + '</span></div>';
+
+    // Output bar
+    html += '<div class="token-row"><span class="token-row-label">Output</span>'
+      + '<div class="token-bar"><div class="token-bar-fill token-bar-output" style="width:' + Math.round(out / maxBar * 100) + '%"></div></div>'
+      + '<span class="token-row-value">' + formatTokens(out) + '</span></div>';
+
+    // Context usage bar
+    html += '<div class="token-row" style="margin-top:8px"><span class="token-row-label">Context</span>'
+      + '<div class="token-bar"><div class="token-bar-fill token-bar-context" style="width:' + Math.min(pct, 100) + '%"></div></div>'
+      + '<span class="token-row-value">' + pct + '%</span></div>';
+
+    // Summary line
+    html += '<div class="card-detail-row" style="margin-top:8px">'
+      + '<span class="card-detail-label">Total:</span> '
+      + '<span class="card-detail-value">' + formatTokens(total) + ' / ' + formatTokens(window) + '</span>'
+      + ' &nbsp; <span class="card-detail-label">Cost:</span> '
+      + '<span class="card-detail-value">' + escapeHtml(ev.cost || "\u2014") + '</span></div>';
+
+    body.innerHTML = html;
+    el.appendChild(body);
+    messagesEl.appendChild(el);
+    scrollToBottom();
+  }
+
+  function renderAgentTree(ev) {
+    var el = document.createElement("div");
+    el.className = "message message-system";
+    var label = document.createElement("div");
+    label.className = "message-label";
+    label.textContent = "Agent Delegations";
+    el.appendChild(label);
+
+    var body = document.createElement("div");
+    body.className = "message-body structured-card agent-card";
+    var agents = ev.agents || [];
+
+    if (agents.length === 0) {
+      body.innerHTML = '<div class="card-empty">No agent delegations in this session.</div>';
+    } else {
+      var html = '';
+      for (var i = 0; i < agents.length; i++) {
+        var a = agents[i];
+        var statusClass = a.status === "running" ? "running"
+                        : a.status === "completed" ? "done"
+                        : a.status === "failed" ? "failed" : "";
+        var statusIcon = a.status === "running" ? "\u27f3"
+                       : a.status === "completed" ? "\u2713"
+                       : a.status === "failed" ? "\u2717" : "?";
+        html += '<div class="agent-item ' + statusClass + '">'
+          + '<span class="agent-status-icon">' + statusIcon + '</span> '
+          + '<span class="agent-name">' + escapeHtml(a.name) + '</span>'
+          + '<span class="agent-elapsed">' + escapeHtml(a.elapsed || "") + '</span>'
+          + '<div class="agent-instruction">' + escapeHtml(a.instruction || "") + '</div>'
+          + '</div>';
+      }
+      // Summary
+      var parts = [];
+      if (ev.total) parts.push(ev.total + " total");
+      if (ev.running) parts.push(ev.running + " running");
+      if (ev.completed) parts.push(ev.completed + " completed");
+      if (ev.failed) parts.push(ev.failed + " failed");
+      if (parts.length) {
+        html += '<div class="agent-summary">' + parts.join(" \u00b7 ") + '</div>';
+      }
+      body.innerHTML = html;
+    }
+
+    el.appendChild(body);
+    messagesEl.appendChild(el);
+    scrollToBottom();
+  }
+
+  function renderGitStatus(ev) {
+    var el = document.createElement("div");
+    el.className = "message message-system";
+    var label = document.createElement("div");
+    label.className = "message-label";
+    label.textContent = "Git Status";
+    el.appendChild(label);
+
+    var body = document.createElement("div");
+    body.className = "message-body structured-card git-card";
+
+    var html = '<div class="git-branch">\ud83c\udf3f ' + escapeHtml(ev.branch || "unknown") + '</div>';
+
+    if (ev.clean) {
+      html += '<div class="git-clean">\u2713 Clean working tree</div>';
+    } else {
+      html += '<div class="git-changes">';
+      if (ev.staged) {
+        html += '<span class="git-badge git-staged">' + ev.staged + ' staged</span>';
+      }
+      if (ev.modified) {
+        html += '<span class="git-badge git-modified">' + ev.modified + ' modified</span>';
+      }
+      if (ev.untracked) {
+        html += '<span class="git-badge git-untracked">' + ev.untracked + ' untracked</span>';
+      }
+      html += '</div>';
+    }
+
+    if (ev.ahead || ev.behind) {
+      html += '<div class="git-sync">';
+      if (ev.ahead) html += '<span class="git-ahead">\u2191 ' + ev.ahead + ' ahead</span>';
+      if (ev.behind) html += '<span class="git-behind">\u2193 ' + ev.behind + ' behind</span>';
+      html += '</div>';
+    }
+
+    if (ev.last_commit) {
+      html += '<div class="git-last-commit">Last: ' + escapeHtml(ev.last_commit) + '</div>';
+    }
+
+    body.innerHTML = html;
+    el.appendChild(body);
+    messagesEl.appendChild(el);
+    scrollToBottom();
+  }
+
+  function renderDashboard(ev) {
+    var el = document.createElement("div");
+    el.className = "message message-system";
+    var label = document.createElement("div");
+    label.className = "message-label";
+    label.textContent = "Dashboard";
+    el.appendChild(label);
+
+    var body = document.createElement("div");
+    body.className = "message-body structured-card dashboard-card";
+
+    var html = '<div class="card-grid">'
+      + '<div class="card-stat"><div class="card-stat-value">' + (ev.total_sessions || 0) + '</div><div class="card-stat-label">Sessions</div></div>'
+      + '<div class="card-stat"><div class="card-stat-value">' + formatTokens(ev.total_tokens || 0) + '</div><div class="card-stat-label">Total Tokens</div></div>'
+      + '<div class="card-stat"><div class="card-stat-value">' + escapeHtml(ev.total_duration || "\u2014") + '</div><div class="card-stat-label">Total Time</div></div>'
+      + '<div class="card-stat"><div class="card-stat-value">' + escapeHtml(ev.avg_duration || "\u2014") + '</div><div class="card-stat-label">Avg Session</div></div>'
+      + '<div class="card-stat"><div class="card-stat-value">' + (ev.streak_days || 0) + '</div><div class="card-stat-label">Current Streak</div></div>'
+      + '<div class="card-stat"><div class="card-stat-value">' + (ev.longest_streak || 0) + '</div><div class="card-stat-label">Longest Streak</div></div>'
+      + '</div>';
+
+    // Top models
+    if (ev.top_models && ev.top_models.length > 0) {
+      html += '<div class="card-detail-row"><span class="card-detail-label">Models:</span> '
+        + '<span class="card-detail-value">'
+        + ev.top_models.map(function (m) { return escapeHtml(m.name) + " (" + m.count + ")"; }).join(", ")
+        + '</span></div>';
+    }
+
+    // Top projects
+    if (ev.top_projects && ev.top_projects.length > 0) {
+      html += '<div class="card-detail-row"><span class="card-detail-label">Projects:</span> '
+        + '<span class="card-detail-value">'
+        + ev.top_projects.map(function (p) { return escapeHtml(p.name) + " (" + p.count + ")"; }).join(", ")
+        + '</span></div>';
+    }
+
+    body.innerHTML = html;
+    el.appendChild(body);
+    messagesEl.appendChild(el);
+    scrollToBottom();
   }
 
   // ---------------------------------------------------------------------------

@@ -671,6 +671,261 @@ class WebApp(
         )
 
     # ------------------------------------------------------------------
+    # Web-enhanced commands: structured events instead of text
+    # ------------------------------------------------------------------
+
+    def _cmd_stats(self, text: str = "") -> None:
+        """Web-enhanced stats – sends a structured ``stats_panel`` event."""
+        # Subcommands (tools, tokens, time) fall back to the mixin's text output
+        if text.strip():
+            super()._cmd_stats(text)  # type: ignore[misc]
+            return
+        try:
+            duration_secs = time.monotonic() - self._session_start_time
+            mins, secs = divmod(int(duration_secs), 60)
+            hours, mins = divmod(mins, 60)
+            if hours:
+                duration = f"{hours}h {mins}m {secs}s"
+            elif mins:
+                duration = f"{mins}m {secs}s"
+            else:
+                duration = f"{secs}s"
+
+            sm = self.session_manager
+            input_tokens = sm.total_input_tokens if sm else 0
+            output_tokens = sm.total_output_tokens if sm else 0
+            model = sm.model_name if sm else "unknown"
+
+            # Cost estimate (Sonnet pricing: $3/1M input, $15/1M output)
+            cost = (input_tokens * 3.0 / 1_000_000) + (output_tokens * 15.0 / 1_000_000)
+
+            # Response time stats
+            avg_response = 0.0
+            if self._response_times:
+                avg_response = sum(self._response_times) / len(self._response_times)
+
+            # Top tools (up to 5)
+            top_tools = sorted(
+                self._tool_usage.items(), key=lambda x: x[1], reverse=True
+            )[:5]
+
+            self._send_event(
+                {
+                    "type": "stats_panel",
+                    "duration": duration,
+                    "messages": self._user_message_count
+                    + self._assistant_message_count,
+                    "user_messages": self._user_message_count,
+                    "assistant_messages": self._assistant_message_count,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "total_tokens": input_tokens + output_tokens,
+                    "tool_calls": self._tool_call_count,
+                    "model": model,
+                    "cost": f"${cost:.4f}",
+                    "avg_response_time": f"{avg_response:.1f}s"
+                    if avg_response > 0
+                    else "\u2014",
+                    "top_tools": [{"name": n, "count": c} for n, c in top_tools],
+                }
+            )
+        except Exception:
+            super()._cmd_stats(text)  # type: ignore[misc]
+
+    def _cmd_tokens(self) -> None:
+        """Web-enhanced tokens – sends a structured ``token_usage`` event."""
+        try:
+            sm = self.session_manager
+            input_tokens = sm.total_input_tokens if sm else 0
+            output_tokens = sm.total_output_tokens if sm else 0
+            model = sm.model_name if sm else "unknown"
+            context_window = self._get_context_window()
+            total = input_tokens + output_tokens
+
+            # Fall back to character-based estimate when API counters are zero
+            if total == 0:
+                user_chars = sum(
+                    len(content)
+                    for role, content, _ in self._search_messages
+                    if role == "user"
+                )
+                assistant_chars = sum(
+                    len(content)
+                    for role, content, _ in self._search_messages
+                    if role == "assistant"
+                )
+                input_tokens = user_chars // 4
+                output_tokens = assistant_chars // 4
+                total = input_tokens + output_tokens
+
+            usage_pct = (total / context_window * 100) if context_window > 0 else 0
+            cost = (input_tokens * 3.0 / 1_000_000) + (output_tokens * 15.0 / 1_000_000)
+
+            self._send_event(
+                {
+                    "type": "token_usage",
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "total_tokens": total,
+                    "context_window": context_window,
+                    "usage_pct": round(usage_pct, 1),
+                    "model": model,
+                    "cost": f"${cost:.4f}",
+                }
+            )
+        except Exception:
+            super()._cmd_tokens()  # type: ignore[misc]
+
+    def _cmd_agents(self, args: str = "") -> None:
+        """Web-enhanced agents – sends a structured ``agent_tree`` event."""
+        sub = args.strip().lower()
+
+        # Subcommands handled by the mixin
+        if sub == "clear":
+            self._agent_tracker.clear()
+            self._add_system_message("Agent delegation history cleared.")
+            return
+        if sub == "tree":
+            self._cmd_agent_tree_panel()
+            return
+
+        try:
+            tracker = self._agent_tracker
+            if not tracker.has_delegations:
+                self._send_event(
+                    {
+                        "type": "agent_tree",
+                        "agents": [],
+                        "total": 0,
+                        "running": 0,
+                        "completed": 0,
+                        "failed": 0,
+                    }
+                )
+                return
+
+            agents = []
+            for node in tracker._roots:
+                if node.end_time is not None:
+                    elapsed = node.end_time - node.start_time
+                else:
+                    elapsed = time.monotonic() - node.start_time
+                agents.append(
+                    {
+                        "name": node.agent_name,
+                        "instruction": node.instruction[:80],
+                        "status": node.status,
+                        "elapsed": f"{elapsed:.1f}s",
+                    }
+                )
+
+            self._send_event(
+                {
+                    "type": "agent_tree",
+                    "agents": agents,
+                    "total": tracker.total,
+                    "running": tracker.running_count,
+                    "completed": tracker.completed_count,
+                    "failed": tracker.failed_count,
+                }
+            )
+        except Exception:
+            super()._cmd_agents(args)  # type: ignore[misc]
+
+    def _cmd_git(self, text: str) -> None:
+        """Web-enhanced git overview – sends a structured ``git_status`` event."""
+        # Subcommands (status, log, diff, …) fall back to the mixin
+        if text.strip():
+            super()._cmd_git(text)  # type: ignore[misc]
+            return
+        try:
+            ok, branch = self._run_git("branch", "--show-current")
+            if not ok:
+                self._add_system_message(f"Not a git repo or git error: {branch}")
+                return
+            branch = branch.strip() or "(detached HEAD)"
+
+            # Status summary
+            _, status_out = self._run_git("status", "--porcelain")
+            lines = [ln for ln in status_out.splitlines() if ln.strip()]
+            staged = sum(1 for ln in lines if ln[0] not in (" ", "?"))
+            modified = sum(1 for ln in lines if len(ln) > 1 and ln[1] == "M")
+            untracked = sum(1 for ln in lines if ln.startswith("??"))
+
+            # Ahead / behind
+            ahead, behind = 0, 0
+            ab_ok, ab_out = self._run_git(
+                "rev-list",
+                "--left-right",
+                "--count",
+                "HEAD...@{upstream}",
+            )
+            if ab_ok and ab_out.strip():
+                ab_parts = ab_out.strip().split()
+                if len(ab_parts) == 2:
+                    ahead, behind = int(ab_parts[0]), int(ab_parts[1])
+
+            # Last commit
+            _, last_commit = self._run_git("log", "-1", "--format=%h %s (%cr)")
+
+            clean = not (staged or modified or untracked)
+
+            self._send_event(
+                {
+                    "type": "git_status",
+                    "branch": branch,
+                    "staged": staged,
+                    "modified": modified,
+                    "untracked": untracked,
+                    "ahead": ahead,
+                    "behind": behind,
+                    "clean": clean,
+                    "last_commit": last_commit.strip(),
+                }
+            )
+        except Exception:
+            super()._cmd_git(text)  # type: ignore[misc]
+
+    def _cmd_dashboard(self, args: str = "") -> None:
+        """Web-enhanced dashboard – sends a structured ``dashboard`` event."""
+        # Subcommands (refresh, export, heatmap, …) fall back to the mixin
+        if args.strip():
+            super()._cmd_dashboard(args)  # type: ignore[misc]
+            return
+        try:
+            ds = self._dashboard_stats
+            if not ds.is_cached:
+                ds.scan_sessions()
+
+            data = ds.data
+
+            # Top models and projects
+            top_models = data.model_counts.most_common(3)
+            top_projects = data.project_counts.most_common(5)
+
+            # Format total duration
+            total_secs = int(data.total_duration_seconds)
+            hours, rem = divmod(total_secs, 3600)
+            mins, _ = divmod(rem, 60)
+            duration_str = f"{hours}h {mins}m" if hours else f"{mins}m"
+
+            self._send_event(
+                {
+                    "type": "dashboard",
+                    "total_sessions": data.total_sessions,
+                    "total_tokens": data.total_tokens,
+                    "total_duration": duration_str,
+                    "avg_duration": f"{int(data.avg_duration_seconds // 60)}m",
+                    "streak_days": data.streak_days,
+                    "longest_streak": data.longest_streak,
+                    "top_models": [{"name": n, "count": c} for n, c in top_models],
+                    "top_projects": [{"name": n, "count": c} for n, c in top_projects],
+                }
+            )
+        except Exception:
+            super()._cmd_dashboard(args)  # type: ignore[misc]
+
+    # ------------------------------------------------------------------
     # Command routing
     # ------------------------------------------------------------------
 
