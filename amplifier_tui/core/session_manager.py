@@ -37,6 +37,10 @@ class SessionManager:
         self._bridge: Any | None = None
         self._handle: Any | None = None
 
+        # Tracks the block_type announced by content_block:start so that
+        # subsequent delta/end events (which may lack the field) inherit it.
+        self._active_block_types: dict[int, str] = {}
+
         # Streaming callbacks - set by the app before execute()
         self.on_content_block_start: Callable[[str, int], None] | None = None
         self.on_content_block_delta: Callable[[str, str], None] | None = None
@@ -228,25 +232,39 @@ class SessionManager:
     def _on_stream(self, event: str, data: dict[str, Any]) -> None:
         """Dispatch bridge streaming events to the TUI callbacks."""
         if event == "content_block:start":
+            block_type = data.get("block_type", "text")
+            block_index = data.get("block_index", 0)
+            # Remember block_type so delta/end inherit it even when
+            # the bridge omits the field from later events.
+            self._active_block_types[block_index] = block_type
             if self.on_content_block_start:
-                self.on_content_block_start(
-                    data.get("block_type", "text"),
-                    data.get("block_index", 0),
-                )
+                self.on_content_block_start(block_type, block_index)
         elif event == "content_block:delta":
+            block_index = data.get("block_index", 0)
+            block_type = data.get(
+                "block_type",
+                self._active_block_types.get(block_index, "text"),
+            )
             delta = (
                 data.get("delta", "") or data.get("text", "") or data.get("content", "")
             )
             if delta and self.on_content_block_delta:
-                self.on_content_block_delta(data.get("block_type", "text"), delta)
+                self.on_content_block_delta(block_type, delta)
         elif event == "content_block:end":
+            block_index = data.get("block_index", 0)
             block = data.get("block", {})
-            block_type = block.get("type", "")
-            if block_type == "text" and self.on_content_block_end:
-                self.on_content_block_end("text", block.get("text", ""))
-            elif block_type in ("thinking", "reasoning") and self.on_content_block_end:
+            # Prefer the nested block.type, fall back to the tracked type
+            # from the start event.
+            block_type = block.get("type") or self._active_block_types.get(
+                block_index, "text"
+            )
+            # Clean up tracking state.
+            self._active_block_types.pop(block_index, None)
+            if block_type in ("thinking", "reasoning") and self.on_content_block_end:
                 text = block.get("thinking", "") or block.get("text", "")
                 self.on_content_block_end("thinking", text)
+            elif self.on_content_block_end:
+                self.on_content_block_end("text", block.get("text", ""))
         elif event == "tool:pre":
             if self.on_tool_pre:
                 self.on_tool_pre(

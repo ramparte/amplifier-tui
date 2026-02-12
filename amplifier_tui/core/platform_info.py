@@ -155,8 +155,13 @@ def copy_to_clipboard(text: str) -> bool:
     # OSC 52: works in most modern terminals (WezTerm, iTerm2, kitty, etc.)
     try:
         encoded = base64.b64encode(text.encode()).decode()
-        sys.stdout.write(f"\033]52;c;{encoded}\a")
-        sys.stdout.flush()
+        # Use sys.__stdout__ to bypass Textual's captured sys.stdout —
+        # otherwise the escape sequence goes into Textual's rendering
+        # buffer instead of the real terminal.
+        real_stdout = sys.__stdout__
+        if real_stdout is not None:
+            real_stdout.write(f"\033]52;c;{encoded}\a")
+            real_stdout.flush()
         return True
     except OSError:
         logger.debug("OSC 52 clipboard write failed", exc_info=True)
