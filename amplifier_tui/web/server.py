@@ -40,9 +40,22 @@ def create_app(resume_session_id: str | None = None) -> FastAPI:
         return FileResponse(_TEMPLATES / "index.html", media_type="text/html")
 
     @app.get("/api/sessions")
-    async def list_sessions(limit: int = 50) -> list[dict]:
-        """List available sessions."""
-        return SessionManager.list_all_sessions(limit=limit)
+    async def list_sessions(limit: int = 50) -> dict:
+        """List available sessions, normalized for the web frontend."""
+        raw = SessionManager.list_all_sessions(limit=limit)
+        sessions = []
+        for s in raw:
+            sessions.append(
+                {
+                    "id": s.get("session_id", ""),
+                    "title": s.get("name")
+                    or s.get("description")
+                    or s.get("session_id", "")[:12],
+                    "date": s.get("date_str", ""),
+                    "active": False,
+                }
+            )
+        return {"sessions": sessions}
 
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket) -> None:
@@ -61,11 +74,13 @@ def create_app(resume_session_id: str | None = None) -> FastAPI:
                         sid = web_app.session_manager._find_most_recent_session()
                     await web_app.session_manager.resume_session(sid)
                     web_app._amplifier_ready = True
-                    web_app._send_event({
-                        "type": "session_resumed",
-                        "session_id": web_app.session_manager.session_id or "",
-                        "model": web_app.session_manager.model_name or "",
-                    })
+                    web_app._send_event(
+                        {
+                            "type": "session_resumed",
+                            "session_id": web_app.session_manager.session_id or "",
+                            "model": web_app.session_manager.model_name or "",
+                        }
+                    )
                     web_app._add_system_message(
                         f"Resumed session {web_app.session_manager.session_id}"
                     )
@@ -80,6 +95,10 @@ def create_app(resume_session_id: str | None = None) -> FastAPI:
                 if msg_type == "message":
                     text = data.get("text", "")
                     await web_app.handle_message(text)
+                elif msg_type == "switch_session":
+                    session_id = data.get("id", "")
+                    if session_id:
+                        await web_app.switch_to_session(session_id)
                 elif msg_type == "ping":
                     await ws.send_json({"type": "pong"})
                 else:

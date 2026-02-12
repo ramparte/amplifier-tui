@@ -27,6 +27,11 @@
   const modelEl       = document.getElementById("model-name");
   const tokenEl       = document.getElementById("token-count");
   const indicatorEl   = document.getElementById("streaming-indicator");
+  var sidebarEl = document.getElementById("sidebar");
+  var sidebarToggleEl = document.getElementById("sidebar-toggle");
+  var newSessionBtn = document.getElementById("new-session-btn");
+  var sidebarCloseBtn = document.getElementById("sidebar-close");
+  var sessionListEl = document.getElementById("session-list");
 
   // ---------------------------------------------------------------------------
   // State
@@ -133,6 +138,9 @@
         messagesEl.innerHTML = "";
         break;
       case "pong":
+        break;
+      case "session_list":
+        renderSessionList(ev.sessions);
         break;
       default:
         console.log("Unknown event:", ev);
@@ -464,6 +472,55 @@
       sendMessage(text);
     }
   });
+
+  // ---------------------------------------------------------------------------
+  // Sidebar
+  // ---------------------------------------------------------------------------
+  function toggleSidebar() {
+    sidebarEl.classList.toggle("hidden");
+    // Fetch session list when opening
+    if (!sidebarEl.classList.contains("hidden")) {
+      fetchSessionList();
+    }
+  }
+
+  function fetchSessionList() {
+    fetch("/api/sessions")
+      .then(function(r) { return r.json(); })
+      .then(function(data) { renderSessionList(data.sessions || data); })
+      .catch(function(err) { console.error("Failed to fetch sessions:", err); });
+  }
+
+  function renderSessionList(sessions) {
+    sessionListEl.innerHTML = "";
+    if (!sessions || sessions.length === 0) {
+      sessionListEl.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:13px;">No sessions yet</div>';
+      return;
+    }
+    sessions.forEach(function(s) {
+      var item = document.createElement("div");
+      item.className = "session-item" + (s.active ? " active" : "");
+      item.innerHTML = '<div class="session-item-title">' + escapeHtml(s.title || s.id || "Untitled") + '</div>'
+                     + '<div class="session-item-date">' + escapeHtml(s.date || "") + '</div>';
+      item.addEventListener("click", function() {
+        sendRaw({ type: "switch_session", id: s.id });
+      });
+      sessionListEl.appendChild(item);
+    });
+  }
+
+  function sendRaw(obj) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(obj));
+    }
+  }
+
+  if (sidebarToggleEl) sidebarToggleEl.addEventListener("click", toggleSidebar);
+  if (newSessionBtn) newSessionBtn.addEventListener("click", function() {
+    sendMessage("/new");
+    toggleSidebar();
+  });
+  if (sidebarCloseBtn) sidebarCloseBtn.addEventListener("click", toggleSidebar);
 
   // ---------------------------------------------------------------------------
   // Global keyboard shortcuts (browser-safe, no Ctrl+B/H/T conflicts)

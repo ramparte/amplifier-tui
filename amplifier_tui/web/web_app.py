@@ -184,9 +184,7 @@ class WebApp(
         self._snippet_store = SnippetStore(_amp_home / "tui-snippets.json")
         self._template_store = TemplateStore(_amp_home / "tui-templates.json")
         self._tag_store = TagStore(_amp_home / "tui-session-tags.json")
-        self._clipboard_store = ClipboardStore(
-            _amp_home / "tui-clipboard-ring.json"
-        )
+        self._clipboard_store = ClipboardStore(_amp_home / "tui-clipboard-ring.json")
 
         # ==============================================================
         # Category 3: Feature Objects
@@ -272,45 +270,55 @@ class WebApp(
         self._send_event({"type": "stream_start", "block_type": block_type})
 
     def _on_stream_block_delta(self, block_type: str, accumulated_text: str) -> None:
-        self._send_event({
-            "type": "stream_delta",
-            "block_type": block_type,
-            "text": accumulated_text,
-        })
+        self._send_event(
+            {
+                "type": "stream_delta",
+                "block_type": block_type,
+                "text": accumulated_text,
+            }
+        )
 
     def _on_stream_block_end(
         self, block_type: str, final_text: str, had_block_start: bool
     ) -> None:
-        self._send_event({
-            "type": "stream_end",
-            "block_type": block_type,
-            "text": final_text,
-        })
+        self._send_event(
+            {
+                "type": "stream_end",
+                "block_type": block_type,
+                "text": final_text,
+            }
+        )
 
     def _on_stream_tool_start(self, name: str, tool_input: dict) -> None:  # type: ignore[type-arg]
-        self._send_event({
-            "type": "tool_start",
-            "tool_name": name,
-            "tool_input": tool_input,
-        })
+        self._send_event(
+            {
+                "type": "tool_start",
+                "tool_name": name,
+                "tool_input": tool_input,
+            }
+        )
 
     def _on_stream_tool_end(self, name: str, tool_input: dict, result: str) -> None:  # type: ignore[type-arg]
-        self._send_event({
-            "type": "tool_end",
-            "tool_name": name,
-            "tool_input": tool_input,
-            "result": result,
-        })
+        self._send_event(
+            {
+                "type": "tool_end",
+                "tool_name": name,
+                "tool_input": tool_input,
+                "result": result,
+            }
+        )
 
     def _on_stream_usage_update(self) -> None:
         sm = self.session_manager
         if sm:
-            self._send_event({
-                "type": "usage_update",
-                "input_tokens": sm.total_input_tokens,
-                "output_tokens": sm.total_output_tokens,
-                "model": sm.model_name or "",
-            })
+            self._send_event(
+                {
+                    "type": "usage_update",
+                    "input_tokens": sm.total_input_tokens,
+                    "output_tokens": sm.total_output_tokens,
+                    "model": sm.model_name or "",
+                }
+            )
 
     # ==================================================================
     # Category 4: Utility Methods
@@ -509,7 +517,9 @@ class WebApp(
         """Textual query_one - not available in web."""
         raise RuntimeError(f"query_one('{selector}') not available in web interface")
 
-    def set_interval(self, interval: float, callback: Any, *args: Any, **kwargs: Any) -> None:  # type: ignore[return]
+    def set_interval(
+        self, interval: float, callback: Any, *args: Any, **kwargs: Any
+    ) -> None:  # type: ignore[return]
         """Textual set_interval - return None (timer not needed for web)."""
         return None  # type: ignore[return-value]
 
@@ -859,6 +869,25 @@ class WebApp(
         self._send_event({"type": "clear"})
         self._add_system_message("Starting new session... Send a message to begin.")
 
+    async def switch_to_session(self, session_id: str) -> None:
+        """Switch to an existing session by ID."""
+        try:
+            if self.session_manager and self.session_manager.session:
+                await self.session_manager.end_session()
+            await self.session_manager.resume_session(session_id)
+            self._amplifier_ready = True
+            self._send_event({"type": "clear"})
+            self._add_system_message(f"Resumed session: {session_id[:12]}...")
+            self._send_event(
+                {
+                    "type": "session_resumed",
+                    "session_id": self.session_manager.session_id or "",
+                    "model": self.session_manager.model_name or "",
+                }
+            )
+        except Exception as e:
+            self._show_error(f"Failed to switch session: {e}")
+
     # ------------------------------------------------------------------
     # Message handling
     # ------------------------------------------------------------------
@@ -884,11 +913,13 @@ class WebApp(
             if not self.session_manager.session:
                 await self.session_manager.start_new_session()
                 self._amplifier_ready = True
-                self._send_event({
-                    "type": "session_started",
-                    "session_id": self.session_manager.session_id or "",
-                    "model": self.session_manager.model_name or "",
-                })
+                self._send_event(
+                    {
+                        "type": "session_started",
+                        "session_id": self.session_manager.session_id or "",
+                        "model": self.session_manager.model_name or "",
+                    }
+                )
 
             response = await self.session_manager.send_message(text)
 
