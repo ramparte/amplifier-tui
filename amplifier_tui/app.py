@@ -317,7 +317,6 @@ class AmplifierTuiApp(
         self._stash_stack: list[str] = []
         self._last_assistant_text: str = ""
 
-
         # Pending delete confirmation (two-step delete)
         self._pending_delete: str | None = None
 
@@ -760,9 +759,12 @@ class AmplifierTuiApp(
         elif self.initial_prompt:
             prompt = self.initial_prompt
             self.initial_prompt = None
+            init_cid = self._tabs[self._active_tab_index].conversation.conversation_id
             self.call_from_thread(self._clear_welcome)
             self.call_from_thread(self._add_user_message, prompt)
-            self.call_from_thread(self._start_processing, "Starting session")
+            self.call_from_thread(
+                self._start_processing, "Starting session", conversation_id=init_cid
+            )
             self._send_message_worker(prompt)
         else:
             self.call_from_thread(self._update_status, "Ready")
@@ -6002,8 +6004,15 @@ class AmplifierTuiApp(
         seconds = int(elapsed) % 60
         return f"{minutes}m {seconds:02d}s"
 
-    def _start_processing(self, label: str = "Thinking") -> None:
-        tab = self._tabs[self._active_tab_index]
+    def _start_processing(
+        self, label: str = "Thinking", *, conversation_id: str = ""
+    ) -> None:
+        if conversation_id:
+            tab = self._tab_for_conversation(conversation_id)
+            if not tab:
+                tab = self._tabs[self._active_tab_index]
+        else:
+            tab = self._tabs[self._active_tab_index]
         conv = tab.conversation
         conv.is_processing = True
         conv.got_stream_content = False
@@ -6042,14 +6051,19 @@ class AmplifierTuiApp(
             block_type = tab.stream_block_type or "text"
             self._finalize_streaming_block(block_type, conv.stream_accumulated_text)
 
-        # Cancel running workers (send_message_worker)
-        self.workers.cancel_group(self, "default")
+        # Cancel running workers (send_message_worker / resume_session_worker)
+        self.workers.cancel_group(self, "send-message")
 
         self._add_system_message("Generation cancelled.")
         self._finish_processing()
 
-    def _finish_processing(self) -> None:
-        tab = self._tabs[self._active_tab_index]
+    def _finish_processing(self, *, conversation_id: str = "") -> None:
+        if conversation_id:
+            tab = self._tab_for_conversation(conversation_id)
+            if not tab:
+                tab = self._tabs[self._active_tab_index]
+        else:
+            tab = self._tabs[self._active_tab_index]
         conv = tab.conversation
         if not conv.is_processing:
             return  # Already finished (e.g. cancel + worker finally)
@@ -6082,24 +6096,44 @@ class AmplifierTuiApp(
         # Mid-turn steering: send queued message if any
         if conv.queued_message:
             queued = conv.queued_message
+            queued_cid = conv.conversation_id
             conv.queued_message = None
             # Use set_timer to send after current processing cleanup completes
-            self.set_timer(0.1, lambda: self._send_queued_message(queued))
+            self.set_timer(
+                0.1,
+                lambda: self._send_queued_message(queued, conversation_id=queued_cid),
+            )
 
-    def _send_queued_message(self, message: str) -> None:
+    def _send_queued_message(self, message: str, *, conversation_id: str = "") -> None:
         """Send a previously queued mid-turn message."""
         if not self._amplifier_ready:
             return
+        # Resolve the tab for the original conversation, fall back to active tab
+        if conversation_id:
+            tab = self._tab_for_conversation(conversation_id)
+            if not tab:
+                return  # Tab was closed since message was queued
+        else:
+            tab = self._tabs[self._active_tab_index] if self._tabs else None
+            if not tab:
+                return
+            conversation_id = tab.conversation.conversation_id
         self._add_user_message(message)
         expanded = self._expand_snippet_mentions(message)
         expanded = self._expand_at_mentions(expanded)
         expanded = self._build_message_with_attachments(expanded)
         if self._active_mode:
             expanded = f"/mode {self._active_mode}\n{expanded}"
-        has_session = self.session_manager and getattr(
-            self.session_manager, "session", None
+        handle = (
+            self.session_manager.get_handle(conversation_id)
+            if self.session_manager
+            else None
         )
-        self._start_processing("Starting session" if not has_session else "Thinking")
+        has_session = handle and handle.session
+        self._start_processing(
+            "Starting session" if not has_session else "Thinking",
+            conversation_id=conversation_id,
+        )
         self._send_message_worker(expanded)
 
     def _maybe_send_notification(self, elapsed: float | None = None) -> None:
@@ -6511,13 +6545,22 @@ class AmplifierTuiApp(
     def _on_stream_block_start(self, conversation_id: str, block_type: str) -> None:
         self.call_from_thread(self._begin_streaming_block, block_type, conversation_id)
 
-    def _on_stream_block_delta(self, conversation_id: str, block_type: str, accumulated_text: str) -> None:
+    def _on_stream_block_delta(
+        self, conversation_id: str, block_type: str, accumulated_text: str
+    ) -> None:
         self.call_from_thread(
-            self._update_streaming_content, block_type, accumulated_text, conversation_id
+            self._update_streaming_content,
+            block_type,
+            accumulated_text,
+            conversation_id,
         )
 
     def _on_stream_block_end(
-        self, conversation_id: str, block_type: str, final_text: str, had_block_start: bool
+        self,
+        conversation_id: str,
+        block_type: str,
+        final_text: str,
+        had_block_start: bool,
     ) -> None:
         if had_block_start:
             # Streaming widget exists - finalize it with complete text
@@ -6532,7 +6575,9 @@ class AmplifierTuiApp(
             else:
                 self.call_from_thread(self._add_assistant_message, final_text)
 
-    def _on_stream_tool_start(self, conversation_id: str, name: str, tool_input: dict) -> None:
+    def _on_stream_tool_start(
+        self, conversation_id: str, name: str, tool_input: dict
+    ) -> None:
         # Feed todo tool calls to the TodoPanel
         if name == "todo" and isinstance(tool_input, dict):
             self.call_from_thread(self._update_todo_panel, tool_input)
@@ -6563,7 +6608,9 @@ class AmplifierTuiApp(
         self.call_from_thread(self._ensure_processing_indicator, bare)
         self.call_from_thread(self._update_status, label)
 
-    def _on_stream_tool_end(self, conversation_id: str, name: str, tool_input: dict, result: str) -> None:
+    def _on_stream_tool_end(
+        self, conversation_id: str, name: str, tool_input: dict, result: str
+    ) -> None:
         # Update AgentTreePanel on delegate completion
         if is_delegate_tool(name) and isinstance(tool_input, dict):
             agent_key = make_delegate_key(tool_input)
@@ -6586,16 +6633,28 @@ class AmplifierTuiApp(
 
     # ── Streaming Display ─────────────────────────────────────────
 
-    def _begin_streaming_block(self, block_type: str, conversation_id: str = "") -> None:
+    def _begin_streaming_block(
+        self, block_type: str, conversation_id: str = ""
+    ) -> None:
         """Create an empty widget to stream content into.
 
         Called on content_block:start. Removes the spinner immediately
         so the user knows content is arriving.
         """
-        tab = self._tab_for_conversation(conversation_id) if conversation_id else self._tabs[self._active_tab_index]
-        conv = tab.conversation if tab else self._tabs[self._active_tab_index].conversation
+        tab = (
+            self._tab_for_conversation(conversation_id)
+            if conversation_id
+            else self._tabs[self._active_tab_index]
+        )
+        conv = (
+            tab.conversation if tab else self._tabs[self._active_tab_index].conversation
+        )
         self._remove_processing_indicator()
-        chat_view = self._chat_view_for_conversation(conversation_id) if conversation_id else self._active_chat_view()
+        chat_view = (
+            self._chat_view_for_conversation(conversation_id)
+            if conversation_id
+            else self._active_chat_view()
+        )
 
         if block_type in ("thinking", "reasoning"):
             inner = Static("\u258d", classes="thinking-text")
@@ -6625,7 +6684,9 @@ class AmplifierTuiApp(
         conv.stream_accumulated_text = ""
         self._update_status("Streaming\u2026")
 
-    def _update_streaming_content(self, block_type: str, text: str, conversation_id: str = "") -> None:
+    def _update_streaming_content(
+        self, block_type: str, text: str, conversation_id: str = ""
+    ) -> None:
         """Update the streaming widget with accumulated text so far.
 
         Called on content_block:delta (throttled to ~50ms). Shows a
@@ -6635,7 +6696,11 @@ class AmplifierTuiApp(
         the user sees formatted output (headings, code, lists) as it
         streams in.  Falls back to plain text on any rendering error.
         """
-        tab = self._tab_for_conversation(conversation_id) if conversation_id else self._tabs[self._active_tab_index]
+        tab = (
+            self._tab_for_conversation(conversation_id)
+            if conversation_id
+            else self._tabs[self._active_tab_index]
+        )
         if not tab or not tab.stream_widget:
             return
 
@@ -6658,16 +6723,28 @@ class AmplifierTuiApp(
         self._check_smart_scroll_pause()
         self._scroll_if_auto(tab.stream_widget)
 
-    def _finalize_streaming_block(self, block_type: str, text: str, conversation_id: str = "") -> None:
+    def _finalize_streaming_block(
+        self, block_type: str, text: str, conversation_id: str = ""
+    ) -> None:
         """Replace the streaming Static with the final rendered widget.
 
         Called on content_block:end. For text blocks, swaps the fast
         Static with a proper Markdown widget for rich rendering.
         For thinking blocks, collapses and sets the preview title.
         """
-        tab = self._tab_for_conversation(conversation_id) if conversation_id else self._tabs[self._active_tab_index]
-        conv = tab.conversation if tab else self._tabs[self._active_tab_index].conversation
-        chat_view = self._chat_view_for_conversation(conversation_id) if conversation_id else self._active_chat_view()
+        tab = (
+            self._tab_for_conversation(conversation_id)
+            if conversation_id
+            else self._tabs[self._active_tab_index]
+        )
+        conv = (
+            tab.conversation if tab else self._tabs[self._active_tab_index].conversation
+        )
+        chat_view = (
+            self._chat_view_for_conversation(conversation_id)
+            if conversation_id
+            else self._active_chat_view()
+        )
 
         if block_type in ("thinking", "reasoning"):
             full_text = text[:800] + "\u2026" if len(text) > 800 else text
@@ -6715,22 +6792,25 @@ class AmplifierTuiApp(
 
     # ── Workers (background execution) ──────────────────────────
 
-    @work(thread=True)
+    @work(thread=True, group="send-message")
     async def _send_message_worker(self, message: str) -> None:
         """Send a message to Amplifier in a background thread."""
         # Capture conversation context at launch time (before any awaits)
         tab = self._tabs[self._active_tab_index]
         conv = tab.conversation
+        cid = conv.conversation_id
         if self.session_manager is None:
             self.call_from_thread(self._add_system_message, "No active session")
             return
         try:
             # Auto-create session on first message
-            if not self.session_manager.session:
+            handle = self.session_manager.get_handle(cid)
+            if not handle or not handle.session:
                 self.call_from_thread(self._update_status, "Starting session...")
                 model = self._prefs.preferred_model or ""
                 try:
                     await self.session_manager.start_new_session(
+                        conversation_id=cid,
                         model_override=model,
                     )
                 except Exception as session_err:
@@ -6757,14 +6837,16 @@ class AmplifierTuiApp(
                 self.call_from_thread(self._apply_session_title)
 
             if self._prefs.display.streaming_enabled:
-                self._setup_streaming_callbacks()
+                self._wire_streaming_callbacks(cid, conv)
             self.call_from_thread(self._update_status, "Thinking...")
 
             # Inject system prompt (if set) before the user message
             if self._system_prompt:
                 message = f"[System instructions: {self._system_prompt}]\n\n{message}"
 
-            response = await self.session_manager.send_message(message)
+            response = await self.session_manager.send_message(
+                message, conversation_id=cid
+            )
 
             if conv.streaming_cancelled:
                 return  # Already finalized in action_cancel_streaming
@@ -6779,11 +6861,15 @@ class AmplifierTuiApp(
                 return  # Suppress errors from cancelled workers
             self.call_from_thread(self._show_error, str(e))
         finally:
-            self.call_from_thread(self._finish_processing)
+            self.call_from_thread(self._finish_processing, conversation_id=cid)
 
-    @work(thread=True)
+    @work(thread=True, group="send-message")
     async def _resume_session_worker(self, session_id: str) -> None:
         """Resume a session in a background thread."""
+        # Capture conversation context at launch time (before any awaits)
+        tab = self._tabs[self._active_tab_index]
+        conv = tab.conversation
+        cid = conv.conversation_id
         if self.session_manager is None:
             self.call_from_thread(self._add_system_message, "No active session")
             return
@@ -6815,7 +6901,10 @@ class AmplifierTuiApp(
 
             model = self._prefs.preferred_model or ""
             await self.session_manager.resume_session(
-                session_id, model_override=model, working_dir=working_dir
+                session_id,
+                conversation_id=cid,
+                model_override=model,
+                working_dir=working_dir,
             )
 
             # Restore session title
@@ -6837,14 +6926,17 @@ class AmplifierTuiApp(
                 prompt = self.initial_prompt
                 self.initial_prompt = None
                 self.call_from_thread(self._add_user_message, prompt)
-                self.call_from_thread(self._start_processing)
-                resume_conv = self._tabs[self._active_tab_index].conversation
+                self.call_from_thread(
+                    self._start_processing, "Thinking", conversation_id=cid
+                )
                 if self._prefs.display.streaming_enabled:
-                    self._setup_streaming_callbacks()
-                response = await self.session_manager.send_message(prompt)
-                if not resume_conv.got_stream_content and response:
+                    self._wire_streaming_callbacks(cid, conv)
+                response = await self.session_manager.send_message(
+                    prompt, conversation_id=cid
+                )
+                if not conv.got_stream_content and response:
                     self.call_from_thread(self._add_assistant_message, response)
-                self.call_from_thread(self._finish_processing)
+                self.call_from_thread(self._finish_processing, conversation_id=cid)
 
         except Exception as e:
             logger.debug("resume session worker failed", exc_info=True)
