@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from amplifier_tui.core.session_manager import SessionManager
@@ -34,10 +34,10 @@ def create_app(resume_session_id: str | None = None) -> FastAPI:
         return HTMLResponse(content=html)
 
     @app.get("/favicon.ico")
-    async def favicon() -> FileResponse:
-        """Serve a minimal favicon to avoid 404s."""
-        # Return the index as a fallback; browsers won't complain
-        return FileResponse(_TEMPLATES / "index.html", media_type="text/html")
+    async def favicon():
+        """Return SVG favicon."""
+        svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">⚡</text></svg>'
+        return Response(content=svg, media_type="image/svg+xml")
 
     @app.get("/api/sessions")
     async def list_sessions(limit: int = 50) -> dict:
