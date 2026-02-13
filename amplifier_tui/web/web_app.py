@@ -19,6 +19,7 @@ from amplifier_tui.core.commands import (
     GitCommandsMixin,
     PersistenceCommandsMixin,
     PluginCommandsMixin,
+    ProjectCommandsMixin,
     ProjectorCommandsMixin,
     RecipeCommandsMixin,
     ReplayCommandsMixin,
@@ -89,6 +90,7 @@ class WebApp(
     FileCommandsMixin,
     PersistenceCommandsMixin,
     PluginCommandsMixin,
+    ProjectCommandsMixin,
     ProjectorCommandsMixin,
     ReplayCommandsMixin,
     ShellCommandsMixin,
@@ -597,7 +599,81 @@ class WebApp(
     def _populate_session_list(
         self, sessions: list[dict[str, Any]] | None = None
     ) -> None:
-        pass
+        """Push updated session list to the web client over WebSocket."""
+        if sessions is None:
+            sessions = self._session_list_data
+        if not sessions:
+            return
+
+        all_tags = self._tag_store.load()
+        pinned_ids = self._pinned_sessions
+
+        items = []
+        for s in sessions:
+            sid = s.get("session_id", "")
+            items.append(
+                {
+                    "id": sid,
+                    "title": s.get("name") or s.get("description") or sid[:12],
+                    "date": s.get("date_str", ""),
+                    "active": sid == (self.session_manager.session_id or ""),
+                    "project": s.get("project", ""),
+                    "project_path": s.get("project_path", ""),
+                    "tags": all_tags.get(sid, []),
+                    "pinned": sid in pinned_ids,
+                }
+            )
+        self._send_event({"type": "session_list", "sessions": items})
+
+    def _cmd_project(self, args: str) -> None:
+        """Override to send web-specific project summary cards."""
+        if not args.strip():
+            from amplifier_tui.core.features.project_aggregator import ProjectAggregator
+
+            sessions = self._session_list_data
+            if not sessions:
+                self._add_system_message("No sessions loaded.")
+                return
+            all_tags = self._tag_store.load()
+            projects = ProjectAggregator.aggregate(sessions, all_tags)
+
+            # Send structured card event
+            project_list = []
+            for p in sorted(
+                projects.values(), key=lambda x: x.latest_mtime, reverse=True
+            ):
+                project_list.append(
+                    {
+                        "name": p.name,
+                        "session_count": p.session_count,
+                        "tags": p.top_tags[:5],
+                        "last_active": p.latest_date_str,
+                    }
+                )
+            self._send_event({"type": "project_summary", "projects": project_list})
+            return
+
+        # Delegate all subcommands (ask, search, detail, etc.) to the mixin
+        super()._cmd_project(args)
+
+    def _cmd_sort_web(self, args: str) -> None:
+        """Handle /sort in web context (no Textual Tree dependency)."""
+        mode = args.strip().lower() if args.strip() else ""
+        valid_modes = ("date", "name", "project", "tag")
+        if mode not in valid_modes:
+            self._add_system_message(
+                f"Sort modes: {', '.join(valid_modes)}\n"
+                f"Current: {getattr(self._prefs, 'session_sort', 'date')}\n"
+                "Usage: /sort <mode>"
+            )
+            return
+        self._prefs.session_sort = mode  # type: ignore[attr-defined]
+        self._prefs.save()
+        self._add_system_message(f"Sort mode set to: {mode}")
+        # Re-fetch and push session list
+        sessions = SessionManager.list_all_sessions(limit=50)
+        self._session_list_data = sessions
+        self._populate_session_list(sessions)
 
     def _play_bell(self) -> None:
         pass
@@ -1045,6 +1121,9 @@ class WebApp(
             "/bm": lambda: self._cmd_bookmark(args),
             "/tag": lambda: self._cmd_tag(args),
             "/tags": lambda: self._cmd_tag("list-all"),
+            "/project": lambda: self._cmd_project(args),
+            "/projects": lambda: self._cmd_project(args),
+            "/sort": lambda: self._cmd_sort_web(args),
             "/pin": lambda: self._cmd_pin_msg(args),
             "/pins": lambda: self._cmd_pins(args),
             "/unpin": lambda: self._cmd_unpin(args),

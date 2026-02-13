@@ -160,6 +160,9 @@
       case "dashboard":
         renderDashboard(ev);
         break;
+      case "project_summary":
+        renderProjectSummary(ev);
+        break;
       default:
         console.log("Unknown event:", ev);
     }
@@ -601,6 +604,47 @@
     scrollToBottom();
   }
 
+  function renderProjectSummary(ev) {
+    var projects = ev.projects || [];
+    if (projects.length === 0) {
+      appendMessage("system", "No projects found.");
+      return;
+    }
+    var html = '<div class="project-summary-grid">';
+    projects.forEach(function(p) {
+      html += '<div class="project-card">';
+      html += '<div class="project-card-header">';
+      html += '<span class="project-card-name">' + escapeHtml(p.name) + '</span>';
+      html += '<span class="project-card-count">' + p.session_count + ' sessions</span>';
+      html += '</div>';
+      if (p.tags && p.tags.length > 0) {
+        html += '<div class="project-card-tags">';
+        p.tags.slice(0, 5).forEach(function(t) {
+          html += '<span class="tag-pill">#' + escapeHtml(t) + '</span>';
+        });
+        html += '</div>';
+      }
+      if (p.last_active) {
+        html += '<div class="project-card-date">Last active: ' + escapeHtml(p.last_active) + '</div>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+
+    var card = document.createElement("div");
+    card.className = "message message-system";
+    var label = document.createElement("div");
+    label.className = "message-label";
+    label.textContent = "PROJECTS";
+    card.appendChild(label);
+    var body = document.createElement("div");
+    body.className = "message-body";
+    body.innerHTML = html;
+    card.appendChild(body);
+    messagesEl.appendChild(card);
+    scrollToBottom();
+  }
+
   // ---------------------------------------------------------------------------
   // Indicator
   // ---------------------------------------------------------------------------
@@ -798,21 +842,82 @@
   function renderSessionList(sessions) {
     sessionListEl.innerHTML = "";
     if (!sessions || sessions.length === 0) {
-      sessionListEl.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:13px;">No sessions yet</div>';
+      sessionListEl.innerHTML = '<div style="padding:1rem;color:var(--text-secondary);text-align:center">No sessions yet</div>';
       return;
     }
-    sessions.forEach(function(s) {
-      var item = document.createElement("div");
-      item.className = "session-item" + (s.active ? " active" : "");
-      item.setAttribute("role", "option");
-      item.setAttribute("aria-label", s.title || s.id || "Untitled session");
-      item.innerHTML = '<div class="session-item-title">' + escapeHtml(s.title || s.id || "Untitled") + '</div>'
-                     + '<div class="session-item-date">' + escapeHtml(s.date || "") + '</div>';
-      item.addEventListener("click", function() {
-        sendRaw({ type: "switch_session", id: s.id });
-      });
-      sessionListEl.appendChild(item);
+
+    // Separate pinned from unpinned
+    var pinned = sessions.filter(function(s) { return s.pinned; });
+    var unpinned = sessions.filter(function(s) { return !s.pinned; });
+
+    // Render pinned group
+    if (pinned.length > 0) {
+      var pinnedHeader = document.createElement("div");
+      pinnedHeader.className = "session-group-header";
+      pinnedHeader.textContent = "Pinned";
+      sessionListEl.appendChild(pinnedHeader);
+      pinned.forEach(function(s) { sessionListEl.appendChild(makeSessionItem(s)); });
+    }
+
+    // Group unpinned by project
+    var groups = {};
+    var groupOrder = [];
+    unpinned.forEach(function(s) {
+      var proj = s.project || "Unknown";
+      if (!groups[proj]) { groups[proj] = []; groupOrder.push(proj); }
+      groups[proj].push(s);
     });
+
+    groupOrder.forEach(function(proj) {
+      var items = groups[proj];
+      var header = document.createElement("div");
+      header.className = "session-group-header";
+      header.textContent = proj + " (" + items.length + ")";
+      sessionListEl.appendChild(header);
+      items.forEach(function(s) { sessionListEl.appendChild(makeSessionItem(s)); });
+    });
+  }
+
+  function makeSessionItem(s) {
+    var item = document.createElement("div");
+    item.className = "session-item" + (s.active ? " active" : "");
+    item.setAttribute("role", "option");
+    item.setAttribute("aria-label", s.title || s.id || "Untitled session");
+
+    var titleDiv = document.createElement("div");
+    titleDiv.className = "session-item-title";
+    titleDiv.textContent = s.title || s.id || "Untitled";
+    item.appendChild(titleDiv);
+
+    var metaDiv = document.createElement("div");
+    metaDiv.className = "session-item-meta";
+
+    var dateSpan = document.createElement("span");
+    dateSpan.className = "session-item-date";
+    dateSpan.textContent = s.date || "";
+    metaDiv.appendChild(dateSpan);
+
+    // Tag pills
+    if (s.tags && s.tags.length > 0) {
+      s.tags.slice(0, 3).forEach(function(tag) {
+        var pill = document.createElement("span");
+        pill.className = "tag-pill";
+        pill.textContent = "#" + tag;
+        pill.addEventListener("click", function(e) {
+          e.stopPropagation();
+          // Filter by clicking a tag -- populate input
+          var input = document.getElementById("chat-input");
+          if (input) { input.value = "/tag filter " + tag; }
+        });
+        metaDiv.appendChild(pill);
+      });
+    }
+    item.appendChild(metaDiv);
+
+    item.addEventListener("click", function() {
+      sendRaw({ type: "switch_session", id: s.id });
+    });
+    return item;
   }
 
   function sendRaw(obj) {
