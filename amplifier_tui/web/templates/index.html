@@ -7,12 +7,22 @@
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
     <link rel="stylesheet" href="/static/style.css">
     <!-- highlight.js for code syntax highlighting -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" integrity="sha384-wH75j6z1lH97ZOpMOInqhgKzFkAInZPPSPlZpYKYTOqsaizPvhQZmAtLcPKXpLyH" crossorigin="anonymous">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp" crossorigin="anonymous"></script>
+    <script>window.hljs || document.write('<script src="/static/vendor/highlight.min.js"><\/script>')</script>
     <!-- marked.js for markdown rendering -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.1/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.1/marked.min.js" integrity="sha384-3zf4Pen4fXU90jGg3cxmo7BF4dq8HMtF2s07c/Hhd1Fh+Encm6ApPvNm8vrMJbWu" crossorigin="anonymous"></script>
+    <script>window.marked || document.write('<script src="/static/vendor/marked.min.js"><\/script>')</script>
+    <!-- DOMPurify for XSS protection -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.2.4/purify.min.js" integrity="sha384-eEu5CTj3qGvu9PdJuS+YlkNi7d2XxQROAFYOr59zgObtlcux1ae1Il3u7jvdCSWu" crossorigin="anonymous"></script>
+    <script>window.DOMPurify || document.write('<script src="/static/vendor/purify.min.js"><\/script>')</script>
 </head>
 <body>
+    <noscript>
+        <div style="padding:2rem;color:#e0e0e0;background:#1a1a2e;text-align:center;font-family:sans-serif;">
+            Amplifier requires JavaScript to run. Please enable JavaScript and reload.
+        </div>
+    </noscript>
     <div id="app">
         <!-- Header bar -->
         <header id="header">
@@ -33,6 +43,7 @@
 
         <!-- Main content area -->
         <main id="main">
+                <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
             <aside id="sidebar" class="sidebar hidden" role="complementary" aria-label="Session sidebar">
                 <div class="sidebar-header">
                     <h3>Sessions</h3>
@@ -44,12 +55,24 @@
                 </div>
             </aside>
             <div id="chat-area">
-                <div id="messages"></div>
+                <div id="messages" role="log" aria-live="polite" aria-label="Conversation messages" aria-relevant="additions">
+                    <div id="empty-state" class="empty-state">
+                        <div class="empty-state-icon">&#9889;</div>
+                        <h2 class="empty-state-title">Welcome to Amplifier</h2>
+                        <p class="empty-state-text">Type a message below to get started, or press <kbd>Ctrl+K</kbd> to open the command palette.</p>
+                    </div>
+                </div>
                 <div id="streaming-indicator" class="hidden">
                     <div class="typing-dots"><span></span><span></span><span></span></div>
                 </div>
             </div>
         </main>
+
+        <!-- Reconnection banner -->
+        <div id="reconnect-banner" class="reconnect-banner hidden">
+            <span>Connection lost. Attempting to reconnect...</span>
+            <button id="reconnect-btn" class="reconnect-btn">Retry Now</button>
+        </div>
 
         <!-- Input area -->
         <footer id="input-area">
@@ -60,11 +83,12 @@
             <div class="input-wrapper">
                 <textarea
                     id="chat-input"
+                    aria-label="Message input"
                     placeholder="Send a message... (Enter to send, Shift+Enter for newline)"
                     rows="1"
                     autofocus
                 ></textarea>
-                <button id="send-btn" title="Send message">
+                <button id="send-btn" title="Send message" aria-label="Send message">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M22 2L11 13"></path>
                         <path d="M22 2L15 22L11 13L2 9L22 2Z"></path>

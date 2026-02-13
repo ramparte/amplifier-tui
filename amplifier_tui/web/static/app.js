@@ -27,14 +27,16 @@
   const modelEl       = document.getElementById("model-name");
   const tokenEl       = document.getElementById("token-count");
   const indicatorEl   = document.getElementById("streaming-indicator");
-  var sidebarEl = document.getElementById("sidebar");
-  var sidebarToggleEl = document.getElementById("sidebar-toggle");
-  var newSessionBtn = document.getElementById("new-session-btn");
-  var sidebarCloseBtn = document.getElementById("sidebar-close");
-  var sessionListEl = document.getElementById("session-list");
-  var paletteOverlay = document.getElementById("command-palette");
-  var paletteInput = document.getElementById("palette-input");
-  var paletteResults = document.getElementById("palette-results");
+  const sidebarEl = document.getElementById("sidebar");
+  const sidebarToggleEl = document.getElementById("sidebar-toggle");
+  const newSessionBtn = document.getElementById("new-session-btn");
+  const sidebarCloseBtn = document.getElementById("sidebar-close");
+  const sessionListEl = document.getElementById("session-list");
+  const paletteOverlay = document.getElementById("command-palette");
+  const paletteInput = document.getElementById("palette-input");
+  const paletteResults = document.getElementById("palette-results");
+
+  sendBtn.disabled = true;
 
   // ---------------------------------------------------------------------------
   // State
@@ -42,6 +44,11 @@
   let ws = null;
   let currentStreamEl = null;   // element receiving streaming deltas
   let reconnectDelay  = 1000;
+
+  /** Remove all child nodes, cleaning up event listeners. */
+  function clearChildren(el) {
+    while (el.firstChild) el.removeChild(el.firstChild);
+  }
 
   // ---------------------------------------------------------------------------
   // WebSocket lifecycle
@@ -54,6 +61,7 @@
       statusEl.textContent = "Connected";
       statusEl.classList.remove("status-error");
       statusEl.classList.add("status-ok");
+      document.getElementById('reconnect-banner').classList.add('hidden');
       reconnectDelay = 1000;
     };
 
@@ -61,6 +69,7 @@
       statusEl.textContent = "Disconnected";
       statusEl.classList.remove("status-ok");
       statusEl.classList.add("status-error");
+      document.getElementById('reconnect-banner').classList.remove('hidden');
       setTimeout(connect, reconnectDelay);
       reconnectDelay = Math.min(reconnectDelay * 2, 30000);
     };
@@ -86,6 +95,7 @@
     ws.send(JSON.stringify({ type: "message", text: text }));
     inputEl.value = "";
     autoResizeInput();
+    sendBtn.disabled = true;
   }
 
   // ---------------------------------------------------------------------------
@@ -138,7 +148,15 @@
         onUsageUpdate(ev);
         break;
       case "clear":
-        messagesEl.innerHTML = "";
+        if (!confirm("Clear all messages? This cannot be undone.")) return;
+        clearChildren(messagesEl);
+        var emptyDiv = document.createElement('div');
+        emptyDiv.id = 'empty-state';
+        emptyDiv.className = 'empty-state';
+        emptyDiv.innerHTML = '<div class="empty-state-icon">&#9889;</div>'
+          + '<h2 class="empty-state-title">Welcome to Amplifier</h2>'
+          + '<p class="empty-state-text">Type a message below to get started, or press <kbd>Ctrl+K</kbd> to open the command palette.</p>';
+        messagesEl.appendChild(emptyDiv);
         break;
       case "pong":
         break;
@@ -182,8 +200,13 @@
   // Message rendering
   // ---------------------------------------------------------------------------
   function appendMessage(role, text) {
+    var emptyState = document.getElementById('empty-state');
+    if (emptyState) emptyState.style.display = 'none';
     var el = document.createElement("div");
     el.className = "message message-" + role;
+
+    var header = document.createElement("div");
+    header.className = "message-header";
 
     var label = document.createElement("div");
     label.className = "message-label";
@@ -191,7 +214,15 @@
                       : role === "assistant" ? "Assistant"
                       : role === "error" ? "Error"
                       : "System";
-    el.appendChild(label);
+    header.appendChild(label);
+
+    var timeStr = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+    var timeEl = document.createElement('span');
+    timeEl.className = 'message-time';
+    timeEl.textContent = timeStr;
+    header.appendChild(timeEl);
+
+    el.appendChild(header);
 
     var body = document.createElement("div");
     body.className = "message-body";
@@ -209,7 +240,7 @@
 
   function renderMarkdown(text) {
     try {
-      var html = marked.parse(text);
+      var html = (typeof DOMPurify !== 'undefined') ? DOMPurify.sanitize(marked.parse(text), {ADD_ATTR: ['class']}) : escapeHtml(text);
       var tmp = document.createElement("div");
       tmp.innerHTML = html;
       tmp.querySelectorAll("pre code").forEach(function (block) {
@@ -234,24 +265,37 @@
     }
   }
 
+  var _escapeDiv = document.createElement("div");
   function escapeHtml(str) {
-    var div = document.createElement("div");
-    div.textContent = str;
-    return div.innerHTML;
+    _escapeDiv.textContent = str;
+    return _escapeDiv.innerHTML;
   }
 
   // ---------------------------------------------------------------------------
   // Streaming
   // ---------------------------------------------------------------------------
   function onStreamStart(ev) {
+    var emptyState = document.getElementById('empty-state');
+    if (emptyState) emptyState.style.display = 'none';
     var el = document.createElement("div");
     var blockClass = ev.block_type === "thinking" ? "message-thinking" : "message-assistant";
     el.className = "message " + blockClass;
 
+    var header = document.createElement("div");
+    header.className = "message-header";
+
     var label = document.createElement("div");
     label.className = "message-label";
     label.textContent = ev.block_type === "thinking" ? "Thinking" : "Assistant";
-    el.appendChild(label);
+    header.appendChild(label);
+
+    var timeStr = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+    var timeEl = document.createElement('span');
+    timeEl.className = 'message-time';
+    timeEl.textContent = timeStr;
+    header.appendChild(timeEl);
+
+    el.appendChild(header);
 
     var body = document.createElement("div");
     body.className = "message-body streaming";
@@ -628,9 +672,9 @@
   // ---------------------------------------------------------------------------
   // Command history (up/down arrow in input)
   // ---------------------------------------------------------------------------
-  var cmdHistory = [];
-  var cmdHistoryIdx = -1;
-  var cmdDraft = "";
+  const cmdHistory = [];
+  let cmdHistoryIdx = -1;
+  let cmdDraft = "";
 
   function pushHistory(text) {
     if (text.trim() && (cmdHistory.length === 0 || cmdHistory[cmdHistory.length - 1] !== text)) {
@@ -643,7 +687,7 @@
   // ---------------------------------------------------------------------------
   // Slash-command hints popup
   // ---------------------------------------------------------------------------
-  var SLASH_COMMANDS = [
+  const SLASH_COMMANDS = [
     { cmd: '/help',      desc: 'Show help information' },
     { cmd: '/stats',     desc: 'Session statistics' },
     { cmd: '/tokens',    desc: 'Token usage details' },
@@ -685,7 +729,7 @@
   // ---------------------------------------------------------------------------
   // Slash-command completion
   // ---------------------------------------------------------------------------
-  var knownCommands = [
+  const knownCommands = [
     "/help", "/git", "/diff", "/tokens", "/agents", "/recipe", "/tools",
     "/compare", "/branch", "/branches", "/replay", "/dashboard", "/watch",
     "/plugins", "/shell", "/theme", "/stats", "/info", "/context", "/system",
@@ -760,9 +804,6 @@
       if (inputEl.value) {
         inputEl.value = "";
         autoResizeInput();
-      } else if (currentStreamEl) {
-        // Cancel streaming (TODO: send cancel event)
-        appendMessage("system", "Cancel not yet implemented");
       }
       return;
     }
@@ -784,7 +825,10 @@
     sidebarEl.classList.toggle("hidden");
     // Fetch session list when opening
     if (!sidebarEl.classList.contains("hidden")) {
+      document.getElementById('sidebar-backdrop').classList.add('active');
       fetchSessionList();
+    } else {
+      document.getElementById('sidebar-backdrop').classList.remove('active');
     }
   }
 
@@ -796,7 +840,7 @@
   }
 
   function renderSessionList(sessions) {
-    sessionListEl.innerHTML = "";
+    clearChildren(sessionListEl);
     if (!sessions || sessions.length === 0) {
       sessionListEl.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:13px;">No sessions yet</div>';
       return;
@@ -828,8 +872,13 @@
   });
   if (sidebarCloseBtn) sidebarCloseBtn.addEventListener("click", toggleSidebar);
 
+  document.getElementById('sidebar-backdrop').addEventListener('click', function() {
+    document.getElementById('sidebar').classList.add('hidden');
+    document.getElementById('sidebar-backdrop').classList.remove('active');
+  });
+
   // ── Command Palette ──
-  var commandPalette = [
+  const commandPalette = [
     { name: "New Session",     cmd: "/new",        keys: "",              cat: "session",  desc: "Start a new chat session" },
     { name: "Clear Chat",      cmd: "/clear",      keys: "",              cat: "session",  desc: "Clear the chat display" },
     { name: "Sessions",        cmd: "/sessions",   keys: "",              cat: "session",  desc: "List all sessions" },
@@ -851,7 +900,7 @@
     { name: "Toggle Sidebar",  cmd: null,          keys: "",              cat: "ui",       desc: "Show/hide session sidebar", action: "toggle-sidebar" },
   ];
 
-  var paletteSelectedIdx = -1;
+  let paletteSelectedIdx = -1;
 
   function openPalette() {
     paletteOverlay.classList.remove("hidden");
@@ -877,7 +926,7 @@
           || c.cat.toLowerCase().indexOf(q) !== -1;
     });
 
-    paletteResults.innerHTML = "";
+    clearChildren(paletteResults);
     if (filtered.length === 0) {
       paletteResults.innerHTML = '<div style="padding:12px 16px;color:var(--text-muted);font-size:13px;">No matching commands</div>';
       return;
@@ -979,6 +1028,8 @@
       } else if (e.key === "Escape") {
         e.preventDefault();
         closePalette();
+      } else if (e.key === "Tab") {
+        e.preventDefault(); // Trap focus inside palette
       }
     });
   }
@@ -989,6 +1040,11 @@
       if (e.target === paletteOverlay) closePalette();
     });
   }
+
+  document.getElementById('reconnect-btn').addEventListener('click', function() {
+    if (ws) { try { ws.close(); } catch(_) {} }
+    connect();
+  });
 
   // ---------------------------------------------------------------------------
   // Global keyboard shortcuts (web-safe, minimal — palette handles the rest)
@@ -1045,6 +1101,7 @@
   }
   inputEl.addEventListener("input", function() {
     autoResizeInput();
+    sendBtn.disabled = !inputEl.value.trim();
     // Dismiss slash hints when input no longer starts with "/"
     if (!inputEl.value.startsWith("/")) {
       hideSlashHints();
