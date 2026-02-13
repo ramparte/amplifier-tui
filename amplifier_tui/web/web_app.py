@@ -19,6 +19,7 @@ from amplifier_tui.core.commands import (
     GitCommandsMixin,
     PersistenceCommandsMixin,
     PluginCommandsMixin,
+    ProjectorCommandsMixin,
     RecipeCommandsMixin,
     ReplayCommandsMixin,
     ShellCommandsMixin,
@@ -88,6 +89,7 @@ class WebApp(
     FileCommandsMixin,
     PersistenceCommandsMixin,
     PluginCommandsMixin,
+    ProjectorCommandsMixin,
     ReplayCommandsMixin,
     ShellCommandsMixin,
     ThemeCommandsMixin,
@@ -1049,6 +1051,7 @@ class WebApp(
             "/pin-session": lambda: self._cmd_pin_session(args),
             "/clipboard": lambda: self._cmd_clipboard(args),
             "/clip": lambda: self._cmd_clipboard(args),
+            "/projector": lambda: self._cmd_projector(args),
             # Session management
             "/new": lambda: self._handle_new_session(),
             "/clear": lambda: self._send_event({"type": "clear"}),

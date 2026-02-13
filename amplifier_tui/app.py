@@ -74,6 +74,7 @@ from .widgets import (
     PinnedPanel,
     PinnedPanelHeader,
     PinnedPanelItem,
+    ProjectPanel,
     ProcessingIndicator,
     ShortcutOverlay,
     SuggestionBar,
@@ -109,6 +110,7 @@ from .commands.replay_cmds import ReplayCommandsMixin
 from .commands.plugin_cmds import PluginCommandsMixin
 from .commands.dashboard_cmds import DashboardCommandsMixin
 from .commands.project_cmds import ProjectCommandsMixin
+from .core.commands.projector_cmds import ProjectorCommandsMixin
 from .commands.shell_cmds import ShellCommandsMixin
 from .commands.terminal_cmds import TerminalCommandsMixin
 from .commands.monitor_cmds import MonitorCommandsMixin
@@ -134,6 +136,7 @@ from .persistence import (
     TagStore,
     TemplateStore,
 )
+
 from .core.features.auto_tagger import (
     AutoTagger,
     AutoTagState,
@@ -151,6 +154,7 @@ class AmplifierTuiApp(
     ShellCommandsMixin,
     DashboardCommandsMixin,
     ProjectCommandsMixin,
+    ProjectorCommandsMixin,
     ReplayCommandsMixin,
     CompareCommandsMixin,
     BranchCommandsMixin,
@@ -299,6 +303,7 @@ class AmplifierTuiApp(
         Binding("alt+0", "switch_tab(0)", "Last Tab", show=False),
         Binding("f2", "rename_tab", "Rename Tab", show=False),
         Binding("alt+m", "toggle_multiline", "Multiline", show=False),
+        Binding("ctrl+p", "toggle_project_panel", "Projects", show=False),
         Binding("ctrl+q", "quit", "Quit", show=True),
     ]
 
@@ -612,6 +617,7 @@ class AmplifierTuiApp(
                     yield Static("", id="status-model")
             yield TodoPanel(id="todo-panel")
             yield AgentTreePanel(id="agent-tree-panel")
+            yield ProjectPanel(id="project-panel")
 
     async def on_mount(self) -> None:
         # Register all built-in color themes
@@ -2539,9 +2545,7 @@ class AmplifierTuiApp(
                 parts = project.split("/")
                 short = "/".join(parts[-2:]) if len(parts) > 2 else project
                 count = sum(1 for x in unpinned if x["project"] == project)
-                group_node = tree.root.add(
-                    f"{short} [dim]({count})[/dim]", expand=True
-                )
+                group_node = tree.root.add(f"{short} [dim]({count})[/dim]", expand=True)
 
             sid = s["session_id"]
             session_tags = all_tags.get(sid, [])
@@ -3210,6 +3214,18 @@ class AmplifierTuiApp(
         except NoMatches:
             logger.debug("Chat input not found for focus", exc_info=True)
 
+    def action_toggle_project_panel(self) -> None:
+        """Toggle the Projector project panel."""
+        from amplifier_tui.widgets.project_panel import ProjectPanel
+
+        try:
+            panel = self.query_one("#project-panel", ProjectPanel)
+            panel.visible = not panel.visible
+            if panel.visible:
+                self._projector_refresh_panel()
+        except Exception:
+            logger.debug("Failed to toggle project panel", exc_info=True)
+
     def action_toggle_split_focus(self) -> None:
         """Switch focus between chat input, chat view, and split panel (Ctrl+T)."""
         if not self.has_class("split-mode"):
@@ -3641,6 +3657,7 @@ class AmplifierTuiApp(
             "/tag": lambda: self._cmd_tag(args),
             "/tags": lambda: self._cmd_tag("list-all"),
             "/project": lambda: self._cmd_project(args),
+            "/projector": lambda: self._cmd_projector(args),
             "/projects": lambda: self._cmd_project(args),
             "/clipboard": lambda: self._cmd_clipboard(args),
             "/clip": lambda: self._cmd_clipboard(args),
@@ -3742,6 +3759,8 @@ class AmplifierTuiApp(
             "  /plugins      List loaded plugins (/plugins reload, /plugins help)\n"
             "  /prefs        Show preferences\n"
             "  /progress     Toggle detailed progress labels (/progress on, /progress off)\n"
+            "  /project [ask|search]     Project intelligence (ask, search across sessions)\n"
+            "  /projector [subcmd]       Projector panel (projects, tasks, strategies, status, outcomes)\n"
             "  /quit         Quit\n"
             "  /recipe       Recipe pipeline view (/recipe status|history|clear)\n"
             "  /redo         Alias for /retry\n"

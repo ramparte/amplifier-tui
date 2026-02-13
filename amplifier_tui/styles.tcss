@@ -978,3 +978,4 @@ FindBar {
 .focus-mode FindBar {
     display: none;
 }
+
