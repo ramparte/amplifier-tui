@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
+from .conversation import ConversationState
 from .features.agent_tracker import is_delegate_tool, make_delegate_key
 from .session_manager import SessionManager
 
@@ -26,58 +27,78 @@ class SharedAppBase:
         # -- Session engine --
         self.session_manager: SessionManager | None = None
 
-        # -- Processing state (global, not per-conversation) --
-        self.is_processing: bool = False
+        # -- App-level state (NOT per-conversation) --
         self._amplifier_ready: bool = False
         self._amplifier_available: bool = False
         self._auto_mode: str = "full"
-        self._queued_message: str | None = None
-        self._got_stream_content: bool = False
-
-        # -- Streaming state (reset per message send) --
-        self._stream_accumulated_text: str = ""
-        self._streaming_cancelled: bool = False
-        self._tool_count_this_turn: int = 0
 
         # -- Active mode (per-conversation, but also on self for convenience) --
         self._active_mode: str | None = None
 
+    # --- Multi-conversation helpers ---
+
+    def _all_conversations(self) -> list:
+        """Return all active ConversationState objects.
+        TUI returns: [tab.conversation for tab in self._tabs]
+        Web returns: [self._conversation]
+        """
+        raise NotImplementedError
+
+    @property
+    def is_any_processing(self) -> bool:
+        """True if ANY conversation is currently processing."""
+        return any(c.is_processing for c in self._all_conversations())
+
     # --- Abstract display methods (subclasses MUST implement) ---
 
-    def _add_system_message(self, text: str, **kwargs) -> None:  # type: ignore[no-untyped-def]
+    def _add_system_message(
+        self, text: str, *, conversation_id: str = "", **kwargs
+    ) -> None:  # type: ignore[no-untyped-def]
         raise NotImplementedError
 
-    def _add_user_message(self, text: str, **kwargs) -> None:  # type: ignore[no-untyped-def]
+    def _add_user_message(
+        self, text: str, *, conversation_id: str = "", **kwargs
+    ) -> None:  # type: ignore[no-untyped-def]
         raise NotImplementedError
 
-    def _add_assistant_message(self, text: str, **kwargs) -> None:  # type: ignore[no-untyped-def]
+    def _add_assistant_message(
+        self, text: str, *, conversation_id: str = "", **kwargs
+    ) -> None:  # type: ignore[no-untyped-def]
         raise NotImplementedError
 
-    def _show_error(self, text: str) -> None:
+    def _show_error(self, text: str, *, conversation_id: str = "") -> None:
         raise NotImplementedError
 
-    def _update_status(self, text: str) -> None:
+    def _update_status(self, text: str, *, conversation_id: str = "") -> None:
         raise NotImplementedError
 
-    def _start_processing(self, label: str = "Thinking") -> None:
+    def _start_processing(
+        self, label: str = "Thinking", *, conversation_id: str = ""
+    ) -> None:
         raise NotImplementedError
 
-    def _finish_processing(self) -> None:
+    def _finish_processing(self, *, conversation_id: str = "") -> None:
         raise NotImplementedError
 
     # --- Abstract streaming display methods (called from BACKGROUND THREAD) ---
     # Subclasses must handle thread-safety (e.g., call_from_thread for TUI).
 
-    def _on_stream_block_start(self, block_type: str) -> None:
+    def _on_stream_block_start(self, conversation_id: str, block_type: str) -> None:
         """A streaming content block has started (text or thinking)."""
         raise NotImplementedError
 
-    def _on_stream_block_delta(self, block_type: str, accumulated_text: str) -> None:
+    def _on_stream_block_delta(
+        self, conversation_id: str, block_type: str, accumulated_text: str
+    ) -> None:
         """Incremental streaming text update (throttled, provides full accumulated text)."""
         raise NotImplementedError
 
     def _on_stream_block_end(
-        self, block_type: str, final_text: str, had_block_start: bool
+        self,
+        conversation_id: str,
+        block_type: str,
+        final_text: str,
+        had_block_start: bool,
     ) -> None:
         """A streaming content block has ended with final complete text.
 
@@ -86,36 +107,46 @@ class SharedAppBase:
         """
         raise NotImplementedError
 
-    def _on_stream_tool_start(self, name: str, tool_input: dict) -> None:  # type: ignore[type-arg]
+    def _on_stream_tool_start(
+        self, conversation_id: str, name: str, tool_input: dict
+    ) -> None:  # type: ignore[type-arg]
         """A tool call is starting."""
         raise NotImplementedError
 
-    def _on_stream_tool_end(self, name: str, tool_input: dict, result: str) -> None:  # type: ignore[type-arg]
+    def _on_stream_tool_end(
+        self, conversation_id: str, name: str, tool_input: dict, result: str
+    ) -> None:  # type: ignore[type-arg]
         """A tool call has completed."""
         raise NotImplementedError
 
-    def _on_stream_usage_update(self) -> None:
+    def _on_stream_usage_update(self, conversation_id: str) -> None:
         """Token usage statistics have been updated on session_manager."""
         raise NotImplementedError
 
     # --- Streaming callback wiring ---
 
-    def _wire_streaming_callbacks(self) -> None:
-        """Wire session_manager streaming callbacks with shared state tracking.
+    def _wire_streaming_callbacks(
+        self,
+        conversation_id: str,
+        conversation: ConversationState,
+    ) -> None:
+        """Wire streaming callbacks to a specific SessionHandle and ConversationState.
 
-        Called before each message send.  Handles:
-        - Accumulated text tracking
-        - Tool count tracking
-        - Tool log updates
-        - Agent tracker updates
-        - Recipe tracker updates
-        - Delegates display to abstract ``_on_stream_*`` methods
+        Called before each message send. Creates closures that capture both the
+        conversation_id and the ConversationState, so streaming events from
+        concurrent sessions route to the correct conversation's state.
 
-        Closures run on background thread.  Abstract methods are called from
+        Closures run on background thread. Abstract methods are called from
         that thread -- subclasses handle thread-safety.
         """
         if self.session_manager is None:
             return
+
+        handle = self.session_manager.get_handle(conversation_id)
+        if handle is None:
+            return
+
+        conv = conversation  # alias for closures
 
         # Per-turn state (reset each message send)
         accumulated = {"text": ""}
@@ -126,32 +157,29 @@ class SharedAppBase:
             accumulated["text"] = ""
             last_update["t"] = 0.0
             block_started["v"] = True
-            self._on_stream_block_start(block_type)
+            self._on_stream_block_start(conversation_id, block_type)
 
         def on_block_delta(block_type: str, delta: str) -> None:
-            if self._streaming_cancelled:
+            if conv.streaming_cancelled:
                 return
             accumulated["text"] += delta
-            # Keep app-level accumulator in sync for cancel-recovery
-            self._stream_accumulated_text = accumulated["text"]
+            conv.stream_accumulated_text = accumulated["text"]
             now = time.monotonic()
-            if now - last_update["t"] >= 0.05:  # Throttle: 50ms minimum
+            if now - last_update["t"] >= 0.05:
                 last_update["t"] = now
                 snapshot = accumulated["text"]
-                self._on_stream_block_delta(block_type, snapshot)
+                self._on_stream_block_delta(conversation_id, block_type, snapshot)
 
         def on_block_end(block_type: str, text: str) -> None:
-            self._got_stream_content = True
+            conv.got_stream_content = True
             had_start = block_started["v"]
             if had_start:
-                # Streaming widget exists - finalize it with complete text
                 block_started["v"] = False
                 accumulated["text"] = ""
-            self._on_stream_block_end(block_type, text, had_start)
+            self._on_stream_block_end(conversation_id, block_type, text, had_start)
 
-        def on_tool_start(name: str, tool_input: dict) -> None:  # type: ignore[type-arg]
-            # Shared state: increment tool counter
-            self._tool_count_this_turn += 1
+        def on_tool_start(name: str, tool_input: dict) -> None:
+            conv.tool_count_this_turn += 1
 
             # Live tool introspection log
             tool_log = getattr(self, "_tool_log", None)
@@ -186,16 +214,14 @@ class SharedAppBase:
                             recipe_name, [], source_file=recipe_path
                         )
 
-            self._on_stream_tool_start(name, tool_input)
+            self._on_stream_tool_start(conversation_id, name, tool_input)
 
-        def on_tool_end(name: str, tool_input: dict, result: str) -> None:  # type: ignore[type-arg]
-            # Live tool introspection log
+        def on_tool_end(name: str, tool_input: dict, result: str) -> None:
             _tool_status = "failed" if result.startswith("Error") else "completed"
             tool_log = getattr(self, "_tool_log", None)
             if tool_log is not None:
                 tool_log.on_tool_end(name, status=_tool_status)
 
-            # Complete agent delegation tracking
             if is_delegate_tool(name) and isinstance(tool_input, dict):
                 key = make_delegate_key(tool_input)
                 if key:
@@ -208,7 +234,6 @@ class SharedAppBase:
                             status=status,
                         )
 
-            # Complete recipe tracking
             if name == "recipes" and isinstance(tool_input, dict):
                 op = tool_input.get("operation", "")
                 if op == "execute":
@@ -219,15 +244,15 @@ class SharedAppBase:
                         )
                         recipe_tracker.on_recipe_complete(status=r_status)
 
-            self._on_stream_tool_end(name, tool_input, result)
+            self._on_stream_tool_end(conversation_id, name, tool_input, result)
 
         def on_usage() -> None:
-            self._on_stream_usage_update()
+            self._on_stream_usage_update(conversation_id)
 
-        # Wire to session manager
-        self.session_manager.on_content_block_start = on_block_start
-        self.session_manager.on_content_block_delta = on_block_delta
-        self.session_manager.on_content_block_end = on_block_end
-        self.session_manager.on_tool_pre = on_tool_start
-        self.session_manager.on_tool_post = on_tool_end
-        self.session_manager.on_usage_update = on_usage
+        # Wire to the SessionHandle (not session_manager)
+        handle.on_content_block_start = on_block_start
+        handle.on_content_block_delta = on_block_delta
+        handle.on_content_block_end = on_block_end
+        handle.on_tool_pre = on_tool_start
+        handle.on_tool_post = on_tool_end
+        handle.on_usage_update = on_usage

@@ -21,6 +21,7 @@ from .messages import (
 from .panels import PinnedPanel, PinnedPanelHeader, PinnedPanelItem
 from .todo_panel import TodoPanel
 from .agent_tree_panel import AgentTreePanel
+from .project_panel import ProjectPanel
 from .screens import HistorySearchScreen, ShortcutOverlay
 from .tabs import TabBar, TabButton
 
@@ -37,6 +38,7 @@ __all__ = [
     "MessageMeta",
     "NoteMessage",
     "AgentTreePanel",
+    "ProjectPanel",
     "PinnedPanel",
     "PinnedPanelHeader",
     "PinnedPanelItem",

@@ -15,6 +15,7 @@ from .shell_cmds import ShellCommandsMixin
 from .theme_cmds import ThemeCommandsMixin
 from .token_cmds import TokenCommandsMixin
 from .tool_cmds import ToolCommandsMixin
+from .project_cmds import ProjectCommandsMixin
 from .watch_cmds import WatchCommandsMixin
 
 __all__ = [
@@ -33,5 +34,6 @@ __all__ = [
     "ThemeCommandsMixin",
     "TokenCommandsMixin",
     "ToolCommandsMixin",
+    "ProjectCommandsMixin",
     "WatchCommandsMixin",
 ]

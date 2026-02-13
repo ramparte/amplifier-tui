@@ -71,6 +71,10 @@ from .plugin_loader import PluginLoader, LoadedPlugin
 from .dashboard_stats import DashboardStats, DashboardData, SessionRecord
 from .session_scanner import SessionScanner, MonitoredSession, SessionState
 from .session_summarizer import SessionSummarizer, make_anthropic_summarizer
+from .auto_tagger import AutoTagger, AutoTagState, make_anthropic_auto_tagger
+from .project_aggregator import ProjectAggregator, ProjectInfo
+from .project_intelligence import ProjectIntelligence, make_anthropic_ask_fn
+from .project_search import ProjectSearch, SearchResult
 
 __all__ = [
     # diff_view
@@ -147,4 +151,17 @@ __all__ = [
     "SessionState",
     "SessionSummarizer",
     "make_anthropic_summarizer",
+    # auto-tagger
+    "AutoTagger",
+    "AutoTagState",
+    "make_anthropic_auto_tagger",
+    # project aggregator
+    "ProjectAggregator",
+    "ProjectInfo",
+    # project intelligence
+    "ProjectIntelligence",
+    "make_anthropic_ask_fn",
+    # project search
+    "ProjectSearch",
+    "SearchResult",
 ]

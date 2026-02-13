@@ -1071,6 +1071,9 @@ class PersistenceCommandsMixin:
             tag = rest.strip().lstrip("#").lower()
             if self._tag_store.remove_tag(sid, tag):
                 self._add_system_message(f"Removed tag #{tag}")
+                # Notify auto-tagger so it doesn't re-generate this tag
+                if hasattr(self, "_auto_tagger") and self._auto_tagger is not None:
+                    self._auto_tagger.record_user_removal(sid, tag)
             else:
                 self._add_system_message(f"Tag #{tag} not found on this session")
             return

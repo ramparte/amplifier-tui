@@ -12,6 +12,7 @@ from .session_names import SessionNameStore
 from .snippets import SnippetStore
 from .tags import TagStore
 from .templates import TemplateStore
+from .projector_links import ProjectorLinkStore
 
 __all__ = [
     "AliasStore",
@@ -21,6 +22,7 @@ __all__ = [
     "MessagePinStore",
     "NoteStore",
     "PinnedSessionStore",
+    "ProjectorLinkStore",
     "RefStore",
     "SessionNameStore",
     "SnippetStore",

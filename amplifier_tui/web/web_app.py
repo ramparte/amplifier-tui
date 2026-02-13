@@ -19,6 +19,8 @@ from amplifier_tui.core.commands import (
     GitCommandsMixin,
     PersistenceCommandsMixin,
     PluginCommandsMixin,
+    ProjectCommandsMixin,
+    ProjectorCommandsMixin,
     RecipeCommandsMixin,
     ReplayCommandsMixin,
     ShellCommandsMixin,
@@ -43,6 +45,7 @@ from amplifier_tui.core.persistence import (
     TemplateStore,
 )
 from amplifier_tui.core.preferences import load_preferences
+from amplifier_tui.core.conversation import ConversationState
 from amplifier_tui.core.session_manager import SessionManager
 
 logger = logging.getLogger(__name__)
@@ -87,6 +90,8 @@ class WebApp(
     FileCommandsMixin,
     PersistenceCommandsMixin,
     PluginCommandsMixin,
+    ProjectCommandsMixin,
+    ProjectorCommandsMixin,
     ReplayCommandsMixin,
     ShellCommandsMixin,
     ThemeCommandsMixin,
@@ -100,6 +105,7 @@ class WebApp(
         self._ws = websocket
         self._loop: asyncio.AbstractEventLoop | None = None
         self.session_manager = SessionManager()
+        self._conversation = ConversationState()
 
         # ==============================================================
         # Category 1: Data Attributes
@@ -184,9 +190,7 @@ class WebApp(
         self._snippet_store = SnippetStore(_amp_home / "tui-snippets.json")
         self._template_store = TemplateStore(_amp_home / "tui-templates.json")
         self._tag_store = TagStore(_amp_home / "tui-session-tags.json")
-        self._clipboard_store = ClipboardStore(
-            _amp_home / "tui-clipboard-ring.json"
-        )
+        self._clipboard_store = ClipboardStore(_amp_home / "tui-clipboard-ring.json")
 
         # ==============================================================
         # Category 3: Feature Objects
@@ -220,6 +224,10 @@ class WebApp(
         self._file_watcher = _WebFileWatcher()
         self._watched_files = self._file_watcher.watched_files
 
+    def _all_conversations(self) -> list:
+        """Return all conversations (web has exactly one)."""
+        return [self._conversation]
+
     # ------------------------------------------------------------------
     # Thread-safe WebSocket send
     # ------------------------------------------------------------------
@@ -241,76 +249,104 @@ class WebApp(
     # Abstract display methods (SharedAppBase)
     # ------------------------------------------------------------------
 
-    def _add_system_message(self, text: str, **kwargs: Any) -> None:  # type: ignore[no-untyped-def]
+    def _add_system_message(
+        self, text: str, *, conversation_id: str = "", **kwargs: Any
+    ) -> None:  # type: ignore[no-untyped-def]
         self._send_event({"type": "system_message", "text": text})
 
-    def _add_user_message(self, text: str, **kwargs: Any) -> None:  # type: ignore[no-untyped-def]
+    def _add_user_message(
+        self, text: str, *, conversation_id: str = "", **kwargs: Any
+    ) -> None:  # type: ignore[no-untyped-def]
         self._send_event({"type": "user_message", "text": text})
 
-    def _add_assistant_message(self, text: str, **kwargs: Any) -> None:  # type: ignore[no-untyped-def]
+    def _add_assistant_message(
+        self, text: str, *, conversation_id: str = "", **kwargs: Any
+    ) -> None:  # type: ignore[no-untyped-def]
         self._send_event({"type": "assistant_message", "text": text})
 
-    def _show_error(self, text: str) -> None:
+    def _show_error(self, text: str, *, conversation_id: str = "") -> None:
         self._send_event({"type": "error", "text": text})
 
-    def _update_status(self, text: str) -> None:
+    def _update_status(self, text: str, *, conversation_id: str = "") -> None:
         self._send_event({"type": "status", "text": text})
 
-    def _start_processing(self, label: str = "Thinking") -> None:
-        self.is_processing = True
+    def _start_processing(
+        self, label: str = "Thinking", *, conversation_id: str = ""
+    ) -> None:
+        self._conversation.is_processing = True
         self._send_event({"type": "processing_start", "label": label})
 
-    def _finish_processing(self) -> None:
-        self.is_processing = False
+    def _finish_processing(self, *, conversation_id: str = "") -> None:
+        self._conversation.is_processing = False
         self._send_event({"type": "processing_end"})
 
     # ------------------------------------------------------------------
     # Abstract streaming methods (called from BACKGROUND THREAD)
     # ------------------------------------------------------------------
 
-    def _on_stream_block_start(self, block_type: str) -> None:
+    def _on_stream_block_start(self, conversation_id: str, block_type: str) -> None:
         self._send_event({"type": "stream_start", "block_type": block_type})
 
-    def _on_stream_block_delta(self, block_type: str, accumulated_text: str) -> None:
-        self._send_event({
-            "type": "stream_delta",
-            "block_type": block_type,
-            "text": accumulated_text,
-        })
+    def _on_stream_block_delta(
+        self, conversation_id: str, block_type: str, accumulated_text: str
+    ) -> None:
+        self._send_event(
+            {
+                "type": "stream_delta",
+                "block_type": block_type,
+                "text": accumulated_text,
+            }
+        )
 
     def _on_stream_block_end(
-        self, block_type: str, final_text: str, had_block_start: bool
+        self,
+        conversation_id: str,
+        block_type: str,
+        final_text: str,
+        had_block_start: bool,
     ) -> None:
-        self._send_event({
-            "type": "stream_end",
-            "block_type": block_type,
-            "text": final_text,
-        })
+        self._send_event(
+            {
+                "type": "stream_end",
+                "block_type": block_type,
+                "text": final_text,
+            }
+        )
 
-    def _on_stream_tool_start(self, name: str, tool_input: dict) -> None:  # type: ignore[type-arg]
-        self._send_event({
-            "type": "tool_start",
-            "tool_name": name,
-            "tool_input": tool_input,
-        })
+    def _on_stream_tool_start(
+        self, conversation_id: str, name: str, tool_input: dict
+    ) -> None:  # type: ignore[type-arg]
+        self._send_event(
+            {
+                "type": "tool_start",
+                "tool_name": name,
+                "tool_input": tool_input,
+            }
+        )
 
-    def _on_stream_tool_end(self, name: str, tool_input: dict, result: str) -> None:  # type: ignore[type-arg]
-        self._send_event({
-            "type": "tool_end",
-            "tool_name": name,
-            "tool_input": tool_input,
-            "result": result,
-        })
+    def _on_stream_tool_end(
+        self, conversation_id: str, name: str, tool_input: dict, result: str
+    ) -> None:  # type: ignore[type-arg]
+        self._send_event(
+            {
+                "type": "tool_end",
+                "tool_name": name,
+                "tool_input": tool_input,
+                "result": result,
+            }
+        )
 
-    def _on_stream_usage_update(self) -> None:
+    def _on_stream_usage_update(self, conversation_id: str) -> None:
         sm = self.session_manager
         if sm:
-            self._send_event({
-                "type": "usage_update",
-                "input_tokens": sm.total_input_tokens,
-                "output_tokens": sm.total_output_tokens,
-                "model": sm.model_name or "",
-            })
+            self._send_event(
+                {
+                    "type": "usage_update",
+                    "input_tokens": sm.total_input_tokens,
+                    "output_tokens": sm.total_output_tokens,
+                    "model": sm.model_name or "",
+                }
+            )
 
     # ==================================================================
     # Category 4: Utility Methods
@@ -509,7 +545,9 @@ class WebApp(
         """Textual query_one - not available in web."""
         raise RuntimeError(f"query_one('{selector}') not available in web interface")
 
-    def set_interval(self, interval: float, callback: Any, *args: Any, **kwargs: Any) -> None:  # type: ignore[return]
+    def set_interval(
+        self, interval: float, callback: Any, *args: Any, **kwargs: Any
+    ) -> None:  # type: ignore[return]
         """Textual set_interval - return None (timer not needed for web)."""
         return None  # type: ignore[return-value]
 
@@ -558,8 +596,84 @@ class WebApp(
     def _clear_welcome(self) -> None:
         pass
 
-    def _populate_session_list(self) -> None:
-        pass
+    def _populate_session_list(
+        self, sessions: list[dict[str, Any]] | None = None
+    ) -> None:
+        """Push updated session list to the web client over WebSocket."""
+        if sessions is None:
+            sessions = self._session_list_data
+        if not sessions:
+            return
+
+        all_tags = self._tag_store.load()
+        pinned_ids = self._pinned_sessions
+
+        items = []
+        for s in sessions:
+            sid = s.get("session_id", "")
+            items.append(
+                {
+                    "id": sid,
+                    "title": s.get("name") or s.get("description") or sid[:12],
+                    "date": s.get("date_str", ""),
+                    "active": sid == (self.session_manager.session_id or ""),
+                    "project": s.get("project", ""),
+                    "project_path": s.get("project_path", ""),
+                    "tags": all_tags.get(sid, []),
+                    "pinned": sid in pinned_ids,
+                }
+            )
+        self._send_event({"type": "session_list", "sessions": items})
+
+    def _cmd_project(self, args: str) -> None:
+        """Override to send web-specific project summary cards."""
+        if not args.strip():
+            from amplifier_tui.core.features.project_aggregator import ProjectAggregator
+
+            sessions = self._session_list_data
+            if not sessions:
+                self._add_system_message("No sessions loaded.")
+                return
+            all_tags = self._tag_store.load()
+            projects = ProjectAggregator.aggregate(sessions, all_tags)
+
+            # Send structured card event
+            project_list = []
+            for p in sorted(
+                projects.values(), key=lambda x: x.latest_mtime, reverse=True
+            ):
+                project_list.append(
+                    {
+                        "name": p.name,
+                        "session_count": p.session_count,
+                        "tags": p.top_tags[:5],
+                        "last_active": p.latest_date_str,
+                    }
+                )
+            self._send_event({"type": "project_summary", "projects": project_list})
+            return
+
+        # Delegate all subcommands (ask, search, detail, etc.) to the mixin
+        super()._cmd_project(args)
+
+    def _cmd_sort_web(self, args: str) -> None:
+        """Handle /sort in web context (no Textual Tree dependency)."""
+        mode = args.strip().lower() if args.strip() else ""
+        valid_modes = ("date", "name", "project", "tag")
+        if mode not in valid_modes:
+            self._add_system_message(
+                f"Sort modes: {', '.join(valid_modes)}\n"
+                f"Current: {getattr(self._prefs, 'session_sort', 'date')}\n"
+                "Usage: /sort <mode>"
+            )
+            return
+        self._prefs.session_sort = mode  # type: ignore[attr-defined]
+        self._prefs.save()
+        self._add_system_message(f"Sort mode set to: {mode}")
+        # Re-fetch and push session list
+        sessions = SessionManager.list_all_sessions(limit=50)
+        self._session_list_data = sessions
+        self._populate_session_list(sessions)
 
     def _play_bell(self) -> None:
         pass
@@ -652,6 +766,21 @@ class WebApp(
         else:
             self._show_error("No session manager available")
 
+    # Web-only: /resume handler (not in a mixin)
+    def _cmd_resume(self, args: str) -> None:
+        """Resume a previous session by ID."""
+        session_id = args.strip()
+        if not session_id:
+            self._add_system_message(
+                "Usage: /resume <session_id>\n"
+                "Use /sessions or the sidebar to find session IDs."
+            )
+            return
+        if self._loop is None:
+            self._show_error("Event loop not available")
+            return
+        asyncio.run_coroutine_threadsafe(self.switch_to_session(session_id), self._loop)
+
     # Web-only: /sessions handler (not in a mixin)
     def _cmd_sessions(self, args: str) -> None:
         """List recent sessions."""
@@ -659,6 +788,261 @@ class WebApp(
             "Session listing is available in the sidebar. "
             "Use /new to start a new session."
         )
+
+    # ------------------------------------------------------------------
+    # Web-enhanced commands: structured events instead of text
+    # ------------------------------------------------------------------
+
+    def _cmd_stats(self, text: str = "") -> None:
+        """Web-enhanced stats – sends a structured ``stats_panel`` event."""
+        # Subcommands (tools, tokens, time) fall back to the mixin's text output
+        if text.strip():
+            super()._cmd_stats(text)  # type: ignore[misc]
+            return
+        try:
+            duration_secs = time.monotonic() - self._session_start_time
+            mins, secs = divmod(int(duration_secs), 60)
+            hours, mins = divmod(mins, 60)
+            if hours:
+                duration = f"{hours}h {mins}m {secs}s"
+            elif mins:
+                duration = f"{mins}m {secs}s"
+            else:
+                duration = f"{secs}s"
+
+            sm = self.session_manager
+            input_tokens = sm.total_input_tokens if sm else 0
+            output_tokens = sm.total_output_tokens if sm else 0
+            model = sm.model_name if sm else "unknown"
+
+            # Cost estimate (Sonnet pricing: $3/1M input, $15/1M output)
+            cost = (input_tokens * 3.0 / 1_000_000) + (output_tokens * 15.0 / 1_000_000)
+
+            # Response time stats
+            avg_response = 0.0
+            if self._response_times:
+                avg_response = sum(self._response_times) / len(self._response_times)
+
+            # Top tools (up to 5)
+            top_tools = sorted(
+                self._tool_usage.items(), key=lambda x: x[1], reverse=True
+            )[:5]
+
+            self._send_event(
+                {
+                    "type": "stats_panel",
+                    "duration": duration,
+                    "messages": self._user_message_count
+                    + self._assistant_message_count,
+                    "user_messages": self._user_message_count,
+                    "assistant_messages": self._assistant_message_count,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "total_tokens": input_tokens + output_tokens,
+                    "tool_calls": self._tool_call_count,
+                    "model": model,
+                    "cost": f"${cost:.4f}",
+                    "avg_response_time": f"{avg_response:.1f}s"
+                    if avg_response > 0
+                    else "\u2014",
+                    "top_tools": [{"name": n, "count": c} for n, c in top_tools],
+                }
+            )
+        except Exception:
+            super()._cmd_stats(text)  # type: ignore[misc]
+
+    def _cmd_tokens(self) -> None:
+        """Web-enhanced tokens – sends a structured ``token_usage`` event."""
+        try:
+            sm = self.session_manager
+            input_tokens = sm.total_input_tokens if sm else 0
+            output_tokens = sm.total_output_tokens if sm else 0
+            model = sm.model_name if sm else "unknown"
+            context_window = self._get_context_window()
+            total = input_tokens + output_tokens
+
+            # Fall back to character-based estimate when API counters are zero
+            if total == 0:
+                user_chars = sum(
+                    len(content)
+                    for role, content, _ in self._search_messages
+                    if role == "user"
+                )
+                assistant_chars = sum(
+                    len(content)
+                    for role, content, _ in self._search_messages
+                    if role == "assistant"
+                )
+                input_tokens = user_chars // 4
+                output_tokens = assistant_chars // 4
+                total = input_tokens + output_tokens
+
+            usage_pct = (total / context_window * 100) if context_window > 0 else 0
+            cost = (input_tokens * 3.0 / 1_000_000) + (output_tokens * 15.0 / 1_000_000)
+
+            self._send_event(
+                {
+                    "type": "token_usage",
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "total_tokens": total,
+                    "context_window": context_window,
+                    "usage_pct": round(usage_pct, 1),
+                    "model": model,
+                    "cost": f"${cost:.4f}",
+                }
+            )
+        except Exception:
+            super()._cmd_tokens()  # type: ignore[misc]
+
+    def _cmd_agents(self, args: str = "") -> None:
+        """Web-enhanced agents – sends a structured ``agent_tree`` event."""
+        sub = args.strip().lower()
+
+        # Subcommands handled by the mixin
+        if sub == "clear":
+            self._agent_tracker.clear()
+            self._add_system_message("Agent delegation history cleared.")
+            return
+        if sub == "tree":
+            self._cmd_agent_tree_panel()
+            return
+
+        try:
+            tracker = self._agent_tracker
+            if not tracker.has_delegations:
+                self._send_event(
+                    {
+                        "type": "agent_tree",
+                        "agents": [],
+                        "total": 0,
+                        "running": 0,
+                        "completed": 0,
+                        "failed": 0,
+                    }
+                )
+                return
+
+            agents = []
+            for node in tracker._roots:
+                if node.end_time is not None:
+                    elapsed = node.end_time - node.start_time
+                else:
+                    elapsed = time.monotonic() - node.start_time
+                agents.append(
+                    {
+                        "name": node.agent_name,
+                        "instruction": node.instruction[:80],
+                        "status": node.status,
+                        "elapsed": f"{elapsed:.1f}s",
+                    }
+                )
+
+            self._send_event(
+                {
+                    "type": "agent_tree",
+                    "agents": agents,
+                    "total": tracker.total,
+                    "running": tracker.running_count,
+                    "completed": tracker.completed_count,
+                    "failed": tracker.failed_count,
+                }
+            )
+        except Exception:
+            super()._cmd_agents(args)  # type: ignore[misc]
+
+    def _cmd_git(self, text: str) -> None:
+        """Web-enhanced git overview – sends a structured ``git_status`` event."""
+        # Subcommands (status, log, diff, …) fall back to the mixin
+        if text.strip():
+            super()._cmd_git(text)  # type: ignore[misc]
+            return
+        try:
+            ok, branch = self._run_git("branch", "--show-current")
+            if not ok:
+                self._add_system_message(f"Not a git repo or git error: {branch}")
+                return
+            branch = branch.strip() or "(detached HEAD)"
+
+            # Status summary
+            _, status_out = self._run_git("status", "--porcelain")
+            lines = [ln for ln in status_out.splitlines() if ln.strip()]
+            staged = sum(1 for ln in lines if ln[0] not in (" ", "?"))
+            modified = sum(1 for ln in lines if len(ln) > 1 and ln[1] == "M")
+            untracked = sum(1 for ln in lines if ln.startswith("??"))
+
+            # Ahead / behind
+            ahead, behind = 0, 0
+            ab_ok, ab_out = self._run_git(
+                "rev-list",
+                "--left-right",
+                "--count",
+                "HEAD...@{upstream}",
+            )
+            if ab_ok and ab_out.strip():
+                ab_parts = ab_out.strip().split()
+                if len(ab_parts) == 2:
+                    ahead, behind = int(ab_parts[0]), int(ab_parts[1])
+
+            # Last commit
+            _, last_commit = self._run_git("log", "-1", "--format=%h %s (%cr)")
+
+            clean = not (staged or modified or untracked)
+
+            self._send_event(
+                {
+                    "type": "git_status",
+                    "branch": branch,
+                    "staged": staged,
+                    "modified": modified,
+                    "untracked": untracked,
+                    "ahead": ahead,
+                    "behind": behind,
+                    "clean": clean,
+                    "last_commit": last_commit.strip(),
+                }
+            )
+        except Exception:
+            super()._cmd_git(text)  # type: ignore[misc]
+
+    def _cmd_dashboard(self, args: str = "") -> None:
+        """Web-enhanced dashboard – sends a structured ``dashboard`` event."""
+        # Subcommands (refresh, export, heatmap, …) fall back to the mixin
+        if args.strip():
+            super()._cmd_dashboard(args)  # type: ignore[misc]
+            return
+        try:
+            ds = self._dashboard_stats
+            if not ds.is_cached:
+                ds.scan_sessions()
+
+            data = ds.data
+
+            # Top models and projects
+            top_models = data.model_counts.most_common(3)
+            top_projects = data.project_counts.most_common(5)
+
+            # Format total duration
+            total_secs = int(data.total_duration_seconds)
+            hours, rem = divmod(total_secs, 3600)
+            mins, _ = divmod(rem, 60)
+            duration_str = f"{hours}h {mins}m" if hours else f"{mins}m"
+
+            self._send_event(
+                {
+                    "type": "dashboard",
+                    "total_sessions": data.total_sessions,
+                    "total_tokens": data.total_tokens,
+                    "total_duration": duration_str,
+                    "avg_duration": f"{int(data.avg_duration_seconds // 60)}m",
+                    "streak_days": data.streak_days,
+                    "longest_streak": data.longest_streak,
+                    "top_models": [{"name": n, "count": c} for n, c in top_models],
+                    "top_projects": [{"name": n, "count": c} for n, c in top_projects],
+                }
+            )
+        except Exception:
+            super()._cmd_dashboard(args)  # type: ignore[misc]
 
     # ------------------------------------------------------------------
     # Command routing
@@ -737,15 +1121,20 @@ class WebApp(
             "/bm": lambda: self._cmd_bookmark(args),
             "/tag": lambda: self._cmd_tag(args),
             "/tags": lambda: self._cmd_tag("list-all"),
+            "/project": lambda: self._cmd_project(args),
+            "/projects": lambda: self._cmd_project(args),
+            "/sort": lambda: self._cmd_sort_web(args),
             "/pin": lambda: self._cmd_pin_msg(args),
             "/pins": lambda: self._cmd_pins(args),
             "/unpin": lambda: self._cmd_unpin(args),
             "/pin-session": lambda: self._cmd_pin_session(args),
             "/clipboard": lambda: self._cmd_clipboard(args),
             "/clip": lambda: self._cmd_clipboard(args),
+            "/projector": lambda: self._cmd_projector(args),
             # Session management
             "/new": lambda: self._handle_new_session(),
             "/clear": lambda: self._send_event({"type": "clear"}),
+            "/resume": lambda: self._cmd_resume(args),
             "/sessions": lambda: self._cmd_sessions(args),
             "/session": lambda: self._cmd_sessions(args),
             "/list": lambda: self._cmd_sessions(args),
@@ -859,6 +1248,29 @@ class WebApp(
         self._send_event({"type": "clear"})
         self._add_system_message("Starting new session... Send a message to begin.")
 
+    async def switch_to_session(self, session_id: str) -> None:
+        """Switch to an existing session by ID."""
+        try:
+            if self.session_manager and self.session_manager.session:
+                await self.session_manager.end_session(
+                    conversation_id=self._conversation.conversation_id
+                )
+            await self.session_manager.resume_session(
+                session_id, conversation_id=self._conversation.conversation_id
+            )
+            self._amplifier_ready = True
+            self._send_event({"type": "clear"})
+            self._add_system_message(f"Resumed session: {session_id[:12]}...")
+            self._send_event(
+                {
+                    "type": "session_resumed",
+                    "session_id": self.session_manager.session_id or "",
+                    "model": self.session_manager.model_name or "",
+                }
+            )
+        except Exception as e:
+            self._show_error(f"Failed to switch session: {e}")
+
     # ------------------------------------------------------------------
     # Message handling
     # ------------------------------------------------------------------
@@ -876,24 +1288,30 @@ class WebApp(
         # Chat message
         self._add_user_message(text)
         self._start_processing()
-        self._wire_streaming_callbacks()
-        self._tool_count_this_turn = 0
-        self._got_stream_content = False
+        self._wire_streaming_callbacks(
+            self._conversation.conversation_id, self._conversation
+        )
+        self._conversation.tool_count_this_turn = 0
+        self._conversation.got_stream_content = False
 
         try:
             if not self.session_manager.session:
-                await self.session_manager.start_new_session()
+                await self.session_manager.start_new_session(
+                    conversation_id=self._conversation.conversation_id,
+                )
                 self._amplifier_ready = True
-                self._send_event({
-                    "type": "session_started",
-                    "session_id": self.session_manager.session_id or "",
-                    "model": self.session_manager.model_name or "",
-                })
+                self._send_event(
+                    {
+                        "type": "session_started",
+                        "session_id": self.session_manager.session_id or "",
+                        "model": self.session_manager.model_name or "",
+                    }
+                )
 
             response = await self.session_manager.send_message(text)
 
             # If streaming didn't produce content, show the final response
-            if not self._got_stream_content and response:
+            if not self._conversation.got_stream_content and response:
                 self._add_assistant_message(response)
         except Exception as exc:
             self._show_error(f"Error: {exc}")
@@ -910,6 +1328,8 @@ class WebApp(
         """Clean up when WebSocket disconnects."""
         if self.session_manager and self.session_manager.session:
             try:
-                await self.session_manager.end_session()
+                await self.session_manager.end_session(
+                    conversation_id=self._conversation.conversation_id
+                )
             except Exception:
                 logger.debug("Error ending session on disconnect", exc_info=True)

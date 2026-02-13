@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Amplifier</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
     <link rel="stylesheet" href="/static/style.css">
     <!-- highlight.js for code syntax highlighting -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
@@ -18,6 +19,11 @@
             <div class="header-left">
                 <span class="logo">&#9889; Amplifier</span>
                 <span id="status-text" class="status-badge">Connecting...</span>
+                <button id="sidebar-toggle" class="header-btn" title="Sessions">
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="3" y1="5" x2="17" y2="5"/><line x1="3" y1="10" x2="17" y2="10"/><line x1="3" y1="15" x2="17" y2="15"/>
+                    </svg>
+                </button>
             </div>
             <div class="header-right">
                 <span id="model-name" class="header-info"></span>
@@ -27,6 +33,16 @@
 
         <!-- Main content area -->
         <main id="main">
+            <aside id="sidebar" class="sidebar hidden" role="complementary" aria-label="Session sidebar">
+                <div class="sidebar-header">
+                    <h3>Sessions</h3>
+                    <button id="new-session-btn" class="sidebar-action">+ New</button>
+                </div>
+                <div id="session-list" class="sidebar-list" role="listbox" aria-label="Session list"></div>
+                <div class="sidebar-footer">
+                    <button id="sidebar-close" class="sidebar-action">Close</button>
+                </div>
+            </aside>
             <div id="chat-area">
                 <div id="messages"></div>
                 <div id="streaming-indicator" class="hidden">
@@ -37,6 +53,10 @@
 
         <!-- Input area -->
         <footer id="input-area">
+            <div id="slash-hints" class="slash-hints" hidden>
+              <div class="slash-hints-title">Commands</div>
+              <div class="slash-hints-list"></div>
+            </div>
             <div class="input-wrapper">
                 <textarea
                     id="chat-input"
@@ -52,6 +72,19 @@
                 </button>
             </div>
         </footer>
+
+        <!-- Command Palette -->
+        <div id="command-palette" class="palette-overlay hidden" role="dialog" aria-label="Command palette">
+          <div class="palette-container">
+            <input id="palette-input" class="palette-input" type="text" placeholder="Type a command..." autocomplete="off" />
+            <div id="palette-results" class="palette-results" role="listbox" aria-label="Command results"></div>
+            <div class="palette-hint">
+              <span><kbd>↑↓</kbd> navigate</span>
+              <span><kbd>Enter</kbd> execute</span>
+              <span><kbd>Esc</kbd> close</span>
+            </div>
+          </div>
+        </div>
     </div>
 
     <script src="/static/app.js"></script>
