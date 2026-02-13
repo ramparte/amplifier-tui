@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+from typing import Any, Callable
 
 from amplifier_tui.core.features.project_aggregator import ProjectAggregator
 from amplifier_tui.core.features.project_intelligence import (
@@ -78,6 +80,86 @@ class ProjectCommandsMixin:
                 projector=projector if projector.available else None,
             )
         return self._project_intelligence
+
+    # ------------------------------------------------------------------
+    # Background LLM runner (non-blocking with animated indicator)
+    # ------------------------------------------------------------------
+
+    def _run_project_llm(
+        self,
+        label: str,
+        fn: Callable[[], str],
+    ) -> None:
+        """Run an LLM call in a background thread with animated indicator.
+
+        Posts a "thinking" message, animates it with dots while the LLM
+        runs, then replaces it in-place with the result.  The input widget
+        stays active so the user can keep working.
+
+        Args:
+            label: Short description shown while waiting (e.g. "Thinking
+                about amplifier-tui").
+            fn: Zero-arg callable that returns the LLM answer string.
+                Called in a daemon thread.
+        """
+        # Post placeholder message and keep widget reference
+        widget = self._add_system_message(f"{label}...")  # type: ignore[attr-defined]
+
+        # Animation state -- mutable container so the closure can update it
+        frame = [0]
+        _DOTS = [".", "..", "...", "....", "....."]
+
+        timer_handle: list[Any] = [None]
+
+        def _animate() -> None:
+            frame[0] = (frame[0] + 1) % len(_DOTS)
+            try:
+                widget.update(f"{label}{_DOTS[frame[0]]}")
+            except Exception:
+                pass  # widget may have been removed
+
+        def _worker() -> None:
+            try:
+                result = fn()
+            except Exception as exc:
+                logger.debug("Background LLM call failed", exc_info=True)
+                result = f"Failed: {exc}"
+            # Deliver result to UI thread
+            try:
+                self.call_from_thread(  # type: ignore[attr-defined]
+                    self._finish_project_llm, widget, result, timer_handle
+                )
+            except Exception:
+                pass  # app may have exited
+
+        # Start animation timer (0.4s feels natural for dot progression)
+        timer_handle[0] = self.set_interval(0.4, _animate)  # type: ignore[attr-defined]
+
+        # Launch background thread
+        t = threading.Thread(target=_worker, daemon=True, name="project-llm")
+        t.start()
+
+    def _finish_project_llm(
+        self, widget: Any, result: str, timer_handle: list[Any]
+    ) -> None:
+        """Called on UI thread when background LLM completes."""
+        # Stop animation
+        if timer_handle[0] is not None:
+            try:
+                timer_handle[0].stop()
+            except Exception:
+                pass
+
+        # Replace placeholder with actual result
+        try:
+            widget.update(result)
+            self._scroll_if_auto(widget)  # type: ignore[attr-defined]
+        except Exception:
+            # Widget removed or app shutting down -- post fresh message
+            try:
+                self._add_system_message(result)  # type: ignore[attr-defined]
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Router
@@ -181,11 +263,11 @@ class ProjectCommandsMixin:
         all_tags = self._tag_store.load()  # type: ignore[attr-defined]
         project_name = self._get_current_project_name()
 
-        self._add_system_message(f"Thinking about {project_name}...")  # type: ignore[attr-defined]
+        def _ask() -> str:
+            intel = self._ensure_project_intelligence()
+            return intel.ask(sessions, all_tags, project_name, question)
 
-        intel = self._ensure_project_intelligence()
-        answer = intel.ask(sessions, all_tags, project_name, question)
-        self._add_system_message(answer)  # type: ignore[attr-defined]
+        self._run_project_llm(f"Thinking about {project_name}", _ask)
 
     def _cmd_project_search(self, query: str) -> None:
         """Handle /project search <query>."""
@@ -214,10 +296,11 @@ class ProjectCommandsMixin:
         all_tags = self._tag_store.load()  # type: ignore[attr-defined]
         name = project_name or self._get_current_project_name()
 
-        self._add_system_message(f"Analyzing {name}...")  # type: ignore[attr-defined]
-        intel = self._ensure_project_intelligence()
-        answer = intel.what_needs_attention(sessions, all_tags, name)
-        self._add_system_message(answer)  # type: ignore[attr-defined]
+        def _attention() -> str:
+            intel = self._ensure_project_intelligence()
+            return intel.what_needs_attention(sessions, all_tags, name)
+
+        self._run_project_llm(f"Analyzing {name}", _attention)
 
     def _cmd_project_weekly(self, project_name: str) -> None:
         """Handle /project weekly [project]."""
@@ -229,10 +312,11 @@ class ProjectCommandsMixin:
         all_tags = self._tag_store.load()  # type: ignore[attr-defined]
         name = project_name or self._get_current_project_name()
 
-        self._add_system_message(f"Generating weekly summary for {name}...")  # type: ignore[attr-defined]
-        intel = self._ensure_project_intelligence()
-        answer = intel.weekly_summary(sessions, all_tags, name)
-        self._add_system_message(answer)  # type: ignore[attr-defined]
+        def _weekly() -> str:
+            intel = self._ensure_project_intelligence()
+            return intel.weekly_summary(sessions, all_tags, name)
+
+        self._run_project_llm(f"Generating weekly summary for {name}", _weekly)
 
     def _cmd_project_focus(self, project_name: str) -> None:
         """Handle /project focus [project]."""
@@ -244,10 +328,11 @@ class ProjectCommandsMixin:
         all_tags = self._tag_store.load()  # type: ignore[attr-defined]
         name = project_name or self._get_current_project_name()
 
-        self._add_system_message(f"Thinking about what to focus on for {name}...")  # type: ignore[attr-defined]
-        intel = self._ensure_project_intelligence()
-        answer = intel.focus(sessions, all_tags, name)
-        self._add_system_message(answer)  # type: ignore[attr-defined]
+        def _focus() -> str:
+            intel = self._ensure_project_intelligence()
+            return intel.focus(sessions, all_tags, name)
+
+        self._run_project_llm(f"Thinking about what to focus on for {name}", _focus)
 
     # ------------------------------------------------------------------
     # Projector data commands (absorbed from ProjectorCommandsMixin)

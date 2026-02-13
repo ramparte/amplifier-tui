@@ -5971,8 +5971,15 @@ class AmplifierTuiApp(
         self._update_word_count_display()
         self._update_token_display()
 
-    def _add_system_message(self, text: str, ts: datetime | None = None) -> None:
-        """Display a system message (slash command output)."""
+    def _add_system_message(
+        self, text: str, ts: datetime | None = None
+    ) -> SystemMessage:
+        """Display a system message (slash command output).
+
+        Returns the mounted :class:`SystemMessage` widget so callers can
+        update its content later (e.g. replacing a "thinking..." placeholder
+        with an LLM response).
+        """
         chat_view = self._active_chat_view()
         msg = SystemMessage(text)
         chat_view.mount(msg)
@@ -5982,6 +5989,7 @@ class AmplifierTuiApp(
         self._style_system(msg)
         self._scroll_if_auto(msg)
         self._search_messages.append(("system", text, msg))
+        return msg
 
     def _add_thinking_block(self, text: str) -> None:
         chat_view = self._active_chat_view()
