@@ -110,7 +110,8 @@ from .commands.replay_cmds import ReplayCommandsMixin
 from .commands.plugin_cmds import PluginCommandsMixin
 from .commands.dashboard_cmds import DashboardCommandsMixin
 from .commands.project_cmds import ProjectCommandsMixin
-from .core.commands.projector_cmds import ProjectorCommandsMixin
+
+# ProjectorCommandsMixin removed -- absorbed into ProjectCommandsMixin
 from .commands.shell_cmds import ShellCommandsMixin
 from .commands.terminal_cmds import TerminalCommandsMixin
 from .commands.monitor_cmds import MonitorCommandsMixin
@@ -154,7 +155,6 @@ class AmplifierTuiApp(
     ShellCommandsMixin,
     DashboardCommandsMixin,
     ProjectCommandsMixin,
-    ProjectorCommandsMixin,
     ReplayCommandsMixin,
     CompareCommandsMixin,
     BranchCommandsMixin,
@@ -3657,7 +3657,7 @@ class AmplifierTuiApp(
             "/tag": lambda: self._cmd_tag(args),
             "/tags": lambda: self._cmd_tag("list-all"),
             "/project": lambda: self._cmd_project(args),
-            "/projector": lambda: self._cmd_projector(args),
+            "/projector": lambda: self._cmd_project(args),
             "/projects": lambda: self._cmd_project(args),
             "/clipboard": lambda: self._cmd_clipboard(args),
             "/clip": lambda: self._cmd_clipboard(args),
@@ -3760,7 +3760,7 @@ class AmplifierTuiApp(
             "  /prefs        Show preferences\n"
             "  /progress     Toggle detailed progress labels (/progress on, /progress off)\n"
             "  /project [ask|search]     Project intelligence (ask, search across sessions)\n"
-            "  /projector [subcmd]       Projector panel (projects, tasks, strategies, status, outcomes)\n"
+            "  /projector                Alias for /project (see /project help)\n"
             "  /quit         Quit\n"
             "  /recipe       Recipe pipeline view (/recipe status|history|clear)\n"
             "  /redo         Alias for /retry\n"

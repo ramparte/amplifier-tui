@@ -1,7 +1,9 @@
 """LLM-powered project intelligence: ask questions about project activity.
 
 Uses the ProjectAggregator to build context and an LLM to synthesize
-answers about what's happening in a project.
+answers about what's happening in a project.  When a
+:class:`~projector_client.ProjectorClient` is available, enriches context
+with tasks, strategies, people, notes, and outcomes from Projector.
 """
 
 from __future__ import annotations
@@ -10,9 +12,12 @@ import hashlib
 import logging
 import time
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from .project_aggregator import ProjectAggregator, ProjectInfo
+
+if TYPE_CHECKING:
+    from .projector_client import ProjectorClient
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +92,19 @@ Rules:
 - Keep it to 5-8 bullet points.
 """
 
+_FOCUS_SYSTEM = """\
+You are a project intelligence assistant. Based on the project context \
+(sessions, tasks, strategies, and recent outcomes), recommend what the user \
+should work on next.
+
+Rules:
+- Consider task priority and status (in_progress > blocked > pending).
+- Consider session momentum: what was the user recently working on?
+- Consider active strategies: do they suggest a preferred approach?
+- Be concrete: name specific tasks, sessions, or areas.
+- Keep it to 3-5 actionable items, ranked by priority.
+"""
+
 
 def _build_project_context(info: ProjectInfo, all_tags: dict[str, list[str]]) -> str:
     """Build a context string from project data for the LLM."""
@@ -115,6 +133,62 @@ def _build_project_context(info: ProjectInfo, all_tags: dict[str, list[str]]) ->
     return "\n".join(parts)
 
 
+def _build_projector_context(projector: ProjectorClient, project_name: str) -> str:
+    """Build additional context from Projector data (tasks, strategies, etc.).
+
+    Returns an empty string if Projector is not available or has no data
+    for the given project.
+    """
+    if not projector.available:
+        return ""
+
+    parts: list[str] = []
+
+    proj = projector.get_project(project_name)
+    if proj:
+        if proj.description:
+            parts.append(f"\nProject description: {proj.description.strip()}")
+        if proj.people:
+            parts.append(f"People: {', '.join(proj.people)}")
+        if proj.notes:
+            parts.append(f"Notes: {proj.notes.strip()}")
+        if proj.relationships:
+            rels = []
+            for rel_type, targets in proj.relationships.items():
+                if isinstance(targets, list):
+                    rels.append(f"  {rel_type}: {', '.join(targets)}")
+                else:
+                    rels.append(f"  {rel_type}: {targets}")
+            if rels:
+                parts.append("Relationships:\n" + "\n".join(rels))
+        if proj.recent_outcomes:
+            parts.append("\nRecent outcomes:")
+            for o in proj.recent_outcomes:
+                ts = o.get("timestamp", "?")[:10]
+                summary = o.get("summary", "no summary")
+                parts.append(f"  [{ts}] {summary}")
+
+    # Tasks
+    tasks = projector.get_tasks(project_name)
+    if tasks:
+        active = [t for t in tasks if t.status != "completed"]
+        if active:
+            parts.append("\nActive tasks:")
+            for t in active:
+                parts.append(
+                    f"  [{t.status}] {t.id}: {t.title} (priority: {t.priority})"
+                )
+
+    # Active strategies
+    strategies = projector.list_strategies(active_only=True)
+    if strategies:
+        parts.append("\nActive strategies:")
+        for s in strategies:
+            parts.append(f"  - {s.name}: {s.description.strip()[:100]}")
+
+    return "\n".join(parts)
+
+
 def _build_ask_prompt(
     context: str,
     question: str,
@@ -132,15 +206,25 @@ def _build_ask_prompt(
 class ProjectIntelligence:
     """LLM-powered project Q&A engine.
 
+    When *projector* is provided and available, all LLM context is
+    automatically enriched with Projector tasks, strategies, people,
+    notes, and outcomes.
+
     Usage::
 
-        intel = ProjectIntelligence(aggregator, ask_fn=my_llm_call)
+        intel = ProjectIntelligence(ask_fn=my_llm_call,
+                                    projector=ProjectorClient())
         answer = intel.ask(sessions, all_tags, "amplifier-tui",
                           "What needs attention?")
     """
 
-    def __init__(self, ask_fn: AskFn | None = None) -> None:
+    def __init__(
+        self,
+        ask_fn: AskFn | None = None,
+        projector: ProjectorClient | None = None,
+    ) -> None:
         self._ask_fn = ask_fn
+        self._projector = projector
         self._cache: dict[str, _CachedAnswer] = {}
 
     def _cache_key(self, project: str, question: str) -> str:
@@ -159,6 +243,30 @@ class ProjectIntelligence:
 
     def _set_cached(self, key: str, answer: str) -> None:
         self._cache[key] = _CachedAnswer(answer=answer, created_at=time.time())
+
+    def _full_context(
+        self,
+        sessions: list[dict],
+        all_tags: dict[str, list[str]],
+        project_name: str,
+    ) -> str | None:
+        """Build combined session + Projector context for a project.
+
+        Returns ``None`` if the project cannot be found.
+        """
+        projects = ProjectAggregator.aggregate(sessions, all_tags)
+        info = ProjectAggregator.get_project(projects, project_name)
+        if info is None:
+            return None
+
+        context = _build_project_context(info, all_tags)
+
+        if self._projector:
+            projector_ctx = _build_projector_context(self._projector, project_name)
+            if projector_ctx:
+                context += "\n\n--- Projector Data ---\n" + projector_ctx
+
+        return context
 
     def ask(
         self,
@@ -180,13 +288,10 @@ class ProjectIntelligence:
         if cached:
             return cached
 
-        # Aggregate project data
-        projects = ProjectAggregator.aggregate(sessions, all_tags)
-        info = ProjectAggregator.get_project(projects, project_name)
-        if info is None:
+        context = self._full_context(sessions, all_tags, project_name)
+        if context is None:
             return f"No project matching '{project_name}'."
 
-        context = _build_project_context(info, all_tags)
         prompt = _build_ask_prompt(context, question)
 
         try:
@@ -207,12 +312,10 @@ class ProjectIntelligence:
         if not self._ask_fn:
             return "Project intelligence requires an LLM provider (anthropic SDK)."
 
-        projects = ProjectAggregator.aggregate(sessions, all_tags)
-        info = ProjectAggregator.get_project(projects, project_name)
-        if info is None:
+        context = self._full_context(sessions, all_tags, project_name)
+        if context is None:
             return f"No project matching '{project_name}'."
 
-        context = _build_project_context(info, all_tags)
         prompt = _build_ask_prompt(context, "What needs attention?", _ATTENTION_SYSTEM)
 
         try:
@@ -231,18 +334,40 @@ class ProjectIntelligence:
         if not self._ask_fn:
             return "Project intelligence requires an LLM provider (anthropic SDK)."
 
-        projects = ProjectAggregator.aggregate(sessions, all_tags)
-        info = ProjectAggregator.get_project(projects, project_name)
-        if info is None:
+        context = self._full_context(sessions, all_tags, project_name)
+        if context is None:
             return f"No project matching '{project_name}'."
 
-        context = _build_project_context(info, all_tags)
         prompt = _build_ask_prompt(context, "Weekly summary", _WEEKLY_SYSTEM)
 
         try:
             return self._ask_fn(prompt)
         except Exception as e:
             logger.debug("Weekly summary failed", exc_info=True)
+            return f"Failed: {e}"
+
+    def focus(
+        self,
+        sessions: list[dict],
+        all_tags: dict[str, list[str]],
+        project_name: str,
+    ) -> str:
+        """Suggest what to work on next based on tasks, momentum, and strategies."""
+        if not self._ask_fn:
+            return "Project intelligence requires an LLM provider (anthropic SDK)."
+
+        context = self._full_context(sessions, all_tags, project_name)
+        if context is None:
+            return f"No project matching '{project_name}'."
+
+        prompt = _build_ask_prompt(
+            context, "What should I focus on next?", _FOCUS_SYSTEM
+        )
+
+        try:
+            return self._ask_fn(prompt)
+        except Exception as e:
+            logger.debug("Focus suggestion failed", exc_info=True)
             return f"Failed: {e}"
 
 

@@ -29,8 +29,10 @@ class ProjectorProject:
     description: str
     status: str  # active, paused, completed, idea
     repos: list[str] = field(default_factory=list)
-    relationships: list[dict[str, str]] = field(default_factory=list)
+    relationships: dict[str, Any] = field(default_factory=dict)
     tags: list[str] = field(default_factory=list)
+    people: list[str] = field(default_factory=list)
+    notes: str = ""
     task_count: int = 0
     recent_outcomes: list[dict[str, Any]] = field(default_factory=list)
 
@@ -43,6 +45,8 @@ class ProjectorStrategy:
     description: str
     active: bool
     scope: str  # global or project-specific
+    injection: str = ""  # the prompt text injected into sessions
+    enforcement: str = "soft"  # soft or hard
     tags: list[str] = field(default_factory=list)
 
 
@@ -91,8 +95,10 @@ class ProjectorClient:
                     description=data.get("description", ""),
                     status=data.get("status", "active"),
                     repos=data.get("repos", []),
-                    relationships=data.get("relationships", []),
+                    relationships=data.get("relationships", {}),
                     tags=data.get("tags", []),
+                    people=data.get("people", []),
+                    notes=data.get("notes", ""),
                 )
                 # Count tasks
                 tasks_file = proj_dir / "tasks.yaml"
@@ -142,6 +148,8 @@ class ProjectorClient:
                     description=data.get("description", ""),
                     active=data.get("active", True),
                     scope=data.get("scope", "global"),
+                    injection=data.get("injection", ""),
+                    enforcement=data.get("enforcement", "soft"),
                     tags=data.get("tags", []),
                 )
                 if active_only and not strat.active:
