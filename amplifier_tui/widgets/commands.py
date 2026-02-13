@@ -82,6 +82,8 @@ _PALETTE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/colors use", "Apply a color preset", "/colors use "),
     ("/colors reset", "Reset all colors to defaults", "/colors reset"),
     ("/focus", "Toggle focus mode", "/focus"),
+    ("/last", "Jump to last user prompt", "/last"),
+    ("/last N", "Jump to Nth-last user prompt", "/last "),
     ("/search", "Search across all past sessions", "/search"),
     ("/search here", "Search current chat only", "/search here "),
     ("/search open", "Open a result from last search", "/search open "),

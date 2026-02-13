@@ -310,10 +310,12 @@ class AmplifierTuiApp(
     def __init__(
         self,
         resume_session_id: str | None = None,
+        resume_session_ids: list[str] | None = None,
         initial_prompt: str | None = None,
     ) -> None:
         super().__init__()
         self.resume_session_id = resume_session_id
+        self.resume_session_ids = resume_session_ids
         self.initial_prompt = initial_prompt
         self.session_manager: SessionManager | None = None
         self._auto_mode: str = "full"
@@ -772,7 +774,9 @@ class AmplifierTuiApp(
         self._amplifier_ready = True
 
         # Now handle resume or initial prompt
-        if self.resume_session_id:
+        if self.resume_session_ids:
+            self._restore_multi_sessions_worker(self.resume_session_ids)
+        elif self.resume_session_id:
             self._resume_session_worker(self.resume_session_id)
         elif self.initial_prompt:
             prompt = self.initial_prompt
@@ -3582,6 +3586,7 @@ class AmplifierTuiApp(
             "/timestamps": self._cmd_timestamps,
             "/ts": self._cmd_timestamps,
             "/keys": self._cmd_keys,
+            "/last": lambda: self._cmd_last(args),
             "/stats": lambda: self._cmd_stats(args),
             "/tokens": self._cmd_tokens,
             "/context": lambda: self._cmd_context(args),
@@ -3743,6 +3748,7 @@ class AmplifierTuiApp(
             "                Also: @./path/to/file in your prompt auto-includes\n"
             "  /info         Show session details (ID, model, project, counts)\n"
             "  /keys         Keyboard shortcut overlay\n"
+            "  /last         Scroll to last user prompt | /last N for Nth-last\n"
             "  /mode         Amplifier modes (/mode <name>, /mode off, /modes to list)\n"
             "  /model        Show/switch model | /model list | /model <name>\n"
             "  /monitor      Live session monitor (/monitor big|small|close)\n"
@@ -5726,6 +5732,43 @@ class AmplifierTuiApp(
             f"Bookmark {num} widget not found (message may have been cleared)."
         )
 
+    def _cmd_last(self, args: str = "") -> None:
+        """Scroll to the last user prompt (or Nth from end)."""
+        user_msgs = [
+            (text, widget)
+            for role, text, widget in self._search_messages
+            if role == "user"
+        ]
+        if not user_msgs:
+            self._add_system_message("No user messages in this session.")
+            return
+
+        n = 1
+        stripped = args.strip()
+        if stripped:
+            if stripped.isdigit():
+                n = int(stripped)
+            else:
+                self._add_system_message(
+                    "Usage: /last [N]  (scroll to Nth-last prompt)"
+                )
+                return
+
+        if n < 1 or n > len(user_msgs):
+            self._add_system_message(
+                f"Out of range. This session has {len(user_msgs)} user message(s)."
+            )
+            return
+
+        text, widget = user_msgs[-n]
+        if widget is not None:
+            widget.scroll_visible()
+            preview = text.split("\n")[0][:80]
+            label = f"Prompt {len(user_msgs) - n + 1}/{len(user_msgs)}"
+            self._add_system_message(f"{label}: {preview}")
+        else:
+            self._add_system_message("Message widget no longer available.")
+
     def _get_message_preview(self, widget: Static) -> str:
         """Get a short preview of a message widget's content."""
         for _role, text, w in self._search_messages:
@@ -7147,6 +7190,89 @@ class AmplifierTuiApp(
             self.call_from_thread(self._show_error, f"Failed to resume: {e}")
             self.call_from_thread(self._update_status, "Error")
 
+    @work(thread=True)
+    async def _restore_multi_sessions_worker(self, session_ids: list[str]) -> None:
+        """Restore multiple sessions, each in its own tab.
+
+        Called when the TUI is launched with ``--sessions id1,id2,...``.
+        The first session resumes in the initial "Main" tab; subsequent
+        sessions each get a new tab.  After all tabs are populated the
+        view switches back to the first tab.
+        """
+        if self.session_manager is None:
+            self.call_from_thread(
+                self._add_system_message, "Session manager not available"
+            )
+            return
+
+        total = len(session_ids)
+        for i, session_id in enumerate(session_ids):
+            # For sessions beyond the first, create a new tab
+            if i > 0:
+                self.call_from_thread(
+                    self._create_new_tab, session_id[:8], show_welcome=False
+                )
+
+            # Grab the now-active tab's conversation binding
+            tab = self._tabs[self._active_tab_index]
+            conv = tab.conversation
+            cid = conv.conversation_id
+
+            self.call_from_thread(self._clear_welcome)
+            self.call_from_thread(
+                self._update_status, f"Loading session {i + 1}/{total}..."
+            )
+
+            try:
+                # Render the transcript into the chat view
+                transcript_path = self.session_manager.get_session_transcript_path(
+                    session_id
+                )
+                self.call_from_thread(self._display_transcript, transcript_path)
+
+                # Best-effort working directory lookup
+                working_dir = None
+                for s in getattr(self, "_session_list_data", []):
+                    if s.get("session_id") == session_id:
+                        pp = s.get("project_path")
+                        if pp:
+                            candidate = Path(pp)
+                            if candidate.is_dir():
+                                working_dir = candidate
+                        break
+
+                model = self._prefs.preferred_model or ""
+                await self.session_manager.resume_session(
+                    session_id,
+                    conversation_id=cid,
+                    model_override=model,
+                    working_dir=working_dir,
+                )
+
+                # Use the session title as the tab name
+                title = self._load_session_title_for(session_id)
+                if title:
+                    self._session_title = title
+                    tab.name = title
+                    tab.custom_name = title
+                    self.call_from_thread(self._apply_session_title)
+
+            except Exception as e:
+                logger.debug("Failed to resume session %s", session_id, exc_info=True)
+                self.call_from_thread(
+                    self._add_system_message,
+                    f"Failed to resume {session_id}: {e}",
+                )
+
+        # Switch back to the first tab and refresh all chrome
+        if total > 1:
+            self.call_from_thread(self._switch_to_tab, 0)
+
+        self.call_from_thread(self._update_tab_bar)
+        self.call_from_thread(self._update_session_display)
+        self.call_from_thread(self._update_token_display)
+        self.call_from_thread(self._update_status, "Ready")
+
     # ── Transcript Display ──────────────────────────────────────
 
     def _display_transcript(self, transcript_path: Path) -> None:
@@ -7276,11 +7402,13 @@ class AmplifierTuiApp(
 
 def run_app(
     resume_session_id: str | None = None,
+    resume_session_ids: list[str] | None = None,
     initial_prompt: str | None = None,
 ) -> None:
     """Run the Amplifier TUI application."""
     app = AmplifierTuiApp(
         resume_session_id=resume_session_id,
+        resume_session_ids=resume_session_ids,
         initial_prompt=initial_prompt,
     )
     app.run()

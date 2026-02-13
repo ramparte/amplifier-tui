@@ -112,6 +112,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/include tree",
     "/info",
     "/keys",
+    "/last",
     "/ml",
     "/mode",
     "/model",
