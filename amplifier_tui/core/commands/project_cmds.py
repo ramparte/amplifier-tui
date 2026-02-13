@@ -244,13 +244,18 @@ class ProjectCommandsMixin:
         self._add_system_message(detail)  # type: ignore[attr-defined]
 
     def _cmd_project_ask(self, question: str) -> None:
-        """Handle /project ask <question>."""
+        """Handle /project ask <question>.
+
+        Automatically detects which project the question is about by
+        scanning for known project names in the text.  Falls back to the
+        current working directory's project if none is mentioned.
+        """
         if not question:
             self._add_system_message(  # type: ignore[attr-defined]
                 "Usage: /project ask <question>\n"
                 "Examples:\n"
                 "  /project ask what's the status of the auth work?\n"
-                "  /project ask what did I do this week?\n"
+                "  /project ask what's up with kepler?\n"
                 "  /project ask what patterns are emerging?"
             )
             return
@@ -261,7 +266,13 @@ class ProjectCommandsMixin:
             return
 
         all_tags = self._tag_store.load()  # type: ignore[attr-defined]
-        project_name = self._get_current_project_name()
+
+        # Smart project resolution: scan the question for a known project
+        # name, fall back to cwd-based detection.
+        project_name = (
+            self._resolve_project_from_text(question)
+            or self._get_current_project_name()
+        )
 
         def _ask() -> str:
             intel = self._ensure_project_intelligence()
@@ -587,6 +598,34 @@ class ProjectCommandsMixin:
         if sessions:
             return sessions[0]["project"]
         return "unknown"
+
+    def _resolve_project_from_text(self, text: str) -> str | None:
+        """Try to find a known project name mentioned in *text*.
+
+        Scans the words in *text* against all known project names (from
+        aggregated sessions).  Returns the first match, or ``None`` if no
+        project name is detected.
+        """
+        sessions = self._session_list_data  # type: ignore[attr-defined]
+        if not sessions:
+            return None
+
+        all_tags = self._tag_store.load()  # type: ignore[attr-defined]
+        projects = ProjectAggregator.aggregate(sessions, all_tags)
+        if not projects:
+            return None
+
+        # Build lookup: lowercase project name → canonical name
+        name_map: dict[str, str] = {k.lower(): k for k in projects}
+
+        # Check each word in the text against known project names
+        for word in text.lower().split():
+            # Strip common punctuation
+            clean = word.strip("?.,!:;\"'()[]")
+            if clean in name_map:
+                return name_map[clean]
+
+        return None
 
     def _projector_detect_current(self):
         """Detect Projector project from current session's working dir."""

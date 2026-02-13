@@ -396,3 +396,85 @@ class TestProjectorNotAvailable:
         app._projector_client = mock_client
         app._cmd_project_status("")
         assert any("No Projector data" in m for m in app._messages)
+
+
+# ---------------------------------------------------------------------------
+# _resolve_project_from_text (smart project detection from question text)
+# ---------------------------------------------------------------------------
+
+
+def _sessions_with_projects() -> list[dict]:
+    """Create sessions spanning multiple projects for resolution tests."""
+    import time
+
+    now = time.time()
+    return [
+        {
+            "session_id": "aaa",
+            "project": "kepler",
+            "project_path": "/home/user/dev/kepler",
+            "mtime": now - 100,
+            "date_str": "02/12",
+        },
+        {
+            "session_id": "bbb",
+            "project": "amplifier-tui",
+            "project_path": "/home/user/dev/amplifier-tui",
+            "mtime": now - 200,
+            "date_str": "02/11",
+        },
+        {
+            "session_id": "ccc",
+            "project": "amplifier-core",
+            "project_path": "/home/user/dev/amplifier-core",
+            "mtime": now - 300,
+            "date_str": "02/10",
+        },
+    ]
+
+
+class TestResolveProjectFromText:
+    def test_finds_project_in_question(self):
+        app = _ProjectApp()
+        app._session_list_data = _sessions_with_projects()
+        result = app._resolve_project_from_text("what's up with kepler?")
+        assert result == "kepler"
+
+    def test_finds_project_case_insensitive(self):
+        app = _ProjectApp()
+        app._session_list_data = _sessions_with_projects()
+        result = app._resolve_project_from_text("Tell me about KEPLER")
+        assert result == "kepler"
+
+    def test_finds_hyphenated_project(self):
+        app = _ProjectApp()
+        app._session_list_data = _sessions_with_projects()
+        result = app._resolve_project_from_text("what happened in amplifier-tui?")
+        assert result == "amplifier-tui"
+
+    def test_returns_none_when_no_match(self):
+        app = _ProjectApp()
+        app._session_list_data = _sessions_with_projects()
+        result = app._resolve_project_from_text("how is the weather today?")
+        assert result is None
+
+    def test_returns_none_with_no_sessions(self):
+        app = _ProjectApp()
+        app._session_list_data = []
+        result = app._resolve_project_from_text("what about kepler?")
+        assert result is None
+
+    def test_strips_punctuation(self):
+        app = _ProjectApp()
+        app._session_list_data = _sessions_with_projects()
+        # kepler followed by question mark, comma, period
+        assert app._resolve_project_from_text("kepler?") == "kepler"
+        assert app._resolve_project_from_text("kepler,") == "kepler"
+        assert app._resolve_project_from_text("(kepler)") == "kepler"
+
+    def test_first_match_wins(self):
+        app = _ProjectApp()
+        app._session_list_data = _sessions_with_projects()
+        # "kepler" appears before "amplifier-core" in the text
+        result = app._resolve_project_from_text("compare kepler and amplifier-core")
+        assert result == "kepler"
