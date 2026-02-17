@@ -6460,8 +6460,8 @@ class AmplifierTuiApp(
 
         parts: list[str] = []
 
-        # Project directory
-        project_dir = os.getcwd()
+        # Project directory – prefer workspace preference over process cwd
+        project_dir = self._prefs.environment.workspace or os.getcwd()
         home = str(Path.home())
         if project_dir.startswith(home):
             project_dir = "~" + project_dir[len(home) :]
@@ -6809,9 +6809,13 @@ class AmplifierTuiApp(
                 self.call_from_thread(self._update_status, "Starting session...")
                 model = self._prefs.preferred_model or ""
                 try:
+                    # Use workspace preference for session working directory
+                    ws = self._prefs.environment.workspace
+                    session_cwd = Path(ws) if ws and Path(ws).is_dir() else None
                     await self.session_manager.start_new_session(
                         conversation_id=cid,
                         model_override=model,
+                        cwd=session_cwd,
                     )
                 except Exception as session_err:
                     # Session creation is where bundle loading, foundation import,
