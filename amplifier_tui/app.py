@@ -6441,9 +6441,22 @@ class AmplifierTuiApp(
             logger.debug("Failed to record context snapshot", exc_info=True)
 
     def _update_session_display(self) -> None:
-        if self.session_manager and getattr(self.session_manager, "session_id", None):
-            sid = self.session_manager.session_id[:8]
-            self.query_one("#status-session", Static).update(f"Session: {sid}")
+        # Look up session via the active tab's conversation_id rather than
+        # the fragile _default_conversation_id singleton.  This is correct
+        # for multi-tab scenarios and for resumed sessions where
+        # _default_conversation_id is never updated.
+        sid: str | None = None
+        if self.session_manager:
+            tab = self._tabs[self._active_tab_index]
+            cid = tab.conversation.conversation_id
+            handle = self.session_manager.get_handle(cid)
+            if handle:
+                sid = getattr(handle, "session_id", None)
+            # Fall back to backward-compat property for single-tab case
+            if not sid:
+                sid = getattr(self.session_manager, "session_id", None)
+        if sid:
+            self.query_one("#status-session", Static).update(f"Session: {sid[:8]}")
         else:
             self.query_one("#status-session", Static).update("No session")
         self._update_breadcrumb()
