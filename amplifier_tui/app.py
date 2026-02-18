@@ -2623,6 +2623,13 @@ class AmplifierTuiApp(
             return
         # Save draft for current session before switching
         self._save_draft()
+        # Update status bar immediately (worker is slow, don't wait)
+        try:
+            self.query_one("#status-session", Static).update(
+                f"Session: {session_id[:8]}"
+            )
+        except NoMatches:
+            pass
         # Don't close sidebar - let user close it manually with Ctrl+B
         self._resume_session_worker(session_id)
 
@@ -6924,6 +6931,11 @@ class AmplifierTuiApp(
                 working_dir=working_dir,
             )
 
+            # Wire streaming callbacks for future messages on this session
+            # (desktop_app.py already does this; TUI was missing it)
+            if self._prefs.display.streaming_enabled:
+                self._wire_streaming_callbacks(cid, conv)
+
             # Restore session title
             title = self._load_session_title_for(session_id)
             if title:
@@ -6956,6 +6968,8 @@ class AmplifierTuiApp(
                 self.call_from_thread(self._finish_processing, conversation_id=cid)
 
         except Exception as e:
+            if not self.is_running:
+                return  # App is shutting down, nothing to update
             logger.debug("resume session worker failed", exc_info=True)
             self.call_from_thread(self._show_error, f"Failed to resume: {e}")
             self.call_from_thread(self._update_status, "Error")
