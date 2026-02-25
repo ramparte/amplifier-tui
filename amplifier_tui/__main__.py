@@ -171,6 +171,18 @@ def main():
         help="Web server port (default: 8765)",
     )
     parser.add_argument(
+        "--tmux-mode",
+        action="store_true",
+        default=None,
+        help="Launch in tmux mode (single-session, no tabs/sidebar)",
+    )
+    parser.add_argument(
+        "--no-tmux-mode",
+        action="store_true",
+        default=False,
+        help="Force standard TUI even when inside tmux",
+    )
+    parser.add_argument(
         "prompt",
         nargs="*",
         help="Initial prompt to send",
@@ -223,6 +235,36 @@ def main():
             sys.exit(1)
         except (KeyboardInterrupt, SystemExit):
             pass
+        return
+
+    # Resolve tmux mode: explicit flag > auto-detect via $TMUX env var
+    import os
+
+    use_tmux_mode = False
+    if args.no_tmux_mode:
+        use_tmux_mode = False
+    elif args.tmux_mode:
+        use_tmux_mode = True
+    else:
+        # Auto-detect: if $TMUX is set, default to tmux mode
+        use_tmux_mode = bool(os.environ.get("TMUX"))
+
+    if use_tmux_mode:
+        try:
+            from amplifier_tui.tmux_app import run_tmux_app
+
+            run_tmux_app(
+                resume_session_id=resume_session_id,
+                initial_prompt=initial_prompt,
+            )
+        except (KeyboardInterrupt, SystemExit):
+            pass
+        except Exception:
+            logger.debug("Fatal error in amplifier-tui (tmux mode)", exc_info=True)
+            import traceback
+
+            traceback.print_exc()
+            sys.exit(1)
         return
 
     try:
