@@ -18,6 +18,7 @@ import re
 import subprocess
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,7 +30,15 @@ from textual.widgets import Collapsible, Markdown, Static
 from textual import work
 
 from .core.app_base import SharedAppBase
+from .core.constants import (
+    DEFAULT_CONTEXT_WINDOW,
+    EXTENSION_TO_LANGUAGE,
+    MAX_INCLUDE_LINES,
+    MAX_INCLUDE_SIZE,
+    MODEL_CONTEXT_WINDOWS,
+)
 from .core.conversation import ConversationState
+from .core.history import PromptHistory
 from .core.session_manager import SessionManager
 from .core.log import logger
 from .core.commands.content_cmds import ContentCommandsMixin
@@ -266,6 +275,15 @@ class TmuxApp(
 
         # Aliases (for /alias expansion)
         self._aliases: dict[str, str] = {}
+
+        # Prompt history (expected by FileCommandsMixin._cmd_run)
+        self._history = PromptHistory()
+
+        # Attributes expected by non-routed mixin commands
+        # (prevents AttributeError if accidentally invoked)
+        self._clipboard_store: list[str] = []
+        self._attachments: list[str] = []
+        self._pending_undo: tuple[str, str] | None = None
 
     # ------------------------------------------------------------------
     # Layout
@@ -658,6 +676,15 @@ class TmuxApp(
             w.remove()
 
     # ------------------------------------------------------------------
+    # Properties expected by core command mixins
+    # ------------------------------------------------------------------
+
+    @property
+    def is_processing(self) -> bool:
+        """Whether the app is currently processing a request."""
+        return self._conversation.is_processing
+
+    # ------------------------------------------------------------------
     # Update helpers expected by core command mixins
     # ------------------------------------------------------------------
 
@@ -713,6 +740,215 @@ class TmuxApp(
         if len(first_line) > max_len:
             first_line = first_line[:max_len].rsplit(" ", 1)[0] + "..."
         return first_line
+
+    # ------------------------------------------------------------------
+    # Methods expected by core command mixins
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_binary(path: Path) -> bool:
+        """Check if a file appears to be binary."""
+        try:
+            chunk = path.read_bytes()[:8192]
+            return b"\x00" in chunk
+        except OSError:
+            logger.debug(
+                "Failed to read file for binary check: %s", path, exc_info=True
+            )
+            return True
+
+    def _read_file_for_include(self, path: Path) -> str | None:
+        """Read a file and format it for inclusion in a prompt."""
+        if not path.is_file():
+            self._add_system_message(f"Not a file: {path}")
+            return None
+
+        if self._is_binary(path):
+            self._add_system_message(f"Skipping binary file: {path.name}")
+            return None
+
+        size = path.stat().st_size
+        if size > MAX_INCLUDE_SIZE:
+            self._add_system_message(
+                f"File too large: {path.name} ({size / 1024:.1f} KB). "
+                f"Max: {MAX_INCLUDE_SIZE / 1024:.0f} KB"
+            )
+            return None
+
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            logger.debug("Failed to read file for include: %s", path, exc_info=True)
+            self._add_system_message(f"Error reading {path.name}: {e}")
+            return None
+
+        lines = text.splitlines()
+        lang = EXTENSION_TO_LANGUAGE.get(path.suffix.lower(), "")
+
+        truncated = ""
+        if len(lines) > MAX_INCLUDE_LINES:
+            text = "\n".join(lines[:MAX_INCLUDE_LINES])
+            truncated = f"\n... ({len(lines) - MAX_INCLUDE_LINES} more lines)"
+
+        header = f"# {path.name} ({len(lines)} lines)"
+        return f"{header}\n```{lang}\n{text}{truncated}\n```"
+
+    def _include_into_input(self, content: str) -> None:
+        """Insert content into the chat input, appending if there's existing text."""
+        input_widget = self.query_one("#chat-input", ChatInput)
+        current = input_widget.text.strip()
+        input_widget.clear()
+        if current:
+            input_widget.insert(f"{current}\n\n{content}")
+        else:
+            input_widget.insert(content)
+
+    def _include_and_send(self, content: str) -> None:
+        """Set content into the input and immediately submit it."""
+        input_widget = self.query_one("#chat-input", ChatInput)
+        input_widget.clear()
+        input_widget.insert(content)
+        self._submit_message()
+
+    def _get_context_window(self) -> int:
+        """Get context window size for the current model."""
+        # User-configured override (0 = auto-detect)
+        if self._prefs and self._prefs.display.context_window_size > 0:
+            return self._prefs.display.context_window_size
+
+        sm = self.session_manager
+        if sm and sm.context_window > 0:
+            return sm.context_window
+
+        # Build a model string from whatever is available.
+        model = ""
+        if sm and sm.model_name:
+            model = sm.model_name
+        elif self._prefs and self._prefs.preferred_model:
+            model = self._prefs.preferred_model
+
+        if model:
+            model_lower = model.lower()
+            for key, size in MODEL_CONTEXT_WINDOWS.items():
+                if key in model_lower:
+                    return size
+
+        return DEFAULT_CONTEXT_WINDOW
+
+    @staticmethod
+    def _top_words(
+        messages: list[tuple[str, str, object]], n: int = 10
+    ) -> list[tuple[str, int]]:
+        """Get top N most frequent meaningful words from messages."""
+        stop_words = {
+            "the",
+            "a",
+            "an",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
+            "to",
+            "of",
+            "in",
+            "for",
+            "on",
+            "with",
+            "at",
+            "by",
+            "from",
+            "it",
+            "this",
+            "that",
+            "and",
+            "or",
+            "but",
+            "not",
+            "no",
+            "i",
+            "you",
+            "we",
+            "they",
+            "he",
+            "she",
+            "my",
+            "your",
+            "do",
+            "does",
+            "did",
+            "have",
+            "has",
+            "had",
+            "will",
+            "would",
+            "can",
+            "could",
+            "should",
+            "if",
+            "as",
+            "so",
+            "up",
+            "out",
+            "just",
+            "also",
+            "very",
+            "all",
+            "any",
+            "some",
+            "me",
+            "its",
+            "than",
+            "then",
+            "into",
+            "about",
+            "more",
+            "when",
+            "what",
+            "how",
+            "which",
+            "there",
+            "their",
+            "them",
+            "these",
+            "those",
+            "other",
+            "each",
+            "here",
+            "where",
+            "been",
+            "being",
+            "both",
+            "same",
+            "own",
+            "such",
+        }
+        words: list[str] = []
+        for role, content, _ in messages:
+            if role.lower() in ("user", "assistant") and content:
+                for word in content.lower().split():
+                    word = word.strip(".,!?:;\"'()[]{}#`*_-/\\")
+                    if len(word) > 2 and word not in stop_words and word.isalpha():
+                        words.append(word)
+        return Counter(words).most_common(n)
+
+    def _update_mode_display(self) -> None:
+        """No-op — tmux mode has no dedicated mode indicator widget."""
+
+    def _execute_undo(self) -> None:
+        """No-op — undo not supported in tmux mode."""
+        self._add_system_message("Undo is not supported in tmux mode.")
+
+    def action_show_shortcuts(self) -> None:
+        """No-op — tmux mode has no shortcuts overlay."""
+        self._add_system_message(
+            "Shortcuts: Ctrl+Q=Quit  Ctrl+L=Clear  Ctrl+Y=Copy  Esc=Cancel"
+        )
+
+    def action_open_editor(self) -> None:
+        """No-op — external editor not supported in tmux mode."""
+        self._add_system_message("External editor is not supported in tmux mode.")
 
     # ------------------------------------------------------------------
     # Amplifier init (background worker)
