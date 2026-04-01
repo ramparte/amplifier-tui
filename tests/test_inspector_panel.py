@@ -75,3 +75,65 @@ class TestInspectorModes:
             panel.pin_to_block(1)
             panel.set_live_mode()
             assert panel.mode == "live"
+
+
+class TestInspectorNavigation:
+    """Inspector prev/next/search navigation."""
+
+    @pytest.mark.asyncio
+    async def test_prev_from_last(self):
+        async with InspectorTestApp().run_test() as pilot:
+            panel = pilot.app.query_one("#inspector", InspectorPanel)
+            panel.pin_to_block(2)  # last block
+            panel.go_prev()
+            assert panel.current_block_id == 1
+
+    @pytest.mark.asyncio
+    async def test_next_from_first(self):
+        async with InspectorTestApp().run_test() as pilot:
+            panel = pilot.app.query_one("#inspector", InspectorPanel)
+            panel.pin_to_block(0)
+            panel.go_next()
+            assert panel.current_block_id == 1
+
+    @pytest.mark.asyncio
+    async def test_prev_at_start_stays(self):
+        async with InspectorTestApp().run_test() as pilot:
+            panel = pilot.app.query_one("#inspector", InspectorPanel)
+            panel.pin_to_block(0)
+            panel.go_prev()
+            assert panel.current_block_id == 0
+
+    @pytest.mark.asyncio
+    async def test_next_at_end_stays(self):
+        async with InspectorTestApp().run_test() as pilot:
+            panel = pilot.app.query_one("#inspector", InspectorPanel)
+            panel.pin_to_block(2)
+            panel.go_next()
+            assert panel.current_block_id == 2
+
+    @pytest.mark.asyncio
+    async def test_search_backward_finds_match(self):
+        async with InspectorTestApp().run_test() as pilot:
+            panel = pilot.app.query_one("#inspector", InspectorPanel)
+            panel.pin_to_block(2)  # start from end
+            panel.search_blocks("Hello")
+            assert panel.current_block_id == 0
+
+    @pytest.mark.asyncio
+    async def test_search_forward_finds_match(self):
+        async with InspectorTestApp().run_test() as pilot:
+            panel = pilot.app.query_one("#inspector", InspectorPanel)
+            panel.pin_to_block(0)  # start from beginning
+            panel.search_blocks("grep", forward=True)
+            assert panel.current_block_id == 2
+
+    @pytest.mark.asyncio
+    async def test_navigation_switches_to_pinned(self):
+        async with InspectorTestApp().run_test() as pilot:
+            panel = pilot.app.query_one("#inspector", InspectorPanel)
+            panel.set_live_mode()
+            assert panel.mode == "live"
+            panel.pin_to_block(1)
+            panel.go_prev()
+            assert panel.mode == "pinned"
