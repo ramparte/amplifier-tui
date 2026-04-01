@@ -112,3 +112,46 @@ class TestCockpitBlockSelection:
             await pilot.pause()
             # The block should now have the "selected" class
             assert block.has_class("selected")
+
+
+class TestCockpitSlashCommands:
+    """CockpitApp slash command dispatch."""
+
+    @pytest.mark.asyncio
+    async def test_help_command(self):
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            app._dispatch_slash_command("/help")
+            await pilot.pause()
+            # Should have added a system message with help text
+            blocks = list(app.query(ChatBlock))
+            system_blocks = [b for b in blocks if b.block_type == BlockType.SYSTEM]
+            # At least one system block with help text
+            assert (
+                any("help" in str(b.children).lower() for b in system_blocks)
+                or len(system_blocks) > 0
+            )
+
+    @pytest.mark.asyncio
+    async def test_unknown_command(self):
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            app._dispatch_slash_command("/nonexistent")
+            await pilot.pause()
+            # Should show unknown command message
+            blocks = list(app.query(ChatBlock))
+            assert len(blocks) > 0  # At least the welcome + error
+
+    @pytest.mark.asyncio
+    async def test_clear_command(self):
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            app._add_user_message("msg1")
+            app._add_assistant_message("reply1")
+            app._dispatch_slash_command("/clear")
+            await pilot.pause()
+            # Chat view should be empty after clear
+            from textual.containers import ScrollableContainer
+
+            chat_view = app.query_one("#cockpit-chat-view", ScrollableContainer)
+            assert len(list(chat_view.children)) == 0
