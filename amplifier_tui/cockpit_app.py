@@ -38,7 +38,7 @@ from .core.commands.shell_cmds import ShellCommandsMixin
 from .core.commands.token_cmds import TokenCommandsMixin
 from .core.log import logger
 from .core.session_manager import SessionManager
-from .models.block_model import BlockRegistry, BlockType, SteerQueue
+from .models.block_model import BlockInfo, BlockRegistry, BlockType, SteerQueue
 from .widgets.chat_block import BlockSelected, ChatBlock
 from .widgets.chat_input import ChatInput
 from .widgets.inspector_panel import InspectorPanel, InspectorSteerRequest, InspectorAskRequest
@@ -773,9 +773,11 @@ class CockpitApp(
 
     async def on_chat_input_submitted(self, event) -> None:
         """Handle Enter in the chat input."""
-        text = event.value
-        event.input.clear()
-        self._handle_input(text)
+        # ChatInput.Submitted inherits from TextArea.Changed -- text is on the widget
+        text = event.text_area.text.strip()
+        event.text_area.clear()
+        if text:
+            self._handle_input(text)
 
     # ------------------------------------------------------------------
     # Actions
