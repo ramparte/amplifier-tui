@@ -53,6 +53,7 @@ class InspectorAskRequest(Message):
 _INSPECTOR_CSS = """\
 InspectorPanel {
     height: 1fr;
+    width: 40;  /* Fixed width when visible */
     border-left: solid $accent;
     background: $surface;
 }
