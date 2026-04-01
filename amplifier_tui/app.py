@@ -6562,11 +6562,11 @@ class AmplifierTuiApp(
     # These implement the abstract _on_stream_* methods from SharedAppBase.
     # All UI updates are marshalled to the main thread via call_from_thread.
 
-    def _on_stream_block_start(self, conversation_id: str, block_type: str) -> None:
+    def _on_stream_block_start(self, conversation_id: str, block_type: str, block_index: int = 0) -> None:
         self.call_from_thread(self._begin_streaming_block, block_type, conversation_id)
 
     def _on_stream_block_delta(
-        self, conversation_id: str, block_type: str, accumulated_text: str
+        self, conversation_id: str, block_type: str, accumulated_text: str, block_index: int = 0
     ) -> None:
         self.call_from_thread(
             self._update_streaming_content,
@@ -6581,6 +6581,7 @@ class AmplifierTuiApp(
         block_type: str,
         final_text: str,
         had_block_start: bool,
+        block_index: int = 0,
     ) -> None:
         if had_block_start:
             # Streaming widget exists - finalize it with complete text

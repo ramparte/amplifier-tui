@@ -336,11 +336,17 @@ class DesktopBackend(
     # Qt signals handle thread-safety automatically.
     # ==================================================================
 
-    def _on_stream_block_start(self, conversation_id: str, block_type: str) -> None:
+    def _on_stream_block_start(
+        self, conversation_id: str, block_type: str, block_index: int = 0
+    ) -> None:
         self._signals.block_start.emit(conversation_id, block_type)
 
     def _on_stream_block_delta(
-        self, conversation_id: str, block_type: str, accumulated_text: str
+        self,
+        conversation_id: str,
+        block_type: str,
+        accumulated_text: str,
+        block_index: int = 0,
     ) -> None:
         self._signals.block_delta.emit(conversation_id, block_type, accumulated_text)
 
@@ -350,6 +356,7 @@ class DesktopBackend(
         block_type: str,
         final_text: str,
         had_block_start: bool,
+        block_index: int = 0,
     ) -> None:
         self._signals.block_end.emit(
             conversation_id, block_type, final_text, had_block_start

@@ -280,17 +280,30 @@ class WebApp(
     # Abstract streaming methods (called from BACKGROUND THREAD)
     # ------------------------------------------------------------------
 
-    def _on_stream_block_start(self, conversation_id: str, block_type: str) -> None:
-        self._send_event({"type": "stream_start", "block_type": block_type})
+    def _on_stream_block_start(
+        self, conversation_id: str, block_type: str, block_index: int = 0
+    ) -> None:
+        self._send_event(
+            {
+                "type": "stream_start",
+                "block_type": block_type,
+                "block_index": block_index,
+            }
+        )
 
     def _on_stream_block_delta(
-        self, conversation_id: str, block_type: str, accumulated_text: str
+        self,
+        conversation_id: str,
+        block_type: str,
+        accumulated_text: str,
+        block_index: int = 0,
     ) -> None:
         self._send_event(
             {
                 "type": "stream_delta",
                 "block_type": block_type,
                 "text": accumulated_text,
+                "block_index": block_index,
             }
         )
 
@@ -300,6 +313,7 @@ class WebApp(
         block_type: str,
         final_text: str,
         had_block_start: bool,
+        block_index: int = 0,
     ) -> None:
         self._send_event(
             {

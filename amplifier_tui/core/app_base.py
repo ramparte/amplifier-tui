@@ -83,12 +83,12 @@ class SharedAppBase:
     # --- Abstract streaming display methods (called from BACKGROUND THREAD) ---
     # Subclasses must handle thread-safety (e.g., call_from_thread for TUI).
 
-    def _on_stream_block_start(self, conversation_id: str, block_type: str) -> None:
+    def _on_stream_block_start(self, conversation_id: str, block_type: str, block_index: int = 0) -> None:
         """A streaming content block has started (text or thinking)."""
         raise NotImplementedError
 
     def _on_stream_block_delta(
-        self, conversation_id: str, block_type: str, accumulated_text: str
+        self, conversation_id: str, block_type: str, accumulated_text: str, block_index: int = 0
     ) -> None:
         """Incremental streaming text update (throttled, provides full accumulated text)."""
         raise NotImplementedError
@@ -99,6 +99,7 @@ class SharedAppBase:
         block_type: str,
         final_text: str,
         had_block_start: bool,
+        block_index: int = 0,
     ) -> None:
         """A streaming content block has ended with final complete text.
 
@@ -152,12 +153,14 @@ class SharedAppBase:
         accumulated = {"text": ""}
         last_update = {"t": 0.0}
         block_started = {"v": False}
+        current_block_index = {"v": 0}
 
         def on_block_start(block_type: str, block_index: int) -> None:
             accumulated["text"] = ""
             last_update["t"] = 0.0
             block_started["v"] = True
-            self._on_stream_block_start(conversation_id, block_type)
+            current_block_index["v"] = block_index
+            self._on_stream_block_start(conversation_id, block_type, block_index)
 
         def on_block_delta(block_type: str, delta: str) -> None:
             if conv.streaming_cancelled:
@@ -168,15 +171,16 @@ class SharedAppBase:
             if now - last_update["t"] >= 0.05:
                 last_update["t"] = now
                 snapshot = accumulated["text"]
-                self._on_stream_block_delta(conversation_id, block_type, snapshot)
+                self._on_stream_block_delta(conversation_id, block_type, snapshot, current_block_index["v"])
 
         def on_block_end(block_type: str, text: str) -> None:
             conv.got_stream_content = True
             had_start = block_started["v"]
+            bi = current_block_index["v"]
             if had_start:
                 block_started["v"] = False
                 accumulated["text"] = ""
-            self._on_stream_block_end(conversation_id, block_type, text, had_start)
+            self._on_stream_block_end(conversation_id, block_type, text, had_start, bi)
 
         def on_tool_start(name: str, tool_input: dict) -> None:
             conv.tool_count_this_turn += 1
