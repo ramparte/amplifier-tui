@@ -92,3 +92,23 @@ class TestCockpitBlockRendering:
             assert app._turn_index == initial_turn + 1
             app._add_user_message("second")
             assert app._turn_index == initial_turn + 2
+
+
+class TestCockpitBlockSelection:
+    """CockpitApp handles BlockSelected messages."""
+
+    @pytest.mark.asyncio
+    async def test_block_click_selects_block(self):
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            app._add_user_message("Click me")
+            # Find the user block
+            blocks = list(app.query(ChatBlock))
+            user_blocks = [b for b in blocks if b.block_type == BlockType.USER]
+            assert len(user_blocks) > 0
+            block = user_blocks[0]
+            # Simulate click
+            block.on_click()
+            await pilot.pause()
+            # The block should now have the "selected" class
+            assert block.has_class("selected")
