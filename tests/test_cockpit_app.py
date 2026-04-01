@@ -206,3 +206,29 @@ class TestCockpitInspectorToggle:
             panel = app.query_one("#inspector-panel", InspectorPanel)
             assert panel.display
             assert panel.mode == "pinned"
+
+
+class TestCockpitSteering:
+    """CockpitApp steering queue integration."""
+
+    @pytest.mark.asyncio
+    async def test_steer_request_queued(self):
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            # Simulate an InspectorSteerRequest
+            from amplifier_tui.widgets.inspector_panel import InspectorSteerRequest
+            app.post_message(InspectorSteerRequest("focus on tests"))
+            await pilot.pause()
+            assert not app._steer_queue.is_empty
+            assert app._steer_queue.dequeue() == "focus on tests"
+
+    @pytest.mark.asyncio
+    async def test_multiple_steers_fifo(self):
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            from amplifier_tui.widgets.inspector_panel import InspectorSteerRequest
+            app.post_message(InspectorSteerRequest("first"))
+            app.post_message(InspectorSteerRequest("second"))
+            await pilot.pause()
+            assert app._steer_queue.dequeue() == "first"
+            assert app._steer_queue.dequeue() == "second"

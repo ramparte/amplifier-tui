@@ -460,6 +460,8 @@ class CockpitApp(
         self._processing_label = "Thinking"
         self.call_from_thread(self._add_tool_use, name, tool_input, result)
         self.call_from_thread(self._ensure_processing_indicator, "Thinking")
+        # Check steer queue at pause point (between tool calls)
+        self.call_from_thread(self._check_steer_queue)
 
     def _on_stream_usage_update(self, conversation_id: str) -> None:
         self.call_from_thread(self._update_status, "Thinking...")
@@ -808,6 +810,22 @@ class CockpitApp(
             panel.pin_to_block(event.block_id)
         except NoMatches:
             pass
+
+    def on_inspector_steer_request(self, event: InspectorSteerRequest) -> None:
+        """Queue a steering message from the inspector."""
+        self._steer_queue.enqueue(event.text)
+
+    def _check_steer_queue(self) -> None:
+        """Inject pending steer messages at natural pause points."""
+        if self._steer_queue.is_empty:
+            return
+        cid = self._conversation.conversation_id
+        handle = self.session_manager.get_handle(cid) if self.session_manager else None
+        if handle:
+            steer_text = self._steer_queue.dequeue()
+            if steer_text:
+                handle.inject_user_message(steer_text)
+                self._add_system_message(f"[steer injected] {steer_text}")
 
 
 # ---------------------------------------------------------------------------
