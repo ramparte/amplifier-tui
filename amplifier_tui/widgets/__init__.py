@@ -5,6 +5,7 @@ from .chat_block import BlockSelected, ChatBlock
 from .chat_input import ChatInput
 from .commands import AmplifierCommandProvider
 from .datamodels import Attachment, TabState
+from .inspector_panel import InspectorPanel
 from .indicators import (
     ErrorMessage,
     FoldToggle,
@@ -38,6 +39,7 @@ __all__ = [
     "FoldToggle",
     "HistorySearchBar",
     "HistorySearchScreen",
+    "InspectorPanel",
     "MessageMeta",
     "NoteMessage",
     "AgentTreePanel",
