@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -57,12 +57,30 @@ class SessionHandle:
     model_name: str = ""
     context_window: int = 0
 
+    # --- Steering injection queue ---
+    _pending_injects: list[str] = field(default_factory=list)
+
     def reset_usage(self) -> None:
         """Reset token usage counters for a new session."""
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.model_name = ""
         self.context_window = 0
+
+    def inject_user_message(self, message: str) -> None:
+        """Queue a steering message for injection at the next pause point."""
+        self._pending_injects.append(message)
+
+    def pop_pending_inject(self) -> str | None:
+        """Pop the next pending injection, or None if empty."""
+        if self._pending_injects:
+            return self._pending_injects.pop(0)
+        return None
+
+    @property
+    def has_pending_inject(self) -> bool:
+        """True if there are pending steering messages."""
+        return len(self._pending_injects) > 0
 
     def _on_stream(self, event: str, data: dict[str, Any]) -> None:
         """Dispatch bridge streaming events to THIS handle's callbacks.

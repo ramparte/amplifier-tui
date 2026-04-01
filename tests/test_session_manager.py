@@ -474,3 +474,29 @@ class TestEndSession:
         sm = SessionManager()
         await sm.end_session()  # Should not raise
         assert sm.session is None
+
+
+class TestSessionHandleInject:
+    """SessionHandle.inject_user_message for steering support."""
+
+    def test_inject_queues_message(self):
+        """inject_user_message stores the message for later retrieval."""
+        handle = SessionHandle(conversation_id="test-inject")
+        handle.inject_user_message("steer: focus on tests")
+        assert handle.has_pending_inject
+        assert handle.pop_pending_inject() == "steer: focus on tests"
+        assert not handle.has_pending_inject
+
+    def test_inject_multiple_fifo(self):
+        """Multiple injections are FIFO."""
+        handle = SessionHandle(conversation_id="test-inject-2")
+        handle.inject_user_message("first")
+        handle.inject_user_message("second")
+        assert handle.pop_pending_inject() == "first"
+        assert handle.pop_pending_inject() == "second"
+        assert handle.pop_pending_inject() is None
+
+    def test_pop_empty_returns_none(self):
+        handle = SessionHandle(conversation_id="test-inject-3")
+        assert handle.pop_pending_inject() is None
+        assert not handle.has_pending_inject
