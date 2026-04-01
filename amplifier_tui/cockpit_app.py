@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import ScrollableContainer, Vertical
+from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.css.query import NoMatches
 from textual.widgets import Collapsible, Markdown, Static
 from textual import work
@@ -41,6 +41,7 @@ from .core.session_manager import SessionManager
 from .models.block_model import BlockRegistry, BlockType, SteerQueue
 from .widgets.chat_block import BlockSelected, ChatBlock
 from .widgets.chat_input import ChatInput
+from .widgets.inspector_panel import InspectorPanel, InspectorSteerRequest, InspectorAskRequest
 from .widgets.indicators import (
     ErrorMessage,
     ProcessingIndicator,
@@ -147,6 +148,25 @@ Screen {
     color: $text-muted;
     text-align: center;
 }
+
+#cockpit-main {
+    width: 1fr;
+    height: 1fr;
+}
+
+#cockpit-chat-area {
+    width: 1fr;
+    height: 1fr;
+}
+
+#inspector-panel {
+    width: 40;
+    display: none;
+}
+
+#inspector-panel.visible {
+    display: block;
+}
 """
 
 
@@ -176,6 +196,7 @@ class CockpitApp(
         Binding("ctrl+l", "clear_chat", "Clear", show=False),
         Binding("ctrl+y", "copy_response", "Copy", show=False),
         Binding("escape", "cancel_streaming", "Cancel", show=False),
+        Binding("ctrl+i", "toggle_inspector", "Inspector", show=True),
     ]
 
     def __init__(
@@ -212,17 +233,22 @@ class CockpitApp(
     # ------------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        with Vertical():
-            yield ScrollableContainer(id="cockpit-chat-view")
-            yield ChatInput(
-                "",
-                id="chat-input",
-                soft_wrap=True,
-                show_line_numbers=False,
-                tab_behavior="focus",
-                compact=True,
+        with Horizontal(id="cockpit-main"):
+            with Vertical(id="cockpit-chat-area"):
+                yield ScrollableContainer(id="cockpit-chat-view")
+                yield ChatInput(
+                    "",
+                    id="chat-input",
+                    soft_wrap=True,
+                    show_line_numbers=False,
+                    tab_behavior="focus",
+                    compact=True,
+                )
+            yield InspectorPanel(
+                block_registry=self._block_registry,
+                id="inspector-panel",
             )
-            yield Static("No session | Ready", id="cockpit-status-bar")
+        yield Static("No session | Ready", id="cockpit-status-bar")
 
     # ------------------------------------------------------------------
     # Mount
@@ -743,17 +769,43 @@ class CockpitApp(
         self._conversation.streaming_cancelled = True
 
     # ------------------------------------------------------------------
-    # BlockSelected handler (placeholder for Phase 3 inspector)
+    # Inspector toggle methods
+    # ------------------------------------------------------------------
+
+    def _toggle_inspector(self) -> None:
+        """Toggle the inspector panel visibility."""
+        try:
+            panel = self.query_one("#inspector-panel", InspectorPanel)
+            if panel.display:
+                panel.display = False
+                panel.remove_class("visible")
+            else:
+                panel.display = True
+                panel.add_class("visible")
+                panel.set_live_mode()
+        except NoMatches:
+            pass
+
+    def action_toggle_inspector(self) -> None:
+        """Textual action for Ctrl+I binding."""
+        self._toggle_inspector()
+
+    # ------------------------------------------------------------------
+    # BlockSelected handler
     # ------------------------------------------------------------------
 
     def on_block_selected(self, event: BlockSelected) -> None:
-        """Handle block click -- Phase 3 will open the inspector."""
-        # For now, just visually select the block
+        """Handle block click -- open inspector in pinned mode."""
+        # Visual selection
         for cb in self.query(ChatBlock):
             cb.deselect()
+
+        # Open inspector in pinned mode
         try:
-            clicked = self.query_one(f"#block-{event.block_id}", ChatBlock)
-            clicked.select()
+            panel = self.query_one("#inspector-panel", InspectorPanel)
+            panel.display = True
+            panel.add_class("visible")
+            panel.pin_to_block(event.block_id)
         except NoMatches:
             pass
 

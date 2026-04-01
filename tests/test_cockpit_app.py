@@ -155,3 +155,54 @@ class TestCockpitSlashCommands:
 
             chat_view = app.query_one("#cockpit-chat-view", ScrollableContainer)
             assert len(list(chat_view.children)) == 0
+
+
+from amplifier_tui.widgets.inspector_panel import InspectorPanel
+
+
+class TestCockpitInspectorToggle:
+    """CockpitApp inspector panel toggle and block selection."""
+
+    @pytest.mark.asyncio
+    async def test_inspector_initially_hidden(self):
+        async with CockpitApp().run_test() as pilot:
+            panels = list(pilot.app.query(InspectorPanel))
+            if panels:
+                assert not panels[0].display
+            # Or no panel exists yet (lazy mount) -- both are valid
+
+    @pytest.mark.asyncio
+    async def test_toggle_inspector_shows_panel(self):
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            app._toggle_inspector()
+            await pilot.pause()
+            panel = app.query_one("#inspector-panel", InspectorPanel)
+            assert panel.display
+
+    @pytest.mark.asyncio
+    async def test_toggle_twice_hides_panel(self):
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            app._toggle_inspector()
+            await pilot.pause()
+            app._toggle_inspector()
+            await pilot.pause()
+            panel = app.query_one("#inspector-panel", InspectorPanel)
+            assert not panel.display
+
+    @pytest.mark.asyncio
+    async def test_block_click_opens_inspector_pinned(self):
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            app._add_user_message("Test block click")
+            await pilot.pause()
+            # Find the user block and click it
+            blocks = list(app.query(ChatBlock))
+            user_blocks = [b for b in blocks if b.block_type == BlockType.USER]
+            assert len(user_blocks) > 0
+            user_blocks[0].on_click()
+            await pilot.pause()
+            panel = app.query_one("#inspector-panel", InspectorPanel)
+            assert panel.display
+            assert panel.mode == "pinned"
