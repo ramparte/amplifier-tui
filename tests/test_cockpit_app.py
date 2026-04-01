@@ -258,3 +258,46 @@ class TestCockpitSideSession:
             context = app._build_ask_context(block, "what is this about?")
             assert "user" in context.lower() or "Write tests" in context
             assert "what is this about?" in context
+
+
+class TestCockpitLiveMode:
+    """CockpitApp inspector live mode following streaming blocks."""
+
+    @pytest.mark.asyncio
+    async def test_live_mode_follows_new_blocks(self):
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            # Start with inspector in live mode
+            app._toggle_inspector()
+            await pilot.pause()
+            panel = app.query_one("#inspector-panel", InspectorPanel)
+            panel.set_live_mode()
+            
+            # Add a block that should be followed
+            app._add_user_message("Test live mode")
+            await pilot.pause()
+            
+            # Inspector should follow the new block
+            assert panel.mode == "live"
+            # In live mode, it should show the latest block
+            latest_block = app._block_registry.last
+            if latest_block:
+                assert panel.current_block_id == latest_block.block_id
+
+    @pytest.mark.asyncio
+    async def test_live_mode_updates_during_streaming(self):
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            # Start with inspector in live mode
+            app._toggle_inspector()
+            await pilot.pause()
+            panel = app.query_one("#inspector-panel", InspectorPanel)
+            panel.set_live_mode()
+            
+            # Simulate streaming start
+            app._begin_streaming_block("assistant", 0)
+            await pilot.pause()
+            
+            # Inspector should follow the streaming block
+            if hasattr(app, '_current_streaming_block_id') and app._current_streaming_block_id is not None:
+                assert panel.current_block_id == app._current_streaming_block_id

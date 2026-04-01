@@ -228,6 +228,7 @@ class CockpitApp(
         self._stream_block_type: str = ""
         self._processing_label: str = ""
         self._processing_indicator: ProcessingIndicator | None = None
+        self._current_streaming_block_id: int | None = None
 
         # Session state
         self._session_title: str = ""
@@ -354,6 +355,9 @@ class CockpitApp(
         )
         chat_view.mount(block)
         block.scroll_visible()
+        
+        # Notify inspector if in live mode
+        self._notify_inspector_live_mode()
 
     def _add_assistant_message(
         self, text: str, *, conversation_id: str = "", **kwargs
@@ -487,6 +491,9 @@ class CockpitApp(
         info = self._block_registry.add(
             bt, self._turn_index, summary=f"[streaming {block_type}]"
         )
+        
+        # Track current streaming block for live mode
+        self._current_streaming_block_id = info.block_id
 
         if block_type in ("thinking", "reasoning"):
             widget = Static("", classes="thinking-block thinking-text")
@@ -509,6 +516,9 @@ class CockpitApp(
 
         self._stream_block_type = block_type
         cb.scroll_visible()
+        
+        # Notify inspector if in live mode
+        self._notify_inspector_live_mode()
 
     def _update_streaming_content(self, block_type: str, accumulated_text: str) -> None:
         """Update the active streaming widget with accumulated text."""
@@ -896,6 +906,15 @@ class CockpitApp(
         import asyncio
         await asyncio.sleep(1)  # Simulate processing
         self.call_from_thread(self._update_status, "Side session complete")
+
+    def _notify_inspector_live_mode(self) -> None:
+        """Notify inspector panel to follow latest block if in live mode."""
+        try:
+            panel = self.query_one("#inspector-panel", InspectorPanel)
+            if panel.display:
+                panel.follow_latest()
+        except NoMatches:
+            pass
 
 
 # ---------------------------------------------------------------------------
