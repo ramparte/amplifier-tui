@@ -639,12 +639,22 @@ class CockpitApp(
         if not text:
             return
 
-        # Slash command dispatch
+        target = self._get_input_target()
+
+        if target == "inspector":
+            # Route to inspector command dispatch
+            try:
+                panel = self.query_one("#inspector-panel", InspectorPanel)
+                panel.handle_input(text)
+            except NoMatches:
+                pass
+            return
+
+        # Main session: slash command or regular message
         if text.startswith("/"):
             self._dispatch_slash_command(text)
             return
 
-        # Regular message
         self._clear_welcome()
         self._add_user_message(text)
         cid = self._conversation.conversation_id
@@ -915,6 +925,16 @@ class CockpitApp(
                 panel.follow_latest()
         except NoMatches:
             pass
+
+    def _get_input_target(self) -> str:
+        """Determine where input should be routed: 'main' or 'inspector'."""
+        try:
+            panel = self.query_one("#inspector-panel", InspectorPanel)
+            if panel.display:
+                return "inspector"
+        except NoMatches:
+            pass
+        return "main"
 
 
 # ---------------------------------------------------------------------------

@@ -301,3 +301,26 @@ class TestCockpitLiveMode:
             # Inspector should follow the streaming block
             if hasattr(app, '_current_streaming_block_id') and app._current_streaming_block_id is not None:
                 assert panel.current_block_id == app._current_streaming_block_id
+
+
+class TestCockpitInputRouting:
+    """CockpitApp input routing tests."""
+
+    @pytest.mark.asyncio
+    async def test_input_goes_to_main_by_default(self):
+        """By default, input routes to main session."""
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            # Inspector should be closed by default
+            target = app._get_input_target()
+            assert target == "main"
+
+    @pytest.mark.asyncio
+    async def test_input_goes_to_inspector_when_open(self):
+        """When inspector is open, input routes to inspector."""
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            app._toggle_inspector()
+            await pilot.pause()
+            target = app._get_input_target()
+            assert target == "inspector"
