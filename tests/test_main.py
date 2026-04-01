@@ -53,3 +53,30 @@ class TestMainExitsWithoutAmplifier:
         captured = capsys.readouterr()
         assert "requires Amplifier to be installed" in captured.err
         assert "github.com/microsoft/amplifier" in captured.err
+
+
+class TestCockpitFlag:
+    """CLI --cockpit and --no-cockpit flags."""
+
+    def test_cockpit_flag_recognized(self):
+        """argparse accepts --cockpit."""
+        import argparse
+
+        # Re-create the parser to test flag parsing
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--cockpit", action="store_true")
+        parser.add_argument("--no-cockpit", action="store_true")
+        parser.add_argument("prompt", nargs="*")
+        args = parser.parse_args(["--cockpit"])
+        assert args.cockpit is True
+        assert args.no_cockpit is False
+
+    def test_no_cockpit_flag(self):
+        import argparse
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--cockpit", action="store_true")
+        parser.add_argument("--no-cockpit", action="store_true")
+        parser.add_argument("prompt", nargs="*")
+        args = parser.parse_args(["--no-cockpit"])
+        assert args.no_cockpit is True

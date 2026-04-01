@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -171,6 +172,16 @@ def main():
         help="Web server port (default: 8765)",
     )
     parser.add_argument(
+        "--cockpit",
+        action="store_true",
+        help="Launch cockpit mode (single-session, optimized for tmux)",
+    )
+    parser.add_argument(
+        "--no-cockpit",
+        action="store_true",
+        help="Suppress tmux auto-detection (force standard TUI)",
+    )
+    parser.add_argument(
         "prompt",
         nargs="*",
         help="Initial prompt to send",
@@ -221,6 +232,23 @@ def main():
                 file=sys.stderr,
             )
             sys.exit(1)
+        except (KeyboardInterrupt, SystemExit):
+            pass
+        return
+
+    # --cockpit or $TMUX auto-detection
+    use_cockpit = args.cockpit
+    if not use_cockpit and not args.no_cockpit and os.environ.get("TMUX"):
+        use_cockpit = True
+
+    if use_cockpit:
+        try:
+            from amplifier_tui.cockpit_app import run_cockpit
+
+            run_cockpit(
+                resume_session_id=resume_session_id,
+                initial_prompt=initial_prompt,
+            )
         except (KeyboardInterrupt, SystemExit):
             pass
         return
