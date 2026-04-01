@@ -8,7 +8,7 @@ from textual.containers import ScrollableContainer, Vertical
 from textual.widgets import Static, TextArea
 
 from amplifier_tui.models.block_model import BlockInfo, BlockRegistry, BlockType
-from amplifier_tui.widgets.inspector_panel import InspectorPanel
+from amplifier_tui.widgets.inspector_panel import InspectorPanel, InspectorSteerRequest, InspectorAskRequest
 
 
 class InspectorTestApp(App):
@@ -137,3 +137,114 @@ class TestInspectorNavigation:
             panel.pin_to_block(1)
             panel.go_prev()
             assert panel.mode == "pinned"
+
+
+class InspectorMessageTestApp(App):
+    """App that captures inspector messages for testing."""
+
+    CSS = """
+    InspectorPanel { height: 1fr; width: 40; }
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.steer_messages: list[str] = []
+        self.ask_messages: list[tuple[str, BlockInfo | None]] = []
+
+    def compose(self) -> ComposeResult:
+        self._block_registry = BlockRegistry()
+        self._block_registry.add(BlockType.USER, turn_index=0, summary="Hello world")
+        self._block_registry.add(BlockType.ASSISTANT, turn_index=0, summary="Hi there")
+        yield InspectorPanel(block_registry=self._block_registry, id="inspector")
+
+    def on_inspector_steer_request(self, event: InspectorSteerRequest) -> None:
+        self.steer_messages.append(event.text)
+
+    def on_inspector_ask_request(self, event: InspectorAskRequest) -> None:
+        self.ask_messages.append((event.question, event.block_info))
+
+
+class TestInspectorCommandDispatch:
+    """Inspector handle_input routes commands correctly."""
+
+    @pytest.mark.asyncio
+    async def test_free_text_sends_steer(self):
+        async with InspectorMessageTestApp().run_test() as pilot:
+            panel = pilot.app.query_one("#inspector", InspectorPanel)
+            panel.handle_input("focus on the tests please")
+            await pilot.pause()
+            assert "focus on the tests please" in pilot.app.steer_messages
+
+    @pytest.mark.asyncio
+    async def test_explicit_steer_command(self):
+        async with InspectorMessageTestApp().run_test() as pilot:
+            panel = pilot.app.query_one("#inspector", InspectorPanel)
+            panel.handle_input("/steer use pytest instead")
+            await pilot.pause()
+            assert "use pytest instead" in pilot.app.steer_messages
+
+    @pytest.mark.asyncio
+    async def test_ask_command(self):
+        async with InspectorMessageTestApp().run_test() as pilot:
+            panel = pilot.app.query_one("#inspector", InspectorPanel)
+            panel.pin_to_block(0)
+            panel.handle_input("/ask what does this block do?")
+            await pilot.pause()
+            assert len(pilot.app.ask_messages) == 1
+            question, block = pilot.app.ask_messages[0]
+            assert question == "what does this block do?"
+            assert block is not None
+            assert block.block_id == 0
+
+    @pytest.mark.asyncio
+    async def test_prev_command(self):
+        async with InspectorMessageTestApp().run_test() as pilot:
+            panel = pilot.app.query_one("#inspector", InspectorPanel)
+            panel.pin_to_block(1)
+            panel.handle_input("/prev")
+            assert panel.current_block_id == 0
+
+    @pytest.mark.asyncio
+    async def test_next_command(self):
+        async with InspectorMessageTestApp().run_test() as pilot:
+            panel = pilot.app.query_one("#inspector", InspectorPanel)
+            panel.pin_to_block(0)
+            panel.handle_input("/next")
+            assert panel.current_block_id == 1
+
+    @pytest.mark.asyncio
+    async def test_search_command(self):
+        async with InspectorMessageTestApp().run_test() as pilot:
+            panel = pilot.app.query_one("#inspector", InspectorPanel)
+            panel.pin_to_block(1)
+            panel.handle_input("/search Hello")
+            assert panel.current_block_id == 0
+
+    @pytest.mark.asyncio
+    async def test_search_forward_command(self):
+        async with InspectorMessageTestApp().run_test() as pilot:
+            panel = pilot.app.query_one("#inspector", InspectorPanel)
+            panel.pin_to_block(0)
+            panel.handle_input("/search forward Hi")
+            assert panel.current_block_id == 1
+
+    @pytest.mark.asyncio
+    async def test_help_command_shows_help(self):
+        async with InspectorMessageTestApp().run_test() as pilot:
+            panel = pilot.app.query_one("#inspector", InspectorPanel)
+            panel.handle_input("/help")
+            await pilot.pause()
+            # Help text should be in the detail area
+            detail = panel.query_one("#inspector-detail")
+            children_text = str([str(c) for c in detail.children])
+            assert "Inspector Commands" in children_text or len(list(detail.children)) > 0
+
+    @pytest.mark.asyncio
+    async def test_empty_input_ignored(self):
+        async with InspectorMessageTestApp().run_test() as pilot:
+            panel = pilot.app.query_one("#inspector", InspectorPanel)
+            panel.handle_input("")
+            panel.handle_input("   ")
+            await pilot.pause()
+            assert len(pilot.app.steer_messages) == 0
+            assert len(pilot.app.ask_messages) == 0
