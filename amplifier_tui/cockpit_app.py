@@ -294,14 +294,16 @@ class CockpitApp(
         self, text: str, *, conversation_id: str = "", **kwargs
     ) -> None:
         chat_view = self._active_chat_view()
-        block = ChatBlock(
-            block_id=self._block_registry.add(
-                BlockType.SYSTEM, self._turn_index, summary=text[:60]
-            ).block_id,
-            block_type=BlockType.SYSTEM,
-            turn_index=self._turn_index,
+        info = self._block_registry.add(
+            BlockType.SYSTEM, self._turn_index, summary=text[:60]
         )
-        block.mount(SystemMessage(text))
+        block = ChatBlock(
+            info.block_id,
+            BlockType.SYSTEM,
+            self._turn_index,
+            SystemMessage(text),
+            id=f"block-{info.block_id}",
+        )
         chat_view.mount(block)
         block.scroll_visible()
 
@@ -314,11 +316,12 @@ class CockpitApp(
             BlockType.USER, self._turn_index, summary=text[:60]
         )
         block = ChatBlock(
-            block_id=info.block_id,
-            block_type=BlockType.USER,
-            turn_index=self._turn_index,
+            info.block_id,
+            BlockType.USER,
+            self._turn_index,
+            UserMessage(text),
+            id=f"block-{info.block_id}",
         )
-        block.mount(UserMessage(text))
         chat_view.mount(block)
         block.scroll_visible()
 
@@ -330,11 +333,12 @@ class CockpitApp(
             BlockType.ASSISTANT, self._turn_index, summary=text[:60]
         )
         block = ChatBlock(
-            block_id=info.block_id,
-            block_type=BlockType.ASSISTANT,
-            turn_index=self._turn_index,
+            info.block_id,
+            BlockType.ASSISTANT,
+            self._turn_index,
+            AssistantMessage(text),
+            id=f"block-{info.block_id}",
         )
-        block.mount(AssistantMessage(text))
         chat_view.mount(block)
         block.scroll_visible()
 
@@ -454,21 +458,20 @@ class CockpitApp(
 
         if block_type in ("thinking", "reasoning"):
             widget = Static("", classes="thinking-block thinking-text")
-            container = Collapsible(title="Thinking...", collapsed=False)
-            container.mount(widget)
+            container = Collapsible(widget, title="Thinking...", collapsed=False)
             cb = ChatBlock(
-                block_id=info.block_id, block_type=bt, turn_index=self._turn_index
+                info.block_id, bt, self._turn_index, container,
+                id=f"block-{info.block_id}",
             )
-            cb.mount(container)
             chat_view.mount(cb)
             self._stream_widget = widget
             self._stream_container = container
         else:
             widget = Markdown("", classes="assistant-message")
             cb = ChatBlock(
-                block_id=info.block_id, block_type=bt, turn_index=self._turn_index
+                info.block_id, bt, self._turn_index, widget,
+                id=f"block-{info.block_id}",
             )
-            cb.mount(widget)
             chat_view.mount(cb)
             self._stream_widget = widget
 
@@ -507,14 +510,12 @@ class CockpitApp(
         info = self._block_registry.add(
             BlockType.THINKING, self._turn_index, summary=text[:60]
         )
-        container = Collapsible(title="Thinking", collapsed=True)
-        container.mount(Static(text, classes="thinking-block thinking-text"))
-        cb = ChatBlock(
-            block_id=info.block_id,
-            block_type=BlockType.THINKING,
-            turn_index=self._turn_index,
+        container = Collapsible(
+            Static(text, classes="thinking-block thinking-text"),
+            title="Thinking",
+            collapsed=True,
         )
-        cb.mount(container)
+        cb = ChatBlock(info.block_id, BlockType.THINKING, self._turn_index, container)
         chat_view.mount(cb)
 
     def _add_tool_use(self, name: str, tool_input: dict, result: str) -> None:
@@ -532,14 +533,12 @@ class CockpitApp(
             else str(tool_input)
         )
         content = f"Input:\n{input_str}\n\nResult:\n{result[:500]}"
-        container = Collapsible(title=f"Tool: {name}", collapsed=True)
-        container.mount(Static(content, classes="tool-call"))
-        cb = ChatBlock(
-            block_id=info.block_id,
-            block_type=BlockType.TOOL_CALL,
-            turn_index=self._turn_index,
+        container = Collapsible(
+            Static(content, classes="tool-call"),
+            title=f"Tool: {name}",
+            collapsed=True,
         )
-        cb.mount(container)
+        cb = ChatBlock(info.block_id, BlockType.TOOL_CALL, self._turn_index, container)
         chat_view.mount(cb)
 
     # ------------------------------------------------------------------
@@ -618,7 +617,7 @@ class CockpitApp(
         handlers = {
             "/help": lambda: self._cmd_cockpit_help(),
             "/shell": lambda: self._cmd_cockpit_shell(),
-            "/clear": lambda: self._action_clear_chat(),
+            "/clear": lambda: self.action_clear_chat(),
             "/quit": lambda: self.exit(),
             "/q": lambda: self.exit(),
         }
