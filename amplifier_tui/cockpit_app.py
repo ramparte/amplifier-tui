@@ -19,7 +19,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.css.query import NoMatches
-from textual.widgets import Collapsible, Markdown, Static
+from textual.widgets import Collapsible, Markdown, Static, TextArea
 from textual import work
 
 from .commands.cockpit_cmds import (
@@ -262,6 +262,13 @@ class CockpitApp(
     async def on_mount(self) -> None:
         self._show_welcome()
         self.query_one("#chat-input", ChatInput).focus()
+        
+        # Hide inspector panel by default
+        try:
+            panel = self.query_one("#inspector-panel", InspectorPanel)
+            panel.display = False
+        except NoMatches:
+            pass
 
         # Check for auto-resume via tmux pane variable
         if not self.resume_session_id:
@@ -288,6 +295,23 @@ class CockpitApp(
                 "Use --doctor for diagnostics.",
             )
             self.call_from_thread(self._update_status, "Not connected")
+            return
+
+        # Proactive readiness check -- catches the common "clean machine" case
+        # where libraries or bundles aren't set up yet, BEFORE the user sends a
+        # message and gets a raw exception.
+        from .environment import check_environment, format_status
+
+        env_status = check_environment("")  # Cockpit doesn't have workspace preferences
+        if not env_status.ready:
+            self._amplifier_available = False
+            diag = format_status(env_status)
+            self.call_from_thread(
+                self._add_system_message,
+                diag
+                + "\n\nFix the issues above, then restart or use --doctor to re-check.",
+            )
+            self.call_from_thread(self._update_status, "Setup needed")
             return
 
         self._amplifier_ready = True
@@ -804,13 +828,26 @@ class CockpitApp(
         """Toggle the inspector panel visibility."""
         try:
             panel = self.query_one("#inspector-panel", InspectorPanel)
+            # Check if panel is currently hidden (display = False means hidden)
             if panel.display:
+                # Panel is visible, hide it
                 panel.display = False
                 panel.remove_class("visible")
+                # Return focus to chat input
+                try:
+                    self.query_one("#chat-input", ChatInput).focus()
+                except NoMatches:
+                    pass
             else:
+                # Panel is hidden, show it
                 panel.display = True
                 panel.add_class("visible")
                 panel.set_live_mode()
+                # Give focus to the inspector panel input
+                try:
+                    panel.query_one("#inspector-input", TextArea).focus()
+                except NoMatches:
+                    pass
         except NoMatches:
             pass
 
