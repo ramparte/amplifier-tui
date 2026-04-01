@@ -826,6 +826,12 @@ class CockpitApp(
         for cb in self.query(ChatBlock):
             cb.deselect()
 
+        # Select the clicked block
+        for cb in self.query(ChatBlock):
+            if cb.block_id == event.block_id:
+                cb.select()
+                break
+
         # Open inspector in pinned mode
         try:
             panel = self.query_one("#inspector-panel", InspectorPanel)
