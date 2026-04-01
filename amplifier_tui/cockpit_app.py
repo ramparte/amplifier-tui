@@ -13,6 +13,8 @@ Features:
 
 from __future__ import annotations
 
+import logging
+import sys
 from typing import TYPE_CHECKING
 
 from textual.app import App, ComposeResult
@@ -36,12 +38,15 @@ from .core.commands.git_cmds import GitCommandsMixin
 from .core.commands.persistence_cmds import PersistenceCommandsMixin
 from .core.commands.shell_cmds import ShellCommandsMixin
 from .core.commands.token_cmds import TokenCommandsMixin
-from .core.log import logger
 from .core.session_manager import SessionManager
 from .models.block_model import BlockInfo, BlockRegistry, BlockType, SteerQueue
 from .widgets.chat_block import BlockSelected, ChatBlock
 from .widgets.chat_input import ChatInput
-from .widgets.inspector_panel import InspectorPanel, InspectorSteerRequest, InspectorAskRequest
+from .widgets.inspector_panel import (
+    InspectorPanel,
+    InspectorSteerRequest,
+    InspectorAskRequest,
+)
 from .widgets.indicators import (
     ErrorMessage,
     ProcessingIndicator,
@@ -51,6 +56,24 @@ from .widgets.messages import AssistantMessage, UserMessage
 
 if TYPE_CHECKING:
     pass
+
+# ---------------------------------------------------------------------------
+# File-based diagnostic logging
+# ---------------------------------------------------------------------------
+# Writes to /tmp/cockpit.log so real-terminal failures can be diagnosed
+# even when the TUI is running (can't see stdout).
+
+_cockpit_log = logging.getLogger("amplifier_tui.cockpit")
+_cockpit_log.setLevel(logging.DEBUG)
+
+_file_handler = logging.FileHandler("/tmp/cockpit.log", mode="a")
+_file_handler.setLevel(logging.DEBUG)
+_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+if not any(isinstance(h, logging.FileHandler) for h in _cockpit_log.handlers):
+    _cockpit_log.addHandler(_file_handler)
+
+_cockpit_log.info("cockpit_app module loaded (python %s)", sys.version.split()[0])
+
 
 # ---------------------------------------------------------------------------
 # CSS
@@ -196,7 +219,8 @@ class CockpitApp(
         Binding("ctrl+l", "clear_chat", "Clear", show=False),
         Binding("ctrl+y", "copy_response", "Copy", show=False),
         Binding("escape", "cancel_streaming", "Cancel", show=False),
-        Binding("ctrl+i", "toggle_inspector", "Inspector", show=True),
+        # NOTE: ctrl+i = Tab in most terminals; f2 is reliable in tmux.
+        Binding("f2", "toggle_inspector", "Inspector", show=True),
     ]
 
     def __init__(
@@ -233,6 +257,12 @@ class CockpitApp(
         # Session state
         self._session_title: str = ""
 
+        _cockpit_log.info(
+            "CockpitApp.__init__ resume=%s initial_prompt=%s",
+            resume_session_id,
+            bool(initial_prompt),
+        )
+
     # ------------------------------------------------------------------
     # Layout
     # ------------------------------------------------------------------
@@ -262,32 +292,33 @@ class CockpitApp(
     async def on_mount(self) -> None:
         self._show_welcome()
         self.query_one("#chat-input", ChatInput).focus()
-        
-        # Hide inspector panel by default
-        try:
-            panel = self.query_one("#inspector-panel", InspectorPanel)
-            panel.display = False
-        except NoMatches:
-            pass
+        # NOTE: inspector panel starts hidden via CSS (#inspector-panel { display: none })
+        # Do NOT set panel.display = False here — that would fight the CSS cascade.
 
         # Check for auto-resume via tmux pane variable
         if not self.resume_session_id:
             pane_session = _tmux_get_pane_var("@amp_session_id")
             if pane_session:
                 self.resume_session_id = pane_session
+                _cockpit_log.info(
+                    "on_mount: auto-resume session from tmux pane: %s", pane_session
+                )
 
+        _cockpit_log.info("on_mount: starting _init_amplifier worker")
         # Heavy init in background
         self._init_amplifier()
 
     @work(thread=True, group="init")
     def _init_amplifier(self) -> None:
         """Import Amplifier in background so UI appears instantly."""
+        _cockpit_log.info("_init_amplifier: start")
         self.call_from_thread(self._update_status, "Loading Amplifier...")
 
         try:
             self.session_manager = SessionManager()
+            _cockpit_log.info("_init_amplifier: SessionManager created OK")
         except Exception:
-            logger.debug("Failed to initialize session manager", exc_info=True)
+            _cockpit_log.exception("_init_amplifier: SessionManager creation FAILED")
             self._amplifier_available = False
             self.call_from_thread(
                 self._add_system_message,
@@ -303,9 +334,11 @@ class CockpitApp(
         from .environment import check_environment, format_status
 
         env_status = check_environment("")  # Cockpit doesn't have workspace preferences
+        _cockpit_log.info("_init_amplifier: env_status.ready=%s", env_status.ready)
         if not env_status.ready:
             self._amplifier_available = False
             diag = format_status(env_status)
+            _cockpit_log.warning("_init_amplifier: environment not ready:\n%s", diag)
             self.call_from_thread(
                 self._add_system_message,
                 diag
@@ -315,6 +348,9 @@ class CockpitApp(
             return
 
         self._amplifier_ready = True
+        _cockpit_log.info(
+            "_init_amplifier: ready=True, resume_session_id=%s", self.resume_session_id
+        )
 
         if self.resume_session_id:
             self._resume_session(self.resume_session_id)
@@ -379,7 +415,7 @@ class CockpitApp(
         )
         chat_view.mount(block)
         block.scroll_visible()
-        
+
         # Notify inspector if in live mode
         self._notify_inspector_live_mode()
 
@@ -515,7 +551,7 @@ class CockpitApp(
         info = self._block_registry.add(
             bt, self._turn_index, summary=f"[streaming {block_type}]"
         )
-        
+
         # Track current streaming block for live mode
         self._current_streaming_block_id = info.block_id
 
@@ -523,7 +559,10 @@ class CockpitApp(
             widget = Static("", classes="thinking-block thinking-text")
             container = Collapsible(widget, title="Thinking...", collapsed=False)
             cb = ChatBlock(
-                info.block_id, bt, self._turn_index, container,
+                info.block_id,
+                bt,
+                self._turn_index,
+                container,
                 id=f"block-{info.block_id}",
             )
             chat_view.mount(cb)
@@ -532,7 +571,10 @@ class CockpitApp(
         else:
             widget = Markdown("", classes="assistant-message")
             cb = ChatBlock(
-                info.block_id, bt, self._turn_index, widget,
+                info.block_id,
+                bt,
+                self._turn_index,
+                widget,
                 id=f"block-{info.block_id}",
             )
             chat_view.mount(cb)
@@ -540,7 +582,7 @@ class CockpitApp(
 
         self._stream_block_type = block_type
         cb.scroll_visible()
-        
+
         # Notify inspector if in live mode
         self._notify_inspector_live_mode()
 
@@ -663,6 +705,13 @@ class CockpitApp(
         if not text:
             return
 
+        _cockpit_log.info(
+            "_handle_input: text=%r ready=%s sm=%s",
+            text[:40],
+            self._amplifier_ready,
+            self.session_manager is not None,
+        )
+
         target = self._get_input_target()
 
         if target == "inspector":
@@ -677,6 +726,16 @@ class CockpitApp(
         # Main session: slash command or regular message
         if text.startswith("/"):
             self._dispatch_slash_command(text)
+            return
+
+        # Gate: don't send messages until Amplifier has finished initialising.
+        # This prevents race conditions where the user types before the init
+        # worker has created the SessionManager and set _amplifier_ready.
+        if not self._amplifier_ready:
+            _cockpit_log.warning("_handle_input: not ready yet, dropping message")
+            self._add_system_message(
+                "Amplifier is still loading… please wait a moment and try again."
+            )
             return
 
         self._clear_welcome()
@@ -713,21 +772,40 @@ class CockpitApp(
         cid = self._conversation.conversation_id
         conv = self._conversation
 
+        _cockpit_log.info(
+            "_do_send_message: start msg=%r cid=%s sm=%s",
+            message[:40],
+            cid,
+            self.session_manager is not None,
+        )
+
         if self.session_manager is None:
+            _cockpit_log.error(
+                "_do_send_message: session_manager is None -- init not complete?"
+            )
             self.call_from_thread(self._add_system_message, "No active session")
             return
 
         try:
             # Auto-create session on first message
             handle = self.session_manager.get_handle(cid)
+            _cockpit_log.info(
+                "_do_send_message: existing handle=%s", handle is not None
+            )
             if not handle or not handle.session:
                 self.call_from_thread(self._update_status, "Starting session...")
+                _cockpit_log.info(
+                    "_do_send_message: calling start_new_session cwd=%s", None
+                )
                 try:
                     await self.session_manager.start_new_session(
                         conversation_id=cid,
                     )
+                    _cockpit_log.info("_do_send_message: start_new_session OK")
                 except Exception as session_err:
-                    logger.debug("Session creation failed", exc_info=True)
+                    _cockpit_log.exception(
+                        "_do_send_message: start_new_session FAILED: %s", session_err
+                    )
                     self.call_from_thread(
                         self._show_error,
                         f"Could not start session: {session_err}",
@@ -737,8 +815,12 @@ class CockpitApp(
             self._wire_streaming_callbacks(cid, conv)
             self.call_from_thread(self._update_status, "Thinking...")
 
+            _cockpit_log.info("_do_send_message: calling send_message")
             response = await self.session_manager.send_message(
                 message, conversation_id=cid
+            )
+            _cockpit_log.info(
+                "_do_send_message: send_message returned len=%d", len(response or "")
             )
 
             if conv.streaming_cancelled:
@@ -749,7 +831,7 @@ class CockpitApp(
                 self.call_from_thread(self._add_assistant_message, response)
 
         except Exception as e:
-            logger.debug("send message worker failed", exc_info=True)
+            _cockpit_log.exception("_do_send_message: EXCEPTION: %s", e)
             if conv.streaming_cancelled:
                 return
             self.call_from_thread(self._show_error, str(e))
@@ -760,6 +842,7 @@ class CockpitApp(
     async def _resume_session(self, session_id: str) -> None:
         """Resume a session in a background thread."""
         cid = self._conversation.conversation_id
+        _cockpit_log.info("_resume_session: session_id=%s cid=%s", session_id, cid)
         self.call_from_thread(self._update_status, "Resuming session...")
 
         if self.session_manager is None:
@@ -781,13 +864,19 @@ class CockpitApp(
                 session_id=session_id,
                 conversation_id=cid,
             )
+            _cockpit_log.info("_resume_session: resumed OK session_id=%s", session_id)
             self.call_from_thread(self._update_status, "Ready")
             self.call_from_thread(self._clear_welcome)
             self.call_from_thread(
                 self._add_system_message, f"Resumed session {session_id[:12]}..."
             )
         except Exception as e:
-            logger.debug("Resume failed", exc_info=True)
+            _cockpit_log.exception("_resume_session: FAILED: %s", e)
+            # Resume failed -- clear any partial handle so next message creates fresh session
+            try:
+                self.session_manager._handles.pop(cid, None)
+            except Exception:
+                pass
             self.call_from_thread(self._show_error, f"Resume failed: {e}")
             self.call_from_thread(self._update_status, "Ready")
 
@@ -799,6 +888,7 @@ class CockpitApp(
         """Handle Enter in the chat input."""
         # ChatInput.Submitted inherits from TextArea.Changed -- text is on the widget
         text = event.text_area.text.strip()
+        _cockpit_log.info("on_chat_input_submitted: text=%r", text[:60])
         event.text_area.clear()
         if text:
             self._handle_input(text)
@@ -824,35 +914,53 @@ class CockpitApp(
     # Inspector toggle methods
     # ------------------------------------------------------------------
 
-    def _toggle_inspector(self) -> None:
-        """Toggle the inspector panel visibility."""
+    def _inspector_is_visible(self) -> bool:
+        """Return True if the inspector panel is currently shown."""
         try:
             panel = self.query_one("#inspector-panel", InspectorPanel)
-            # Check if panel is currently hidden (display = False means hidden)
-            if panel.display:
-                # Panel is visible, hide it
-                panel.display = False
+            return panel.has_class("visible")
+        except NoMatches:
+            return False
+
+    def _toggle_inspector(self) -> None:
+        """Toggle the inspector panel visibility.
+
+        Uses ONLY the CSS class 'visible' to drive show/hide so it doesn't
+        conflict with the CSS cascade (#inspector-panel { display: none }).
+        Setting panel.display directly would override the stylesheet and cause
+        both states to fight each other.
+        """
+        try:
+            panel = self.query_one("#inspector-panel", InspectorPanel)
+            currently_visible = panel.has_class("visible")
+            _cockpit_log.info(
+                "_toggle_inspector: currently_visible=%s", currently_visible
+            )
+
+            if currently_visible:
+                # Hide: remove CSS class, return focus to chat input
                 panel.remove_class("visible")
-                # Return focus to chat input
                 try:
                     self.query_one("#chat-input", ChatInput).focus()
                 except NoMatches:
                     pass
             else:
-                # Panel is hidden, show it
-                panel.display = True
+                # Show: add CSS class, set live mode, move focus into inspector
                 panel.add_class("visible")
                 panel.set_live_mode()
-                # Give focus to the inspector panel input
                 try:
                     panel.query_one("#inspector-input", TextArea).focus()
                 except NoMatches:
                     pass
+
+            _cockpit_log.info(
+                "_toggle_inspector: done, now_visible=%s", not currently_visible
+            )
         except NoMatches:
-            pass
+            _cockpit_log.warning("_toggle_inspector: InspectorPanel not found")
 
     def action_toggle_inspector(self) -> None:
-        """Textual action for Ctrl+I binding."""
+        """Textual action for F2 binding."""
         self._toggle_inspector()
 
     # ------------------------------------------------------------------
@@ -871,12 +979,15 @@ class CockpitApp(
                 cb.select()
                 break
 
-        # Open inspector in pinned mode
+        # Open inspector in pinned mode (CSS class only, no direct display set)
         try:
             panel = self.query_one("#inspector-panel", InspectorPanel)
-            panel.display = True
             panel.add_class("visible")
             panel.pin_to_block(event.block_id)
+            _cockpit_log.info(
+                "on_block_selected: pinned block %d, inspector now visible",
+                event.block_id,
+            )
         except NoMatches:
             pass
 
@@ -903,24 +1014,28 @@ class CockpitApp(
     def _build_ask_context(self, block: BlockInfo, question: str) -> str:
         """Build context for the side session from a pinned block."""
         context_parts = []
-        
+
         # Block metadata
-        context_parts.append(f"Block {block.block_id} ({block.block_type.name} from turn {block.turn_index})")
+        context_parts.append(
+            f"Block {block.block_id} ({block.block_type.name} from turn {block.turn_index})"
+        )
         if block.summary:
             context_parts.append(f"Summary: {block.summary}")
-        
+
         # Get actual block content from chat view if available
         try:
             chat_view = self._active_chat_view()
             block_widget = chat_view.query_one(f"#block-{block.block_id}")
             # Try to extract text content from the block widget
             context_parts.append("Content:")
-            context_parts.append(str(block_widget))  # Fallback to widget string representation
+            context_parts.append(
+                str(block_widget)
+            )  # Fallback to widget string representation
         except Exception:
             context_parts.append("Content: <unavailable>")
-        
+
         context_parts.append(f"\nUser question: {question}")
-        
+
         return "\n".join(context_parts)
 
     def on_inspector_ask_request(self, event: InspectorAskRequest) -> None:
@@ -928,7 +1043,7 @@ class CockpitApp(
         if not event.block_info:
             # Show error in inspector
             return
-            
+
         context = self._build_ask_context(event.block_info, event.question)
         self._do_ask(context)
 
@@ -937,28 +1052,29 @@ class CockpitApp(
         """Send ask context to side session (async worker)."""
         if not self.session_manager:
             return
-            
+
         # Lazy create side session
         if not self._side_session_id:
             self._side_session_id = await self.session_manager.create_session(
                 initial_prompt="You are an assistant for analyzing conversation blocks. "
-                             "Answer questions about the provided context."
+                "Answer questions about the provided context."
             )
-        
+
         handle = self.session_manager.get_handle(self._side_session_id)
         if not handle:
             return
-            
+
         # Send context as user message
         handle.inject_user_message(context)
-        
+
         # Start processing (simplified, no streaming to main chat)
         self.call_from_thread(self._update_status, "Side session thinking...")
-        
+
         # Wait for response (this is a simplified implementation)
         # In a full implementation, you'd stream the response to the inspector
         # For now, just update status
         import asyncio
+
         await asyncio.sleep(1)  # Simulate processing
         self.call_from_thread(self._update_status, "Side session complete")
 
@@ -966,16 +1082,21 @@ class CockpitApp(
         """Notify inspector panel to follow latest block if in live mode."""
         try:
             panel = self.query_one("#inspector-panel", InspectorPanel)
-            if panel.display:
+            # Use CSS class to check visibility, not panel.display
+            if panel.has_class("visible"):
                 panel.follow_latest()
         except NoMatches:
             pass
 
     def _get_input_target(self) -> str:
-        """Determine where input should be routed: 'main' or 'inspector'."""
+        """Determine where input should be routed: 'main' or 'inspector'.
+
+        Uses CSS class to check visibility rather than panel.display to stay
+        consistent with the CSS-only toggle approach.
+        """
         try:
             panel = self.query_one("#inspector-panel", InspectorPanel)
-            if panel.display:
+            if panel.has_class("visible"):
                 return "inspector"
         except NoMatches:
             pass
@@ -992,6 +1113,11 @@ def run_cockpit(
     initial_prompt: str | None = None,
 ) -> None:
     """Run the Cockpit application."""
+    _cockpit_log.info(
+        "run_cockpit: resume=%s initial_prompt=%s",
+        resume_session_id,
+        bool(initial_prompt),
+    )
     app = CockpitApp(
         resume_session_id=resume_session_id,
         initial_prompt=initial_prompt,
