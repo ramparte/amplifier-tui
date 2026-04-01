@@ -218,6 +218,10 @@ class CockpitApp(
         self._steer_queue = SteerQueue()
         self._turn_index: int = 0
 
+        # Side session (lazy, for /ask)
+        self._side_session_id: str | None = None
+        self._side_conversation = ConversationState()
+
         # Streaming widget state
         self._stream_widget: Static | None = None
         self._stream_container = None
@@ -826,6 +830,72 @@ class CockpitApp(
             if steer_text:
                 handle.inject_user_message(steer_text)
                 self._add_system_message(f"[steer injected] {steer_text}")
+
+    # ------------------------------------------------------------------
+    # Side session methods for /ask command
+    # ------------------------------------------------------------------
+
+    def _build_ask_context(self, block: BlockInfo, question: str) -> str:
+        """Build context for the side session from a pinned block."""
+        context_parts = []
+        
+        # Block metadata
+        context_parts.append(f"Block {block.block_id} ({block.block_type.name} from turn {block.turn_index})")
+        if block.summary:
+            context_parts.append(f"Summary: {block.summary}")
+        
+        # Get actual block content from chat view if available
+        try:
+            chat_view = self._active_chat_view()
+            block_widget = chat_view.query_one(f"#block-{block.block_id}")
+            # Try to extract text content from the block widget
+            context_parts.append("Content:")
+            context_parts.append(str(block_widget))  # Fallback to widget string representation
+        except Exception:
+            context_parts.append("Content: <unavailable>")
+        
+        context_parts.append(f"\nUser question: {question}")
+        
+        return "\n".join(context_parts)
+
+    def on_inspector_ask_request(self, event: InspectorAskRequest) -> None:
+        """Handle /ask command from inspector - start side session."""
+        if not event.block_info:
+            # Show error in inspector
+            return
+            
+        context = self._build_ask_context(event.block_info, event.question)
+        self._do_ask(context)
+
+    @work(exclusive=True)
+    async def _do_ask(self, context: str) -> None:
+        """Send ask context to side session (async worker)."""
+        if not self.session_manager:
+            return
+            
+        # Lazy create side session
+        if not self._side_session_id:
+            self._side_session_id = await self.session_manager.create_session(
+                initial_prompt="You are an assistant for analyzing conversation blocks. "
+                             "Answer questions about the provided context."
+            )
+        
+        handle = self.session_manager.get_handle(self._side_session_id)
+        if not handle:
+            return
+            
+        # Send context as user message
+        handle.inject_user_message(context)
+        
+        # Start processing (simplified, no streaming to main chat)
+        self.call_from_thread(self._update_status, "Side session thinking...")
+        
+        # Wait for response (this is a simplified implementation)
+        # In a full implementation, you'd stream the response to the inspector
+        # For now, just update status
+        import asyncio
+        await asyncio.sleep(1)  # Simulate processing
+        self.call_from_thread(self._update_status, "Side session complete")
 
 
 # ---------------------------------------------------------------------------

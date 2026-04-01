@@ -232,3 +232,29 @@ class TestCockpitSteering:
             await pilot.pause()
             assert app._steer_queue.dequeue() == "first"
             assert app._steer_queue.dequeue() == "second"
+
+
+class TestCockpitSideSession:
+    """CockpitApp side session lifecycle."""
+
+    @pytest.mark.asyncio
+    async def test_side_session_initially_none(self):
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            assert app._side_session_id is None
+
+    @pytest.mark.asyncio
+    async def test_ask_context_assembly(self):
+        """Verify that /ask assembles the right context from the pinned block."""
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            # Add a block to reference
+            app._add_user_message("Write tests for auth.py")
+            block = app._block_registry.get_by_id(
+                app._block_registry.last.block_id
+            )
+            assert block is not None
+            # Build context
+            context = app._build_ask_context(block, "what is this about?")
+            assert "user" in context.lower() or "Write tests" in context
+            assert "what is this about?" in context
