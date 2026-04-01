@@ -1,6 +1,7 @@
 """Widget classes extracted from the monolithic app module."""
 
 from .bars import FindBar, HistorySearchBar, SuggestionBar
+from .chat_block import BlockSelected, ChatBlock
 from .chat_input import ChatInput
 from .commands import AmplifierCommandProvider
 from .datamodels import Attachment, TabState
@@ -29,6 +30,8 @@ __all__ = [
     "AmplifierCommandProvider",
     "AssistantMessage",
     "Attachment",
+    "BlockSelected",
+    "ChatBlock",
     "ChatInput",
     "ErrorMessage",
     "FindBar",
