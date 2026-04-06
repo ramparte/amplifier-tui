@@ -212,12 +212,12 @@ class InspectorPanel(Vertical):
         if block is None:
             self._set_detail_content("[STALE] Block not found")
             return
-        content = (
+        header = (
             f"Block {block.block_id} | {block.block_type.value} | Turn {block.turn_index}\n"
             f"{'=' * 40}\n"
-            f"{block.summary}"
         )
-        self._set_detail_content(content)
+        body = block.content if block.content else block.summary
+        self._set_detail_content(header + body)
 
     def _set_detail_content(self, text: str) -> None:
         """Replace the detail area content."""
@@ -227,7 +227,10 @@ class InspectorPanel(Vertical):
                 child.remove()
             detail.mount(Static(text))
         except Exception:
-            pass
+            import logging
+            logging.getLogger("amplifier_tui.cockpit").debug(
+                "Inspector _set_detail_content error", exc_info=True
+            )
 
     def display_ask_response(self, response: str) -> None:
         """Show a /ask response in the detail area."""

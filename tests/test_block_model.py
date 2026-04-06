@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-import pytest
 
-from amplifier_tui.models.block_model import BlockInfo, BlockRegistry, BlockType, SteerQueue
+from amplifier_tui.models.block_model import (
+    BlockInfo,
+    BlockRegistry,
+    BlockType,
+    SteerQueue,
+)
 
 
 class TestBlockType:
@@ -36,7 +40,7 @@ class TestBlockInfo:
         assert block.block_type == BlockType.ASSISTANT
         assert block.turn_index == 1
         assert block.summary == ""
-        assert block.content_ref is None
+        assert block.content == ""
 
     def test_construction_with_all_fields(self):
         block = BlockInfo(
@@ -44,17 +48,32 @@ class TestBlockInfo:
             block_type=BlockType.TOOL_CALL,
             turn_index=3,
             summary="grep for imports",
-            content_ref="widget-id-123",
+            content="grep -rn 'import' src/",
         )
         assert block.block_id == 5
         assert block.summary == "grep for imports"
-        assert block.content_ref == "widget-id-123"
+        assert block.content == "grep -rn 'import' src/"
 
     def test_block_type_from_string(self):
         """BlockType can be constructed from stream event strings."""
         assert BlockType("user") == BlockType.USER
         assert BlockType("thinking") == BlockType.THINKING
         assert BlockType("tool_call") == BlockType.TOOL_CALL
+
+    def test_content_field(self):
+        """BlockInfo stores full content separately from summary."""
+        info = BlockInfo(
+            block_id=0,
+            block_type=BlockType.USER,
+            turn_index=1,
+            summary="Hello world...",
+            content="Hello world, this is a very long message that exceeds 60 characters",
+        )
+        assert (
+            info.content
+            == "Hello world, this is a very long message that exceeds 60 characters"
+        )
+        assert info.summary == "Hello world..."
 
 
 class TestBlockRegistry:
@@ -167,6 +186,31 @@ class TestBlockRegistry:
         blocks.append(None)  # mutate the copy
         assert len(reg) == 1  # original unchanged
 
+    def test_clear_resets_registry(self):
+        """BlockRegistry.clear() removes all blocks."""
+        registry = BlockRegistry()
+        registry.add(BlockType.USER, 1, summary="msg1", content="Hello")
+        registry.add(BlockType.ASSISTANT, 1, summary="msg2", content="World")
+        assert len(registry) == 2
+
+        registry.clear()
+
+        assert len(registry) == 0
+        assert registry.last is None
+        assert registry.all_blocks == []
+
+    def test_add_with_content(self):
+        """BlockRegistry.add() stores content on the BlockInfo."""
+        registry = BlockRegistry()
+        info = registry.add(
+            BlockType.USER,
+            1,
+            summary="Hello...",
+            content="Hello, this is the full message text",
+        )
+        assert info.content == "Hello, this is the full message text"
+        assert info.summary == "Hello..."
+
 
 class TestSteerQueue:
     """SteerQueue: FIFO queue for steering messages."""
@@ -207,3 +251,26 @@ class TestSteerQueue:
         assert len(q) == 1
         assert q.dequeue() == "c"
         assert q.is_empty
+
+    def test_backpressure_drops_oldest(self):
+        """SteerQueue drops oldest messages when MAX_SIZE is reached."""
+        q = SteerQueue()
+        # Fill to capacity
+        for i in range(q.MAX_SIZE):
+            q.enqueue(f"msg-{i}")
+        assert len(q) == q.MAX_SIZE
+
+        # Enqueue one more -- should drop oldest
+        q.enqueue("overflow")
+        assert len(q) == q.MAX_SIZE
+        # First dequeue should NOT be "msg-0" (it was dropped)
+        first = q.dequeue()
+        assert first == "msg-1"
+
+    def test_is_full_property(self):
+        """SteerQueue.is_full returns True at capacity."""
+        q = SteerQueue()
+        assert not q.is_full
+        for i in range(q.MAX_SIZE):
+            q.enqueue(f"msg-{i}")
+        assert q.is_full

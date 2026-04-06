@@ -93,6 +93,21 @@ class TestCockpitBlockRendering:
             app._add_user_message("second")
             assert app._turn_index == initial_turn + 2
 
+    @pytest.mark.asyncio
+    async def test_block_stores_full_content(self) -> None:
+        """Blocks store full content in the registry, not just 60-char summary."""
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            long_text = "A" * 200  # 200 chars, well beyond the 60-char summary limit
+            app._add_user_message(long_text)
+            await pilot.pause()
+
+            # Registry should store full content
+            block = app._block_registry.last
+            assert block is not None
+            assert block.content == long_text
+            assert len(block.summary) <= 60
+
 
 class TestCockpitBlockSelection:
     """CockpitApp handles BlockSelected messages."""
@@ -155,6 +170,9 @@ class TestCockpitSlashCommands:
 
             chat_view = app.query_one("#cockpit-chat-view", ScrollableContainer)
             assert len(list(chat_view.children)) == 0
+            # Verify block registry is also cleared
+            assert len(app._block_registry) == 0
+            assert app._turn_index == 0
 
 
 from amplifier_tui.widgets.inspector_panel import InspectorPanel

@@ -8,9 +8,8 @@ SteerQueue manages deferred steering messages for the main session.
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any
 
 
 class BlockType(Enum):
@@ -34,14 +33,14 @@ class BlockInfo:
         block_type: What kind of block this is.
         turn_index: Conversational turn number (increments on each user message).
         summary: Short description (e.g., tool name, first line of text).
-        content_ref: Reference to the widget or content (widget ID string).
+        content: Full text content of the block.
     """
 
     block_id: int
     block_type: BlockType
     turn_index: int
     summary: str = ""
-    content_ref: Any = None
+    content: str = ""
 
 
 class BlockRegistry:
@@ -62,7 +61,7 @@ class BlockRegistry:
         block_type: BlockType,
         turn_index: int,
         summary: str = "",
-        content_ref: Any = None,
+        content: str = "",
     ) -> BlockInfo:
         """Create and register a new block. Returns the new BlockInfo."""
         block = BlockInfo(
@@ -70,7 +69,7 @@ class BlockRegistry:
             block_type=block_type,
             turn_index=turn_index,
             summary=summary,
-            content_ref=content_ref,
+            content=content,
         )
         self._blocks.append(block)
         return block
@@ -85,7 +84,9 @@ class BlockRegistry:
         """Return all blocks belonging to a specific turn."""
         return [b for b in self._blocks if b.turn_index == turn_index]
 
-    def search(self, term: str, *, forward: bool = False, from_id: int | None = None) -> BlockInfo | None:
+    def search(
+        self, term: str, *, forward: bool = False, from_id: int | None = None
+    ) -> BlockInfo | None:
         """Search blocks by summary text. Returns first match or None.
 
         Args:
@@ -123,6 +124,10 @@ class BlockRegistry:
         """Return the most recently added block, or None if empty."""
         return self._blocks[-1] if self._blocks else None
 
+    def clear(self) -> None:
+        """Remove all blocks, resetting the registry to empty."""
+        self._blocks = []
+
     @property
     def all_blocks(self) -> list[BlockInfo]:
         """Return a copy of all blocks."""
@@ -135,13 +140,24 @@ class SteerQueue:
     Messages are injected at natural pause points (between tool calls,
     before next LLM turn). When the session is idle, steer becomes the
     next regular user message.
+
+    Backpressure: the queue is capped at MAX_SIZE. When full, the oldest
+    message is dropped to make room for the new one.
     """
+
+    MAX_SIZE: int = 10
 
     def __init__(self) -> None:
         self._queue: deque[str] = deque()
 
     def enqueue(self, message: str) -> None:
-        """Add a steering message to the queue."""
+        """Add a steering message to the queue.
+
+        If the queue is already at MAX_SIZE, the oldest message is dropped
+        before the new one is appended.
+        """
+        if len(self._queue) >= self.MAX_SIZE:
+            self._queue.popleft()
         self._queue.append(message)
 
     def dequeue(self) -> str | None:
@@ -154,6 +170,11 @@ class SteerQueue:
     def is_empty(self) -> bool:
         """True if no steering messages are queued."""
         return len(self._queue) == 0
+
+    @property
+    def is_full(self) -> bool:
+        """True if the queue has reached MAX_SIZE."""
+        return len(self._queue) >= self.MAX_SIZE
 
     def __len__(self) -> int:
         return len(self._queue)

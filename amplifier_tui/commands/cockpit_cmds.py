@@ -94,10 +94,6 @@ class CockpitCommandsMixin:
             "Cockpit Commands:\n"
             "  /help        Show this help\n"
             "  /shell       Open tmux split for shell access\n"
-            "  /model       Show/switch model\n"
-            "  /tokens      Show token usage\n"
-            "  /include     Include file in next message\n"
-            "  /git         Git shortcuts\n"
             "  /clear       Clear chat\n"
             "  /quit        Exit cockpit\n"
         )

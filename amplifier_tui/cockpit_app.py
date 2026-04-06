@@ -14,7 +14,7 @@ Features:
 from __future__ import annotations
 
 import logging
-import sys
+import os
 from typing import TYPE_CHECKING
 
 from textual.app import App, ComposeResult
@@ -63,16 +63,25 @@ if TYPE_CHECKING:
 # Writes to /tmp/cockpit.log so real-terminal failures can be diagnosed
 # even when the TUI is running (can't see stdout).
 
+import tempfile
+
 _cockpit_log = logging.getLogger("amplifier_tui.cockpit")
 _cockpit_log.setLevel(logging.DEBUG)
 
-_file_handler = logging.FileHandler("/tmp/cockpit.log", mode="a")
-_file_handler.setLevel(logging.DEBUG)
-_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-if not any(isinstance(h, logging.FileHandler) for h in _cockpit_log.handlers):
-    _cockpit_log.addHandler(_file_handler)
+_file_handler_added = False
 
-_cockpit_log.info("cockpit_app module loaded (python %s)", sys.version.split()[0])
+
+def _ensure_file_logging() -> None:
+    """Add file handler to cockpit logger on first call (lazy init)."""
+    global _file_handler_added
+    if _file_handler_added:
+        return
+    log_path = os.path.join(tempfile.gettempdir(), "cockpit.log")
+    handler = logging.FileHandler(log_path, mode="a")
+    handler.setLevel(logging.DEBUG)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    _cockpit_log.addHandler(handler)
+    _file_handler_added = True
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +238,7 @@ class CockpitApp(
         initial_prompt: str | None = None,
         **kwargs,
     ) -> None:
+        _ensure_file_logging()
         super().__init__(**kwargs)
 
         self.resume_session_id = resume_session_id
@@ -308,6 +318,25 @@ class CockpitApp(
         # Heavy init in background
         self._init_amplifier()
 
+    async def on_unmount(self) -> None:
+        """Clean up sessions and resources on app exit."""
+        if self.session_manager:
+            cid = self._conversation.conversation_id
+            try:
+                await self.session_manager.end_session(cid)
+            except Exception:
+                _cockpit_log.debug(
+                    "Failed to end main session on unmount", exc_info=True
+                )
+            # Clean up side session
+            if self._side_session_id:
+                try:
+                    await self.session_manager.end_session(self._side_session_id)
+                except Exception:
+                    _cockpit_log.debug(
+                        "Failed to end side session on unmount", exc_info=True
+                    )
+
     @work(thread=True, group="init")
     def _init_amplifier(self) -> None:
         """Import Amplifier in background so UI appears instantly."""
@@ -386,7 +415,7 @@ class CockpitApp(
     ) -> None:
         chat_view = self._active_chat_view()
         info = self._block_registry.add(
-            BlockType.SYSTEM, self._turn_index, summary=text[:60]
+            BlockType.SYSTEM, self._turn_index, summary=text[:60], content=text
         )
         block = ChatBlock(
             info.block_id,
@@ -404,7 +433,7 @@ class CockpitApp(
         self._turn_index += 1
         chat_view = self._active_chat_view()
         info = self._block_registry.add(
-            BlockType.USER, self._turn_index, summary=text[:60]
+            BlockType.USER, self._turn_index, summary=text[:60], content=text
         )
         block = ChatBlock(
             info.block_id,
@@ -424,7 +453,7 @@ class CockpitApp(
     ) -> None:
         chat_view = self._active_chat_view()
         info = self._block_registry.add(
-            BlockType.ASSISTANT, self._turn_index, summary=text[:60]
+            BlockType.ASSISTANT, self._turn_index, summary=text[:60], content=text
         )
         block = ChatBlock(
             info.block_id,
@@ -470,7 +499,8 @@ class CockpitApp(
         self._conversation.streaming_cancelled = False
         self._remove_processing_indicator()
         self._update_status("Ready")
-        _send_bel()
+        if os.environ.get("TMUX"):
+            _send_bel()
 
         # Store session ID in tmux pane variable
         if self.session_manager and self.session_manager.session_id:
@@ -549,7 +579,7 @@ class CockpitApp(
             else BlockType.ASSISTANT
         )
         info = self._block_registry.add(
-            bt, self._turn_index, summary=f"[streaming {block_type}]"
+            bt, self._turn_index, summary=f"[streaming {block_type}]", content=""
         )
 
         # Track current streaming block for live mode
@@ -599,24 +629,23 @@ class CockpitApp(
         """Replace the streaming widget with final content."""
         if self._stream_widget is None:
             return
-        if isinstance(self._stream_widget, Markdown):
-            self._stream_widget.update(final_text)
-        else:
-            self._stream_widget.update(final_text)
-
-        # Update the block summary in the registry
-        if self._block_registry.last:
-            self._block_registry.last.summary = final_text[:60]
-
+        self._stream_widget.update(final_text)
+        # Update the block content and summary in the registry
+        if self._current_streaming_block_id is not None:
+            block = self._block_registry.get_by_id(self._current_streaming_block_id)
+            if block:
+                block.content = final_text
+                block.summary = final_text[:60]
         self._stream_widget = None
         self._stream_container = None
         self._stream_block_type = ""
+        self._current_streaming_block_id = None
 
     def _add_thinking_block(self, text: str) -> None:
         """Add a completed thinking block (fallback, no streaming widget)."""
         chat_view = self._active_chat_view()
         info = self._block_registry.add(
-            BlockType.THINKING, self._turn_index, summary=text[:60]
+            BlockType.THINKING, self._turn_index, summary=text[:60], content=text
         )
         container = Collapsible(
             Static(text, classes="thinking-block thinking-text"),
@@ -629,9 +658,6 @@ class CockpitApp(
     def _add_tool_use(self, name: str, tool_input: dict, result: str) -> None:
         """Add a tool call block to the chat view."""
         chat_view = self._active_chat_view()
-        info = self._block_registry.add(
-            BlockType.TOOL_CALL, self._turn_index, summary=f"{name}"
-        )
         # Compact display: tool name and result in a collapsible
         import json
 
@@ -640,7 +666,10 @@ class CockpitApp(
             if isinstance(tool_input, dict)
             else str(tool_input)
         )
-        content = f"Input:\n{input_str}\n\nResult:\n{result[:500]}"
+        content = f"Input:\n{input_str}\n\nResult:\n{result}"
+        info = self._block_registry.add(
+            BlockType.TOOL_CALL, self._turn_index, summary=f"{name}", content=content
+        )
         container = Collapsible(
             Static(content, classes="tool-call"),
             title=f"Tool: {name}",
@@ -836,7 +865,11 @@ class CockpitApp(
                 return
             self.call_from_thread(self._show_error, str(e))
         finally:
-            self.call_from_thread(self._finish_processing, conversation_id=cid)
+            from textual.worker import get_current_worker
+
+            worker = get_current_worker()
+            if worker and not worker.is_cancelled:
+                self.call_from_thread(self._finish_processing, conversation_id=cid)
 
     @work(thread=True, group="resume")
     async def _resume_session(self, session_id: str) -> None:
@@ -874,7 +907,7 @@ class CockpitApp(
             _cockpit_log.exception("_resume_session: FAILED: %s", e)
             # Resume failed -- clear any partial handle so next message creates fresh session
             try:
-                self.session_manager._handles.pop(cid, None)
+                self.session_manager.remove_handle(cid)
             except Exception:
                 pass
             self.call_from_thread(self._show_error, f"Resume failed: {e}")
@@ -905,6 +938,8 @@ class CockpitApp(
                 child.remove()
         except NoMatches:
             pass
+        self._block_registry.clear()
+        self._turn_index = 0
 
     def action_cancel_streaming(self) -> None:
         """Cancel current streaming."""
@@ -1001,11 +1036,20 @@ class CockpitApp(
             return
         cid = self._conversation.conversation_id
         handle = self.session_manager.get_handle(cid) if self.session_manager else None
-        if handle:
-            steer_text = self._steer_queue.dequeue()
-            if steer_text:
-                handle.inject_user_message(steer_text)
-                self._add_system_message(f"[steer injected] {steer_text}")
+        if not handle:
+            return
+        steer_text = self._steer_queue.dequeue()
+        if not steer_text:
+            return
+        if not self._conversation.is_processing:
+            # Session is idle: send as a regular user message
+            self._add_user_message(steer_text)
+            self._start_processing("Steering", conversation_id=cid)
+            self._do_send_message(steer_text)
+        else:
+            # Session is mid-execution: queue for injection at next tool pause
+            handle.inject_user_message(steer_text)
+            self._add_system_message(f"[steer queued] {steer_text}")
 
     # ------------------------------------------------------------------
     # Side session methods for /ask command
@@ -1014,28 +1058,14 @@ class CockpitApp(
     def _build_ask_context(self, block: BlockInfo, question: str) -> str:
         """Build context for the side session from a pinned block."""
         context_parts = []
-
-        # Block metadata
         context_parts.append(
             f"Block {block.block_id} ({block.block_type.name} from turn {block.turn_index})"
         )
-        if block.summary:
+        if block.content:
+            context_parts.append(f"Content:\n{block.content}")
+        elif block.summary:
             context_parts.append(f"Summary: {block.summary}")
-
-        # Get actual block content from chat view if available
-        try:
-            chat_view = self._active_chat_view()
-            block_widget = chat_view.query_one(f"#block-{block.block_id}")
-            # Try to extract text content from the block widget
-            context_parts.append("Content:")
-            context_parts.append(
-                str(block_widget)
-            )  # Fallback to widget string representation
-        except Exception:
-            context_parts.append("Content: <unavailable>")
-
         context_parts.append(f"\nUser question: {question}")
-
         return "\n".join(context_parts)
 
     def on_inspector_ask_request(self, event: InspectorAskRequest) -> None:
@@ -1049,34 +1079,41 @@ class CockpitApp(
 
     @work(exclusive=True)
     async def _do_ask(self, context: str) -> None:
-        """Send ask context to side session (async worker)."""
+        """Send ask context to side session and display response."""
         if not self.session_manager:
             return
 
         # Lazy create side session
         if not self._side_session_id:
-            self._side_session_id = await self.session_manager.create_session(
-                initial_prompt="You are an assistant for analyzing conversation blocks. "
-                "Answer questions about the provided context."
-            )
+            try:
+                handle = await self.session_manager.start_new_session()
+                self._side_session_id = handle.conversation_id
+            except Exception as e:
+                self.call_from_thread(
+                    self._add_system_message, f"Failed to create side session: {e}"
+                )
+                return
 
-        handle = self.session_manager.get_handle(self._side_session_id)
-        if not handle:
-            return
-
-        # Send context as user message
-        handle.inject_user_message(context)
-
-        # Start processing (simplified, no streaming to main chat)
         self.call_from_thread(self._update_status, "Side session thinking...")
 
-        # Wait for response (this is a simplified implementation)
-        # In a full implementation, you'd stream the response to the inspector
-        # For now, just update status
-        import asyncio
+        try:
+            response = await self.session_manager.send_message(
+                context, conversation_id=self._side_session_id
+            )
+            if response:
+                self.call_from_thread(self._show_ask_response, response)
+        except Exception as e:
+            self.call_from_thread(self._add_system_message, f"Side session error: {e}")
+        finally:
+            self.call_from_thread(self._update_status, "Ready")
 
-        await asyncio.sleep(1)  # Simulate processing
-        self.call_from_thread(self._update_status, "Side session complete")
+    def _show_ask_response(self, response: str) -> None:
+        """Display /ask response in the inspector panel."""
+        try:
+            panel = self.query_one("#inspector-panel", InspectorPanel)
+            panel.display_ask_response(response)
+        except NoMatches:
+            pass
 
     def _notify_inspector_live_mode(self) -> None:
         """Notify inspector panel to follow latest block if in live mode."""

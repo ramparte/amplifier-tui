@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import shutil
 import subprocess
 import sys
@@ -177,11 +176,6 @@ def main():
         help="Launch cockpit mode (single-session, optimized for tmux)",
     )
     parser.add_argument(
-        "--no-cockpit",
-        action="store_true",
-        help="Suppress tmux auto-detection (force standard TUI)",
-    )
-    parser.add_argument(
         "prompt",
         nargs="*",
         help="Initial prompt to send",
@@ -236,10 +230,7 @@ def main():
             pass
         return
 
-    # --cockpit or $TMUX auto-detection
     use_cockpit = args.cockpit
-    if not use_cockpit and not args.no_cockpit and os.environ.get("TMUX"):
-        use_cockpit = True
 
     if use_cockpit:
         try:

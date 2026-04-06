@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -58,7 +59,7 @@ class SessionHandle:
     context_window: int = 0
 
     # --- Steering injection queue ---
-    _pending_injects: list[str] = field(default_factory=list)
+    _pending_injects: deque[str] = field(default_factory=deque)
 
     def reset_usage(self) -> None:
         """Reset token usage counters for a new session."""
@@ -74,7 +75,7 @@ class SessionHandle:
     def pop_pending_inject(self) -> str | None:
         """Pop the next pending injection, or None if empty."""
         if self._pending_injects:
-            return self._pending_injects.pop(0)
+            return self._pending_injects.popleft()
         return None
 
     @property
@@ -495,6 +496,11 @@ class SessionManager:
         if handle is None or handle.session is None:
             raise ValueError(f"No active session for conversation {cid!r}")
         response = await handle.session.execute(message)
+        # Drain pending steering injects
+        while handle.has_pending_inject:
+            inject = handle.pop_pending_inject()
+            if inject:
+                response = await handle.session.execute(inject)
         return response
 
     # ------------------------------------------------------------------
