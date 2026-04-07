@@ -796,8 +796,20 @@ class CockpitApp(
             )
 
     @work(thread=True, group="send-message")
-    async def _do_send_message(self, message: str) -> None:
-        """Send a message to Amplifier in a background thread."""
+    def _do_send_message(self, message: str) -> None:
+        """Send a message to Amplifier in a background thread.
+
+        Like ``_resume_session``, this MUST be a sync function.  Textual's
+        ``@work(thread=True)`` runs async functions via ``asyncio.run()``
+        inside the thread, creating an isolated event-loop whose
+        ``call_from_thread`` posts are silently dropped by the Textual main
+        loop (observed in Textual 8.0).  Keeping this sync and using
+        ``asyncio.run()`` explicitly preserves reliable ``call_from_thread``
+        delivery for status updates, error messages, and the response
+        fallback path.
+        """
+        import asyncio as _asyncio
+
         cid = self._conversation.conversation_id
         conv = self._conversation
 
@@ -827,8 +839,10 @@ class CockpitApp(
                     "_do_send_message: calling start_new_session cwd=%s", None
                 )
                 try:
-                    await self.session_manager.start_new_session(
-                        conversation_id=cid,
+                    _asyncio.run(
+                        self.session_manager.start_new_session(
+                            conversation_id=cid,
+                        )
                     )
                     _cockpit_log.info("_do_send_message: start_new_session OK")
                 except Exception as session_err:
@@ -845,8 +859,8 @@ class CockpitApp(
             self.call_from_thread(self._update_status, "Thinking...")
 
             _cockpit_log.info("_do_send_message: calling send_message")
-            response = await self.session_manager.send_message(
-                message, conversation_id=cid
+            response = _asyncio.run(
+                self.session_manager.send_message(message, conversation_id=cid)
             )
             _cockpit_log.info(
                 "_do_send_message: send_message returned len=%d", len(response or "")
@@ -872,8 +886,20 @@ class CockpitApp(
                 self.call_from_thread(self._finish_processing, conversation_id=cid)
 
     @work(thread=True, group="resume")
-    async def _resume_session(self, session_id: str) -> None:
-        """Resume a session in a background thread."""
+    def _resume_session(self, session_id: str) -> None:
+        """Resume a session in a background thread.
+
+        This MUST be a sync function (not async) even though it calls async
+        bridge code.  Textual's ``@work(thread=True)`` runs async functions
+        via ``asyncio.run()`` inside the thread, which creates an isolated
+        event-loop.  ``call_from_thread`` posts from that nested loop are
+        silently dropped by the Textual main loop (observed in Textual 8.0).
+        By keeping this sync and using ``asyncio.run()`` explicitly for just
+        the bridge call, all ``call_from_thread`` calls happen at the plain-
+        thread level where Textual reliably processes them.
+        """
+        import asyncio as _asyncio
+
         cid = self._conversation.conversation_id
         _cockpit_log.info("_resume_session: session_id=%s cid=%s", session_id, cid)
         self.call_from_thread(self._update_status, "Resuming session...")
@@ -893,9 +919,15 @@ class CockpitApp(
                     return
                 session_id = sessions[0]["session_id"]
 
-            await self.session_manager.resume_session(
-                session_id=session_id,
-                conversation_id=cid,
+            self.call_from_thread(self._update_status, "Loading bundle...")
+
+            # Run the async bridge call in an explicit event loop.
+            # This keeps call_from_thread at the sync-thread level.
+            _asyncio.run(
+                self.session_manager.resume_session(
+                    session_id=session_id,
+                    conversation_id=cid,
+                )
             )
             _cockpit_log.info("_resume_session: resumed OK session_id=%s", session_id)
             self.call_from_thread(self._update_status, "Ready")
