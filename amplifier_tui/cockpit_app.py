@@ -376,6 +376,20 @@ class CockpitApp(
             self.call_from_thread(self._update_status, "Setup needed")
             return
 
+        # Pre-prepare the bundle ONCE at startup.  This is the expensive
+        # operation (triggers ``uv pip install -e``).  Doing it here means
+        # subsequent start_new_session / resume_session calls are fast (~1s
+        # instead of ~5-10s).  Same pattern as amplifier-app-cli.
+        import asyncio as _asyncio
+
+        self.call_from_thread(self._update_status, "Preparing bundle...")
+        try:
+            _asyncio.run(self.session_manager.prepare_bundle())
+            _cockpit_log.info("_init_amplifier: bundle prepared OK")
+        except Exception:
+            _cockpit_log.debug("_init_amplifier: bundle prepare failed", exc_info=True)
+            # Non-fatal: first session creation will retry prepare_bundle()
+
         self._amplifier_ready = True
         _cockpit_log.info(
             "_init_amplifier: ready=True, resume_session_id=%s", self.resume_session_id
@@ -468,6 +482,28 @@ class CockpitApp(
     def _show_error(self, text: str, *, conversation_id: str = "") -> None:
         chat_view = self._active_chat_view()
         chat_view.mount(ErrorMessage(text, classes="error-message"))
+
+    def _display_transcript(self, transcript_path: object) -> None:
+        """Render a session transcript in the chat view on resume."""
+        from pathlib import Path as _Path
+
+        from .transcript_loader import load_transcript, parse_message_blocks
+
+        path = _Path(str(transcript_path))
+        if not path.exists():
+            return
+
+        chat_view = self._active_chat_view()
+        # Clear existing content (welcome screen, etc.)
+        for child in list(chat_view.children):
+            child.remove()
+
+        for msg in load_transcript(path):
+            for block in parse_message_blocks(msg):
+                if block.kind == "user":
+                    self._add_user_message(block.content)
+                elif block.kind == "text":
+                    self._add_assistant_message(block.content)
 
     def _update_status(self, text: str, *, conversation_id: str = "") -> None:
         try:
@@ -920,6 +956,12 @@ class CockpitApp(
                 session_id = sessions[0]["session_id"]
 
             self.call_from_thread(self._update_status, "Loading bundle...")
+
+            # Display the transcript history in the chat view BEFORE resuming
+            # so the user sees prior conversation immediately.
+            transcript_path = SessionManager.get_session_transcript_path(session_id)
+            if transcript_path and transcript_path.exists():
+                self.call_from_thread(self._display_transcript, transcript_path)
 
             # Run the async bridge call in an explicit event loop.
             # This keeps call_from_thread at the sync-thread level.
