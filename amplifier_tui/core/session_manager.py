@@ -1,7 +1,9 @@
 """Amplifier session management for the TUI.
-Uses the distro Bridge as the single interface for session lifecycle.
-No direct imports of amplifier-core or amplifier-foundation for session
-creation -- everything goes through LocalBridge.
+
+Uses the same pattern as amplifier-app-cli: prepare the bundle ONCE at startup,
+then create sessions directly from the PreparedBundle.  This avoids the
+LocalBridge's per-session ``bundle.prepare()`` call which runs ``uv pip install
+-e`` every time (~5-30 s depending on cache state).
 """
 
 from __future__ import annotations
@@ -143,18 +145,80 @@ class SessionHandle:
                 self.on_usage_update()
 
 
-class SessionManager:
-    """Manages Amplifier session lifecycle via the distro Bridge.
+# ---------------------------------------------------------------------------
+# Path helpers (same as distro bridge uses)
+# ---------------------------------------------------------------------------
 
-    Sessions are stored as SessionHandle objects in a registry, keyed by
-    conversation_id. Backward-compat properties delegate to the "default"
-    handle for single-session callers.
+_AMPLIFIER_HOME = Path("~/.amplifier").expanduser()
+_PROJECTS_DIR = "projects"
+_TRANSCRIPT_FILENAME = "transcript.jsonl"
+
+
+def _encode_cwd(cwd: Path) -> str:
+    """Encode a working directory into a safe project-folder name."""
+    try:
+        from amplifier_distro.bridge import _encode_cwd as _distro_encode
+
+        return _distro_encode(cwd)
+    except ImportError:
+        # Fallback: replicate the standard encoding
+        return str(cwd).replace("/", "_").lstrip("_")
+
+
+# ---------------------------------------------------------------------------
+# SessionManager
+# ---------------------------------------------------------------------------
+
+
+class SessionManager:
+    """Manages Amplifier session lifecycle via the CLI pattern.
+
+    Prepares the bundle ONCE, then creates sessions directly from the
+    PreparedBundle -- no per-session ``bundle.prepare()`` cost.
     """
 
     def __init__(self) -> None:
-        self._bridge: Any | None = None
+        self._prepared: Any | None = None  # PreparedBundle, cached
+        self._bridge: Any | None = None  # LocalBridge, for helpers only
         self._handles: dict[str, SessionHandle] = {}
         self._default_conversation_id: str | None = None
+
+    # ------------------------------------------------------------------
+    # Bundle preparation (ONE-TIME, like the CLI)
+    # ------------------------------------------------------------------
+
+    async def prepare_bundle(self) -> None:
+        """Load and prepare the bundle once.
+
+        This is the expensive operation (triggers ``uv pip install``).
+        Call during app startup, not per-session.
+
+        Also injects providers into the mount plan (API keys, default models)
+        since user bundles typically omit the ``providers:`` section and rely
+        on the app layer to supply it.
+        """
+        if self._prepared is not None:
+            return  # Already prepared
+
+        from amplifier_foundation import load_bundle
+
+        # Resolve bundle ref the same way the bridge does
+        bridge = self._get_bridge()
+        bundle_ref = bridge._resolve_distro_bundle(None)
+        logger.info("Preparing bundle: %s", bundle_ref)
+
+        bundle = await load_bundle(bundle_ref)
+        self._prepared = await bundle.prepare()
+
+        # Inject providers into the mount plan (same as bridge does).
+        # This adds the default Anthropic/OpenAI provider from distro.yaml
+        # when the user's bundle doesn't carry its own providers section.
+        try:
+            bridge._inject_providers(self._prepared.mount_plan, None)
+        except Exception:  # noqa: BLE001
+            logger.debug("Provider injection failed", exc_info=True)
+
+        logger.info("Bundle prepared successfully")
 
     # ------------------------------------------------------------------
     # Registry API
@@ -336,7 +400,7 @@ class SessionManager:
         return results
 
     # ------------------------------------------------------------------
-    # Bridge helpers
+    # Bridge helpers (kept for _resolve_distro_bundle and end_session)
     # ------------------------------------------------------------------
 
     def _get_bridge(self) -> Any:
@@ -348,8 +412,28 @@ class SessionManager:
         return self._bridge
 
     # ------------------------------------------------------------------
-    # Session lifecycle (via Bridge)
+    # Session lifecycle (CLI pattern: prepared bundle -> direct create)
     # ------------------------------------------------------------------
+
+    def _register_streaming_hooks(self, session: Any, handle: SessionHandle) -> None:
+        """Register streaming hooks on the session (same as bridge does)."""
+        try:
+            from amplifier_distro.bridge_protocols import BridgeStreamingHook
+            from amplifier_core.events import ALL_EVENTS  # type: ignore[import-not-found]
+
+            streaming = BridgeStreamingHook(on_event=handle._on_stream)
+            for event in list(ALL_EVENTS):
+                session.coordinator.hooks.register(
+                    event=event,
+                    handler=streaming,
+                    priority=100,
+                    name=f"tui-streaming:{event}",
+                )
+        except (ImportError, AttributeError):
+            logger.debug(
+                "Could not register streaming hooks"
+                " (amplifier-core events not available)"
+            )
 
     async def start_new_session(
         self,
@@ -357,12 +441,19 @@ class SessionManager:
         cwd: Path | None = None,
         model_override: str = "",
     ) -> SessionHandle:
-        """Start a new Amplifier session, returning its SessionHandle.
+        """Start a new Amplifier session using the pre-prepared bundle.
 
         If conversation_id is None, an ID is auto-generated and this handle
         becomes the default (backward compat).
         """
-        from amplifier_distro.bridge import BridgeConfig
+        from amplifier_distro.bridge_protocols import (
+            BridgeApprovalSystem,
+            BridgeDisplaySystem,
+        )
+
+        # Ensure bundle is prepared (no-op if already done)
+        if self._prepared is None:
+            await self.prepare_bundle()
 
         auto_generated = conversation_id is None
         if auto_generated:
@@ -373,16 +464,21 @@ class SessionManager:
 
         handle = SessionHandle(conversation_id=conversation_id)
 
-        bridge = self._get_bridge()
-        config = BridgeConfig(
-            working_dir=cwd,
-            run_preflight=False,
-            on_stream=handle._on_stream,  # per-handle binding
+        # Create session directly from PreparedBundle (like the CLI does)
+        display = BridgeDisplaySystem()
+        approval = BridgeApprovalSystem(auto_approve=True)
+
+        session = await self._prepared.create_session(
+            approval_system=approval,
+            display_system=display,
+            session_cwd=cwd,
         )
-        bridge_handle = await bridge.create_session(config)
-        handle._bridge_handle = bridge_handle
-        handle.session = bridge_handle._session
-        handle.session_id = bridge_handle.session_id
+
+        # Register streaming hooks
+        self._register_streaming_hooks(session, handle)
+
+        handle.session = session
+        handle.session_id = session.coordinator.session_id
 
         if model_override:
             self._switch_model_on_handle(handle, model_override)
@@ -395,6 +491,11 @@ class SessionManager:
         if auto_generated:
             self._default_conversation_id = conversation_id
 
+        logger.info(
+            "Session created: id=%s conversation=%s",
+            handle.session_id,
+            conversation_id,
+        )
         return handle
 
     async def resume_session(
@@ -404,12 +505,20 @@ class SessionManager:
         model_override: str = "",
         working_dir: Path | None = None,
     ) -> SessionHandle:
-        """Resume an existing Amplifier session, returning its SessionHandle.
+        """Resume an existing Amplifier session using the pre-prepared bundle.
 
-        If conversation_id is None, an ID is auto-generated and this handle
-        becomes the default (backward compat).
+        Finds the session directory, creates a session with the original ID,
+        and injects the previous transcript.  If conversation_id is None, an
+        ID is auto-generated and this handle becomes the default.
         """
-        from amplifier_distro.bridge import BridgeConfig
+        from amplifier_distro.bridge_protocols import (
+            BridgeApprovalSystem,
+            BridgeDisplaySystem,
+        )
+
+        # Ensure bundle is prepared (no-op if already done)
+        if self._prepared is None:
+            await self.prepare_bundle()
 
         auto_generated = conversation_id is None
         if auto_generated:
@@ -417,16 +526,31 @@ class SessionManager:
 
         handle = SessionHandle(conversation_id=conversation_id)
 
-        bridge = self._get_bridge()
-        config = BridgeConfig(
-            working_dir=working_dir or Path.cwd(),
-            run_preflight=False,
-            on_stream=handle._on_stream,  # per-handle binding
+        # 1. Find the session directory (same logic as bridge)
+        session_dir, effective_cwd = self._find_session_dir(
+            session_id, working_dir or Path.cwd()
         )
-        bridge_handle = await bridge.resume_session(session_id, config)
-        handle._bridge_handle = bridge_handle
-        handle.session = bridge_handle._session
-        handle.session_id = bridge_handle.session_id
+
+        # 2. Create session with resume flag
+        display = BridgeDisplaySystem()
+        approval = BridgeApprovalSystem(auto_approve=True)
+
+        session = await self._prepared.create_session(
+            session_id=session_id,
+            is_resumed=True,
+            approval_system=approval,
+            display_system=display,
+            session_cwd=effective_cwd,
+        )
+
+        # 3. Register streaming hooks
+        self._register_streaming_hooks(session, handle)
+
+        # 4. Load and inject previous transcript
+        self._inject_transcript(session, session_dir)
+
+        handle.session = session
+        handle.session_id = session.coordinator.session_id
 
         if model_override:
             self._switch_model_on_handle(handle, model_override)
@@ -439,7 +563,101 @@ class SessionManager:
         if auto_generated:
             self._default_conversation_id = conversation_id
 
+        logger.info(
+            "Session resumed: id=%s conversation=%s dir=%s",
+            handle.session_id,
+            conversation_id,
+            session_dir,
+        )
         return handle
+
+    def _find_session_dir(
+        self, session_id: str, fallback_cwd: Path
+    ) -> tuple[Path, Path]:
+        """Locate a session directory by ID (or prefix).
+
+        Returns (session_dir, effective_working_dir).
+        """
+        projects_path = _AMPLIFIER_HOME / _PROJECTS_DIR
+        if not projects_path.exists():
+            raise FileNotFoundError(f"No projects directory found at {projects_path}")
+
+        matches: list[tuple[Path, Path]] = []  # (session_dir, project_dir)
+        for project_dir in projects_path.iterdir():
+            if not project_dir.is_dir():
+                continue
+            sessions_subdir = project_dir / "sessions"
+            search_dir = sessions_subdir if sessions_subdir.is_dir() else project_dir
+            for candidate in search_dir.iterdir():
+                if not candidate.is_dir():
+                    continue
+                if candidate.name == session_id or candidate.name.startswith(
+                    session_id
+                ):
+                    matches.append((candidate, project_dir))
+
+        if not matches:
+            raise FileNotFoundError(f"Session not found: {session_id}")
+        if len(matches) > 1:
+            exact = [m for m in matches if m[0].name == session_id]
+            if len(exact) == 1:
+                matches = exact
+            else:
+                ids = [m[0].name for m in matches]
+                raise ValueError(
+                    f"Ambiguous session prefix '{session_id}' matches: {ids}"
+                )
+
+        session_dir, project_dir = matches[0]
+
+        # Try to recover the original working directory from the project dir name
+        try:
+            effective_cwd = Path(reconstruct_project_path(project_dir.name))
+            if not effective_cwd.is_dir():
+                effective_cwd = fallback_cwd
+        except (ValueError, IndexError):
+            effective_cwd = fallback_cwd
+
+        return session_dir, effective_cwd
+
+    @staticmethod
+    def _inject_transcript(session: Any, session_dir: Path) -> None:
+        """Load transcript.jsonl and inject messages into session context."""
+        transcript_file = session_dir / _TRANSCRIPT_FILENAME
+        if not transcript_file.exists():
+            logger.debug("No transcript found at %s", transcript_file)
+            return
+
+        try:
+            messages: list[dict[str, str]] = []
+            for line in transcript_file.read_text().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                entry = json.loads(line)
+                role = entry.get("role", "user")
+                content = entry.get("content", "")
+                if content:
+                    messages.append({"role": role, "content": content})
+
+            if messages:
+                try:
+                    session.coordinator.context.add_messages(messages)
+                    logger.info(
+                        "Injected %d messages from previous transcript",
+                        len(messages),
+                    )
+                except (AttributeError, TypeError):
+                    logger.debug(
+                        "Could not inject transcript messages"
+                        " (context API not available)"
+                    )
+        except (OSError, json.JSONDecodeError, KeyError, ValueError):
+            logger.warning(
+                "Failed to load transcript from %s",
+                transcript_file,
+                exc_info=True,
+            )
 
     async def end_session(self, conversation_id: str | None = None) -> None:
         """End a session by conversation_id (or the default)."""
@@ -461,7 +679,7 @@ class SessionManager:
                 bridge = self._get_bridge()
                 await bridge.end_session(handle._bridge_handle)
             else:
-                # Fallback: direct cleanup when no bridge handle
+                # Direct cleanup when no bridge handle (our normal path now)
                 try:
                     hooks = handle.session.coordinator.get("hooks")
                     if hooks:

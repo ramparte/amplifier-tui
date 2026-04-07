@@ -711,7 +711,7 @@ class AmplifierTuiApp(
         self._init_amplifier_worker()
 
     @work(thread=True)
-    def _init_amplifier_worker(self) -> None:
+    async def _init_amplifier_worker(self) -> None:
         """Import Amplifier in background so UI appears instantly."""
         self.call_from_thread(self._update_status, "Loading Amplifier...")
 
@@ -750,6 +750,17 @@ class AmplifierTuiApp(
             )
             self.call_from_thread(self._update_status, "Setup needed")
             return
+
+        # Pre-prepare the bundle ONCE at startup.  This is the expensive
+        # operation that was previously repeated per-session via LocalBridge.
+        # Same pattern as amplifier-app-cli: prepare once, create many sessions.
+        self.call_from_thread(self._update_status, "Preparing bundle...")
+        try:
+            await self.session_manager.prepare_bundle()
+        except Exception:
+            logger.debug("Bundle preparation failed", exc_info=True)
+            # Non-fatal: first session creation will retry prepare_bundle()
+            pass
 
         self._amplifier_ready = True
 
@@ -6562,11 +6573,17 @@ class AmplifierTuiApp(
     # These implement the abstract _on_stream_* methods from SharedAppBase.
     # All UI updates are marshalled to the main thread via call_from_thread.
 
-    def _on_stream_block_start(self, conversation_id: str, block_type: str, block_index: int = 0) -> None:
+    def _on_stream_block_start(
+        self, conversation_id: str, block_type: str, block_index: int = 0
+    ) -> None:
         self.call_from_thread(self._begin_streaming_block, block_type, conversation_id)
 
     def _on_stream_block_delta(
-        self, conversation_id: str, block_type: str, accumulated_text: str, block_index: int = 0
+        self,
+        conversation_id: str,
+        block_type: str,
+        accumulated_text: str,
+        block_index: int = 0,
     ) -> None:
         self.call_from_thread(
             self._update_streaming_content,
