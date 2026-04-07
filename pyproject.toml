@@ -69,7 +69,7 @@ packages = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "--cov=amplifier_tui --cov-report=term-missing --timeout=30"
+addopts = "--cov=amplifier_tui --cov-report=term-missing --timeout=30 --timeout-method=thread"
 asyncio_mode = "strict"
 
 [tool.coverage.run]
