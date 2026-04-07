@@ -599,14 +599,22 @@ class SessionManager:
         if not matches:
             raise FileNotFoundError(f"Session not found: {session_id}")
         if len(matches) > 1:
-            exact = [m for m in matches if m[0].name == session_id]
-            if len(exact) == 1:
-                matches = exact
+            # Prefer the full UUID directory over a short-name alias.
+            # Sort by name length descending so the full UUID wins.
+            matches.sort(key=lambda m: len(m[0].name), reverse=True)
+            # If there's still true ambiguity (multiple full-length UUIDs),
+            # fall back to exact-match logic.
+            if matches[0][0].name != matches[1][0].name:
+                matches = [matches[0]]
             else:
-                ids = [m[0].name for m in matches]
-                raise ValueError(
-                    f"Ambiguous session prefix '{session_id}' matches: {ids}"
-                )
+                exact = [m for m in matches if m[0].name == session_id]
+                if len(exact) == 1:
+                    matches = exact
+                else:
+                    ids = [m[0].name for m in matches]
+                    raise ValueError(
+                        f"Ambiguous session prefix '{session_id}' matches: {ids}"
+                    )
 
         session_dir, project_dir = matches[0]
 

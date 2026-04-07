@@ -790,8 +790,8 @@ class CockpitApp(
 
         # Main session: slash command or regular message
         if text.startswith("/"):
-            self._dispatch_slash_command(text)
-            return
+            if self._dispatch_slash_command(text):
+                return  # Cockpit-local command handled
 
         # Gate: don't send messages until Amplifier has finished initialising.
         # This prevents race conditions where the user types before the init
@@ -809,8 +809,14 @@ class CockpitApp(
         self._start_processing("Starting session", conversation_id=cid)
         self._do_send_message(text)
 
-    def _dispatch_slash_command(self, text: str) -> None:
-        """Route slash commands to the appropriate handler."""
+    def _dispatch_slash_command(self, text: str) -> bool:
+        """Route slash commands to the appropriate handler.
+
+        Returns ``True`` if the command was handled locally (cockpit UI
+        commands like ``/help``, ``/shell``, ``/clear``).  Returns ``False``
+        for unrecognised commands so that the caller can pass them through
+        to the Amplifier session (e.g. ``/status``, ``/skills``, ``/mode``).
+        """
         parts = text.split(None, 1)
         cmd = parts[0].lower()
 
@@ -825,11 +831,10 @@ class CockpitApp(
         handler = handlers.get(cmd)
         if handler:
             handler()
-        else:
-            # Try parent mixin commands (token, git, etc.)
-            self._add_system_message(
-                f"Unknown command: {cmd}\nUse /help for available commands."
-            )
+            return True
+
+        # Unrecognised -- let the caller send it to the Amplifier session.
+        return False
 
     @work(thread=True, group="send-message")
     def _do_send_message(self, message: str) -> None:
