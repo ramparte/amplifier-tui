@@ -576,11 +576,23 @@ class SessionManager:
     ) -> tuple[Path, Path]:
         """Locate a session directory by ID (or prefix).
 
+        Search order:
+        1. The project directory matching ``fallback_cwd`` (current CWD).
+        2. All other project directories.
+
+        When multiple matches exist, prefer:
+        - Matches from the current project directory
+        - Longer directory names (full UUID over short-name alias)
+
         Returns (session_dir, effective_working_dir).
         """
         projects_path = _AMPLIFIER_HOME / _PROJECTS_DIR
         if not projects_path.exists():
             raise FileNotFoundError(f"No projects directory found at {projects_path}")
+
+        # Determine which project dir corresponds to the current CWD so we
+        # can prefer it when the same session ID appears in multiple projects.
+        cwd_project_name = _encode_cwd(fallback_cwd)
 
         matches: list[tuple[Path, Path]] = []  # (session_dir, project_dir)
         for project_dir in projects_path.iterdir():
@@ -598,23 +610,24 @@ class SessionManager:
 
         if not matches:
             raise FileNotFoundError(f"Session not found: {session_id}")
+
         if len(matches) > 1:
-            # Prefer the full UUID directory over a short-name alias.
-            # Sort by name length descending so the full UUID wins.
+            # Prefer the current project's match over other projects.
+            local = [m for m in matches if m[1].name == cwd_project_name]
+            if local:
+                matches = local
+
+        if len(matches) > 1:
+            # Among remaining matches, prefer the longest directory name
+            # (full UUID over short-name alias).
             matches.sort(key=lambda m: len(m[0].name), reverse=True)
-            # If there's still true ambiguity (multiple full-length UUIDs),
-            # fall back to exact-match logic.
             if matches[0][0].name != matches[1][0].name:
                 matches = [matches[0]]
             else:
-                exact = [m for m in matches if m[0].name == session_id]
-                if len(exact) == 1:
-                    matches = exact
-                else:
-                    ids = [m[0].name for m in matches]
-                    raise ValueError(
-                        f"Ambiguous session prefix '{session_id}' matches: {ids}"
-                    )
+                ids = [f"{m[0].name} (in {m[1].name})" for m in matches]
+                raise ValueError(
+                    f"Ambiguous session prefix '{session_id}' matches: {ids}"
+                )
 
         session_dir, project_dir = matches[0]
 
@@ -818,17 +831,31 @@ class SessionManager:
         return sessions[0]["session_id"]
 
     @staticmethod
-    def get_session_transcript_path(session_id: str) -> Path | None:
+    def get_session_transcript_path(
+        session_id: str, cwd: Path | None = None
+    ) -> Path | None:
         """Locate the ``transcript.jsonl`` file for *session_id*.
 
-        Scans all project directories under ``~/.amplifier/projects/``.
-        Supports prefix matching (e.g. first 8 chars of a UUID).
+        Scans project directories under ``~/.amplifier/projects/``.
+        If *cwd* is provided, the matching project is searched first
+        to avoid cross-project collisions.  Supports prefix matching.
         """
         projects_dir = amplifier_projects_dir()
         if not projects_dir.exists():
             return None
 
-        for project_dir in projects_dir.iterdir():
+        # Build ordered list: current project first, then the rest.
+        project_dirs = sorted(projects_dir.iterdir())
+        if cwd is not None:
+            cwd_project = _encode_cwd(cwd)
+            project_dirs = sorted(
+                project_dirs,
+                key=lambda d: (0 if d.name == cwd_project else 1, d.name),
+            )
+
+        best: Path | None = None
+        best_len = 0  # prefer longest dir name (full UUID > alias)
+        for project_dir in project_dirs:
             if not project_dir.is_dir():
                 continue
             sessions_subdir = project_dir / "sessions"
@@ -841,6 +868,12 @@ class SessionManager:
                     session_id
                 ):
                     transcript = session_dir / "transcript.jsonl"
-                    if transcript.exists():
-                        return transcript
+                    if transcript.exists() and len(session_dir.name) > best_len:
+                        best = transcript
+                        best_len = len(session_dir.name)
+                        # If we found a match in the CWD project, stop
+                        # searching other projects.
+                        if cwd is not None and project_dir.name == cwd_project:
+                            return best
+        return best
         return None

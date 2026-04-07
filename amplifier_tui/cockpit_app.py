@@ -964,7 +964,11 @@ class CockpitApp(
 
             # Display the transcript history in the chat view BEFORE resuming
             # so the user sees prior conversation immediately.
-            transcript_path = SessionManager.get_session_transcript_path(session_id)
+            from pathlib import Path as _Path
+
+            transcript_path = SessionManager.get_session_transcript_path(
+                session_id, cwd=_Path.cwd()
+            )
             if transcript_path and transcript_path.exists():
                 self.call_from_thread(self._display_transcript, transcript_path)
 

@@ -151,11 +151,9 @@ class TestCockpitSlashCommands:
     async def test_unknown_command(self):
         async with CockpitApp().run_test() as pilot:
             app = pilot.app
-            app._dispatch_slash_command("/nonexistent")
-            await pilot.pause()
-            # Should show unknown command message
-            blocks = list(app.query(ChatBlock))
-            assert len(blocks) > 0  # At least the welcome + error
+            # Unknown commands return False (not handled locally)
+            result = app._dispatch_slash_command("/nonexistent")
+            assert result is False
 
     @pytest.mark.asyncio
     async def test_clear_command(self):
@@ -186,7 +184,7 @@ class TestCockpitInspectorToggle:
         async with CockpitApp().run_test() as pilot:
             panels = list(pilot.app.query(InspectorPanel))
             if panels:
-                assert not panels[0].display
+                assert not panels[0].has_class("visible")
             # Or no panel exists yet (lazy mount) -- both are valid
 
     @pytest.mark.asyncio
@@ -196,7 +194,7 @@ class TestCockpitInspectorToggle:
             app._toggle_inspector()
             await pilot.pause()
             panel = app.query_one("#inspector-panel", InspectorPanel)
-            assert panel.display
+            assert panel.has_class("visible")
 
     @pytest.mark.asyncio
     async def test_toggle_twice_hides_panel(self):
@@ -207,7 +205,7 @@ class TestCockpitInspectorToggle:
             app._toggle_inspector()
             await pilot.pause()
             panel = app.query_one("#inspector-panel", InspectorPanel)
-            assert not panel.display
+            assert not panel.has_class("visible")
 
     @pytest.mark.asyncio
     async def test_block_click_opens_inspector_pinned(self):
@@ -222,7 +220,7 @@ class TestCockpitInspectorToggle:
             user_blocks[0].on_click()
             await pilot.pause()
             panel = app.query_one("#inspector-panel", InspectorPanel)
-            assert panel.display
+            assert panel.has_class("visible")
             assert panel.mode == "pinned"
 
 

@@ -49,7 +49,7 @@ class TestFullCockpitFlow:
 
             # Inspector should be visible and pinned
             panel = app.query_one("#inspector-panel", InspectorPanel)
-            assert panel.display
+            assert panel.has_class("visible")
             assert panel.mode == "pinned"
 
     @pytest.mark.asyncio
@@ -94,23 +94,18 @@ class TestFullCockpitFlow:
             app._toggle_inspector()
             await pilot.pause()
 
-            try:
-                panel = app.query_one("#inspector-panel", InspectorPanel)
-                panel.pin_to_block(0)
-                await pilot.pause()
+            panel = app.query_one("#inspector-panel", InspectorPanel)
+            panel.pin_to_block(0)
+            await pilot.pause()
 
-                # Send steer command
-                panel.handle_input("/steer focus on error handling")
-                await pilot.pause()
+            # Send steer command
+            panel.handle_input("/steer focus on error handling")
+            await pilot.pause()
 
-                # Verify the steer was actually enqueued in the app's steer queue.
-                # No session is active in test mode, so _check_steer_queue returns
-                # early (no handle) and the message stays in the queue.
-                assert len(app._steer_queue) == 1
-
-            except Exception:
-                # Inspector might not be available in test mode
-                pass
+            # Verify the steer was actually enqueued in the app's steer queue.
+            # No session is active in test mode, so _check_steer_queue returns
+            # early (no handle) and the message stays in the queue.
+            assert len(app._steer_queue) == 1
 
     @pytest.mark.asyncio
     async def test_clear_resets_registry_and_dom(self) -> None:
