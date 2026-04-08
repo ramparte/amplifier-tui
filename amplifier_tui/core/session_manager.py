@@ -216,9 +216,21 @@ class SessionManager:
         try:
             bridge._inject_providers(self._prepared.mount_plan, None)
         except Exception:  # noqa: BLE001
-            logger.debug("Provider injection failed", exc_info=True)
+            logger.warning("Provider injection failed", exc_info=True)
 
-        logger.info("Bundle prepared successfully")
+        has_providers = bool(self._prepared.mount_plan.get("providers"))
+        logger.info("Bundle prepared successfully (has_providers=%s)", has_providers)
+
+    def has_providers(self) -> bool:
+        """Check whether the prepared mount plan includes any providers."""
+        if self._prepared is None:
+            return False
+        providers = self._prepared.mount_plan.get("providers")
+        if isinstance(providers, list):
+            return len(providers) > 0
+        if isinstance(providers, dict):
+            return len(providers) > 0
+        return False
 
     # ------------------------------------------------------------------
     # Registry API

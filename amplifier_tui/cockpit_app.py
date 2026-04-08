@@ -387,8 +387,26 @@ class CockpitApp(
             _asyncio.run(self.session_manager.prepare_bundle())
             _cockpit_log.info("_init_amplifier: bundle prepared OK")
         except Exception:
-            _cockpit_log.debug("_init_amplifier: bundle prepare failed", exc_info=True)
+            _cockpit_log.warning(
+                "_init_amplifier: bundle prepare failed", exc_info=True
+            )
             # Non-fatal: first session creation will retry prepare_bundle()
+
+        # Verify providers are available.  The most common failure mode is
+        # provider injection silently failing, which produces the cryptic
+        # "No providers available" error only after the user sends a message.
+        # Surface it here so the user sees it immediately on startup.
+        has_providers = self.session_manager.has_providers()
+        if not has_providers:
+            _cockpit_log.warning("_init_amplifier: NO providers in mount plan")
+            self.call_from_thread(
+                self._add_system_message,
+                "Warning: No LLM providers available.\n"
+                "Check that your bundle is configured correctly, or run:\n"
+                "  amplifier provider install\n"
+                "See /tmp/cockpit.log for details.",
+            )
+            self.call_from_thread(self._update_status, "No providers")
 
         self._amplifier_ready = True
         _cockpit_log.info(
