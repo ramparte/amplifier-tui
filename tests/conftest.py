@@ -2,14 +2,44 @@
 
 from __future__ import annotations
 
-import pytest
 from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
 
 
 @pytest.fixture
 def tmp_dir(tmp_path: Path) -> Path:
     """Provide a temporary directory for file-based tests."""
     return tmp_path
+
+
+# -- Cockpit test isolation ---------------------------------------------------
+#
+# CockpitApp.on_mount() fires _init_amplifier() which is a @work(thread=True)
+# worker that creates a SessionManager, calls check_environment(), and runs
+# asyncio.run(prepare_bundle()).  prepare_bundle() triggers real ``uv pip
+# install -e`` calls for every module, which block indefinitely in test mode.
+#
+# This autouse fixture patches _init_amplifier to a lightweight no-op that
+# sets the minimal state CockpitApp needs to accept input.
+
+
+@pytest.fixture(autouse=True)
+def _cockpit_skip_init(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent CockpitApp._init_amplifier from doing real I/O in tests.
+
+    Sets ``_amplifier_ready = True`` and provides a stub ``session_manager``
+    so the app accepts user input without attempting bundle preparation.
+    """
+    from amplifier_tui.cockpit_app import CockpitApp
+
+    def _fake_init(self: CockpitApp) -> None:  # type: ignore[override]
+        self.session_manager = MagicMock()
+        self.session_manager.has_providers.return_value = True
+        self._amplifier_ready = True
+
+    monkeypatch.setattr(CockpitApp, "_init_amplifier", _fake_init)
 
 
 # -- Simple message fixtures --------------------------------------------------

@@ -9,6 +9,7 @@ LocalBridge's per-session ``bundle.prepare()`` call which runs ``uv pip install
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from collections import deque
 from collections.abc import Callable
@@ -154,6 +155,31 @@ _PROJECTS_DIR = "projects"
 _TRANSCRIPT_FILENAME = "transcript.jsonl"
 
 
+def _load_keys_env() -> None:
+    """Load API keys from ``~/.amplifier/keys.env`` into ``os.environ``.
+
+    The Amplifier CLI does this at startup via ``KeyManager()``.  The TUI
+    must replicate it because provider ``mount()`` functions check
+    ``os.environ`` for API keys.  Without this, providers silently skip
+    mounting when run from a tmux or other non-CLI context.
+    """
+    keys_file = _AMPLIFIER_HOME / "keys.env"
+    if not keys_file.exists():
+        return
+    try:
+        with open(keys_file, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, value = line.split("=", 1)
+                    key = key.strip()
+                    if key not in os.environ:
+                        os.environ[key] = value.strip().strip('"').strip("'")
+        logger.info("Loaded API keys from %s", keys_file)
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to load keys from %s", keys_file, exc_info=True)
+
+
 def _encode_cwd(cwd: Path) -> str:
     """Encode a working directory into a safe project-folder name."""
     try:
@@ -200,6 +226,10 @@ class SessionManager:
         if self._prepared is not None:
             return  # Already prepared
 
+        # Load API keys BEFORE providers try to mount.
+        # The CLI does this via KeyManager(); the TUI must replicate it.
+        _load_keys_env()
+
         from amplifier_foundation import load_bundle
 
         # Resolve bundle ref the same way the bridge does
@@ -222,7 +252,16 @@ class SessionManager:
         logger.info("Bundle prepared successfully (has_providers=%s)", has_providers)
 
     def has_providers(self) -> bool:
-        """Check whether the prepared mount plan includes any providers."""
+        """Check whether the prepared mount plan includes provider *specs*.
+
+        .. warning::
+
+            This checks the **spec list** in the mount plan, NOT whether
+            providers actually mounted into the coordinator.  A provider
+            mount silently fails when the API key is missing.  The only
+            reliable way to confirm providers are live is to check
+            ``session.coordinator.get("providers")`` after ``initialize()``.
+        """
         if self._prepared is None:
             return False
         providers = self._prepared.mount_plan.get("providers")
@@ -491,6 +530,22 @@ class SessionManager:
 
         handle.session = session
         handle.session_id = session.coordinator.session_id
+
+        # Verify providers actually mounted (not just listed in mount plan).
+        # Provider mount silently fails when the API key is missing.
+        coord_providers = session.coordinator.get("providers")
+        if not coord_providers:
+            logger.error(
+                "NO providers mounted in coordinator! "
+                "Check that ANTHROPIC_API_KEY is set in env or ~/.amplifier/keys.env"
+            )
+        else:
+            prov_names = (
+                list(coord_providers.keys())
+                if isinstance(coord_providers, dict)
+                else repr(coord_providers)
+            )
+            logger.info("Coordinator providers after init: %s", prov_names)
 
         if model_override:
             self._switch_model_on_handle(handle, model_override)

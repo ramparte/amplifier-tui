@@ -922,7 +922,9 @@ class CockpitApp(
                 self.session_manager.send_message(message, conversation_id=cid)
             )
             _cockpit_log.info(
-                "_do_send_message: send_message returned len=%d", len(response or "")
+                "_do_send_message: send_message returned len=%d response=%r",
+                len(response or ""),
+                (response or "")[:200],
             )
 
             if conv.streaming_cancelled:
