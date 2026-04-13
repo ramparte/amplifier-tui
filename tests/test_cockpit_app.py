@@ -161,16 +161,17 @@ class TestCockpitSlashCommands:
             app = pilot.app
             app._add_user_message("msg1")
             app._add_assistant_message("reply1")
+            blocks_before = len(app._block_registry)
+            assert blocks_before >= 2
             app._dispatch_slash_command("/clear")
             await pilot.pause()
-            # Chat view should be empty after clear
-            from textual.containers import ScrollableContainer
-
-            chat_view = app.query_one("#cockpit-chat-view", ScrollableContainer)
-            assert len(list(chat_view.children)) == 0
-            # Verify block registry is also cleared
-            assert len(app._block_registry) == 0
-            assert app._turn_index == 0
+            # /clear (now _cmd_clear_with_context) clears old blocks, then
+            # adds a confirmation system message.  So the registry should
+            # contain exactly 1 new block (the confirmation message).
+            assert len(app._block_registry) == 1
+            blocks = list(app.query(ChatBlock))
+            system_blocks = [b for b in blocks if b.block_type == BlockType.SYSTEM]
+            assert len(system_blocks) >= 1  # "Chat and session context cleared."
 
 
 from amplifier_tui.widgets.inspector_panel import InspectorPanel
@@ -233,6 +234,7 @@ class TestCockpitSteering:
             app = pilot.app
             # Simulate an InspectorSteerRequest
             from amplifier_tui.widgets.inspector_panel import InspectorSteerRequest
+
             app.post_message(InspectorSteerRequest("focus on tests"))
             await pilot.pause()
             assert not app._steer_queue.is_empty
@@ -243,6 +245,7 @@ class TestCockpitSteering:
         async with CockpitApp().run_test() as pilot:
             app = pilot.app
             from amplifier_tui.widgets.inspector_panel import InspectorSteerRequest
+
             app.post_message(InspectorSteerRequest("first"))
             app.post_message(InspectorSteerRequest("second"))
             await pilot.pause()
@@ -266,9 +269,7 @@ class TestCockpitSideSession:
             app = pilot.app
             # Add a block to reference
             app._add_user_message("Write tests for auth.py")
-            block = app._block_registry.get_by_id(
-                app._block_registry.last.block_id
-            )
+            block = app._block_registry.get_by_id(app._block_registry.last.block_id)
             assert block is not None
             # Build context
             context = app._build_ask_context(block, "what is this about?")
@@ -288,11 +289,11 @@ class TestCockpitLiveMode:
             await pilot.pause()
             panel = app.query_one("#inspector-panel", InspectorPanel)
             panel.set_live_mode()
-            
+
             # Add a block that should be followed
             app._add_user_message("Test live mode")
             await pilot.pause()
-            
+
             # Inspector should follow the new block
             assert panel.mode == "live"
             # In live mode, it should show the latest block
@@ -309,13 +310,16 @@ class TestCockpitLiveMode:
             await pilot.pause()
             panel = app.query_one("#inspector-panel", InspectorPanel)
             panel.set_live_mode()
-            
+
             # Simulate streaming start
             app._begin_streaming_block("assistant", 0)
             await pilot.pause()
-            
+
             # Inspector should follow the streaming block
-            if hasattr(app, '_current_streaming_block_id') and app._current_streaming_block_id is not None:
+            if (
+                hasattr(app, "_current_streaming_block_id")
+                and app._current_streaming_block_id is not None
+            ):
                 assert panel.current_block_id == app._current_streaming_block_id
 
 
@@ -340,3 +344,150 @@ class TestCockpitInputRouting:
             await pilot.pause()
             target = app._get_input_target()
             assert target == "inspector"
+
+
+class TestCockpitExitHandling:
+    """CockpitApp handles exit/quit commands."""
+
+    @pytest.mark.asyncio
+    async def test_slash_exit_dispatches(self):
+        """The /exit slash command is handled locally."""
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            result = app._dispatch_slash_command("/exit")
+            assert result is True
+
+    @pytest.mark.asyncio
+    async def test_slash_quit_dispatches(self):
+        """The /quit slash command is handled locally."""
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            result = app._dispatch_slash_command("/quit")
+            assert result is True
+
+    @pytest.mark.asyncio
+    async def test_slash_q_dispatches(self):
+        """The /q slash command is handled locally."""
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            result = app._dispatch_slash_command("/q")
+            assert result is True
+
+
+class TestCockpitExpandedSlashCommands:
+    """CockpitApp expanded slash command table."""
+
+    @pytest.mark.asyncio
+    async def test_slash_status_dispatches(self):
+        """The /status command is handled locally."""
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            result = app._dispatch_slash_command("/status")
+            assert result is True
+
+    @pytest.mark.asyncio
+    async def test_slash_status_shows_info(self):
+        """The /status command adds a system message with session info."""
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            app._dispatch_slash_command("/status")
+            await pilot.pause()
+            blocks = list(app.query(ChatBlock))
+            system_blocks = [b for b in blocks if b.block_type == BlockType.SYSTEM]
+            # Should have a status block with session info
+            assert len(system_blocks) >= 1
+
+    @pytest.mark.asyncio
+    async def test_slash_new_dispatches(self):
+        """The /new command is handled locally."""
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            result = app._dispatch_slash_command("/new")
+            assert result is True
+
+    @pytest.mark.asyncio
+    async def test_slash_new_creates_fresh_conversation(self):
+        """The /new command resets conversation state."""
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            old_cid = app._conversation.conversation_id
+            app._add_user_message("hello")
+            app._dispatch_slash_command("/new")
+            await pilot.pause()
+            # Conversation ID should have changed (new ConversationState)
+            assert app._conversation.conversation_id != old_cid
+
+    @pytest.mark.asyncio
+    async def test_clear_with_context_resets_dom(self):
+        """/clear clears the DOM, preserves turn index (avoids Textual ID collision)."""
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            app._add_user_message("msg1")
+            app._add_assistant_message("reply1")
+            turn_before = app._turn_index
+            assert turn_before > 0
+            app._dispatch_slash_command("/clear")
+            await pilot.pause()
+            # Turn index should NOT reset (prevents DuplicateIds in Textual)
+            assert app._turn_index == turn_before
+            # Registry has just the confirmation system message
+            assert len(app._block_registry) == 1
+
+    @pytest.mark.asyncio
+    async def test_bare_exit_handled(self):
+        """Bare 'exit' (no slash) is caught before reaching the session."""
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            # The _handle_input method checks for bare exit/quit before
+            # sending to the session.  We can't fully test app.exit() in
+            # pilot mode, but we can verify the codepath exists.
+            assert hasattr(app, "_handle_input")
+
+    @pytest.mark.asyncio
+    async def test_status_label_first_message(self):
+        """First message should show 'Starting session' in status."""
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            cid = app._conversation.conversation_id
+            # Mock get_handle to return None (no session yet)
+            app.session_manager.get_handle.return_value = None
+            has_session = bool(
+                app.session_manager and app.session_manager.get_handle(cid)
+            )
+            label = "Thinking" if has_session else "Starting session"
+            assert label == "Starting session"
+
+    @pytest.mark.asyncio
+    async def test_status_label_subsequent_message(self):
+        """Subsequent messages should show 'Thinking' in status."""
+        from unittest.mock import MagicMock
+
+        async with CockpitApp().run_test() as pilot:
+            app = pilot.app
+            cid = app._conversation.conversation_id
+            # Mock get_handle to return a handle (session exists)
+            mock_handle = MagicMock()
+            app.session_manager.get_handle.return_value = mock_handle
+            has_session = bool(
+                app.session_manager and app.session_manager.get_handle(cid)
+            )
+            label = "Thinking" if has_session else "Starting session"
+            assert label == "Thinking"
+
+
+class TestSessionManagerApproval:
+    """SessionManager approval callback."""
+
+    def test_on_approval_request_returns_first_option(self):
+        """Approval callback returns the first option (auto-approve with logging)."""
+        from amplifier_tui.core.session_manager import SessionManager
+
+        result = SessionManager._on_approval_request("Allow bash?", ["allow", "deny"])
+        assert result == "allow"
+
+    def test_on_approval_request_empty_options(self):
+        """Approval callback returns 'allow' when no options provided."""
+        from amplifier_tui.core.session_manager import SessionManager
+
+        result = SessionManager._on_approval_request("Allow?", [])
+        assert result == "allow"

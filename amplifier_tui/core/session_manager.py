@@ -486,6 +486,87 @@ class SessionManager:
                 " (amplifier-core events not available)"
             )
 
+    @staticmethod
+    def _on_approval_request(prompt: str, options: list[str]) -> str:
+        """Handle approval requests from tools.
+
+        The CLI shows a Rich panel and waits for y/n.  The cockpit logs and
+        auto-approves for now, but with visibility.  A future iteration
+        should route this through a Textual modal dialog.
+        """
+        logger.warning("Approval requested: %s (options: %s)", prompt, options)
+        # Auto-approve but with logging so it's visible in /tmp/cockpit.log.
+        # This is a pragmatic middle ground: not silently invisible like
+        # auto_approve=True, but not yet a full TUI modal.
+        return options[0] if options else "allow"
+
+    def _register_cli_capabilities(
+        self, session: Any, handle: SessionHandle, cwd: Path | None
+    ) -> None:
+        """Register capabilities that the CLI provides but the TUI was missing.
+
+        The CLI's ``create_initialized_session()`` does ~8 things after
+        ``create_session()``.  This method replicates the critical ones so
+        the cockpit has feature parity: session persistence, agent delegation,
+        @mention resolution, and session config metadata.
+        """
+        session_id = handle.session_id
+
+        # 1. Session persistence -- write transcript after every turn
+        try:
+            from amplifier_app_cli.incremental_save import register_incremental_save
+            from amplifier_app_cli.session_runner import SessionStore
+
+            store = SessionStore()
+            bundle_name = (
+                getattr(self._prepared, "bundle_name", "unknown")
+                if self._prepared
+                else "unknown"
+            )
+            register_incremental_save(
+                session,
+                store,
+                session_id,
+                bundle_name,
+                session.config if hasattr(session, "config") else {},
+            )
+            logger.info("Registered incremental save for session %s", session_id)
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to register incremental save", exc_info=True)
+
+        # 2. Agent delegation -- enables tool-task to spawn sub-agents
+        try:
+            from amplifier_app_cli.session_runner import register_session_spawning
+
+            register_session_spawning(session)
+            logger.info("Registered session spawning for agent delegation")
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to register session spawning", exc_info=True)
+
+        # 3. @mention resolution -- enables @file.txt in user messages
+        try:
+            from amplifier_app_cli.session_runner import register_mention_handling
+
+            register_mention_handling(session)
+            logger.info("Registered mention handling")
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to register mention handling", exc_info=True)
+
+        # 4. Session config metadata -- hooks and tools read these fields
+        try:
+            if hasattr(session, "config") and isinstance(session.config, dict):
+                session.config["working_dir"] = str(cwd) if cwd else ""
+                session.config["application_host"] = "Amplifier Cockpit"
+                session.config["project_slug"] = cwd.name if cwd else ""
+                session.config["project_name"] = cwd.name if cwd else ""
+                session.config["root_session_id"] = session_id
+            elif hasattr(session, "config"):
+                # session.config might be a dataclass or namespace
+                session.config.working_dir = str(cwd) if cwd else ""  # type: ignore[union-attr]
+                session.config.application_host = "Amplifier Cockpit"  # type: ignore[union-attr]
+        except Exception:  # noqa: BLE001
+            logger.debug("Failed to inject session config metadata", exc_info=True)
+
     async def start_new_session(
         self,
         conversation_id: str | None = None,
@@ -517,7 +598,10 @@ class SessionManager:
 
         # Create session directly from PreparedBundle (like the CLI does)
         display = BridgeDisplaySystem()
-        approval = BridgeApprovalSystem(auto_approve=True)
+        approval = BridgeApprovalSystem(
+            on_approval=self._on_approval_request,
+            auto_approve=False,
+        )
 
         session = await self._prepared.create_session(
             approval_system=approval,
@@ -530,6 +614,9 @@ class SessionManager:
 
         handle.session = session
         handle.session_id = session.coordinator.session_id
+
+        # --- CLI parity: register capabilities the CLI provides --------
+        self._register_cli_capabilities(session, handle, cwd)
 
         # Verify providers actually mounted (not just listed in mount plan).
         # Provider mount silently fails when the API key is missing.
@@ -600,7 +687,10 @@ class SessionManager:
 
         # 2. Create session with resume flag
         display = BridgeDisplaySystem()
-        approval = BridgeApprovalSystem(auto_approve=True)
+        approval = BridgeApprovalSystem(
+            on_approval=self._on_approval_request,
+            auto_approve=False,
+        )
 
         session = await self._prepared.create_session(
             session_id=session_id,
@@ -618,6 +708,9 @@ class SessionManager:
 
         handle.session = session
         handle.session_id = session.coordinator.session_id
+
+        # 5. CLI parity capabilities (same as start_new_session)
+        self._register_cli_capabilities(session, handle, effective_cwd)
 
         if model_override:
             self._switch_model_on_handle(handle, model_override)
@@ -710,19 +803,45 @@ class SessionManager:
 
     @staticmethod
     def _inject_transcript(session: Any, session_dir: Path) -> None:
-        """Load transcript.jsonl and inject messages into session context."""
+        """Load transcript.jsonl, repair if needed, and inject into session context."""
         transcript_file = session_dir / _TRANSCRIPT_FILENAME
         if not transcript_file.exists():
             logger.debug("No transcript found at %s", transcript_file)
             return
 
         try:
-            messages: list[dict[str, str]] = []
+            entries: list[dict] = []
             for line in transcript_file.read_text().splitlines():
                 line = line.strip()
                 if not line:
                     continue
-                entry = json.loads(line)
+                entries.append(json.loads(line))
+
+            # Repair transcript if it has orphaned tool calls or ordering issues
+            # (e.g. session crashed mid-tool-execution).  Without this, providers
+            # reject the transcript with HTTP 400.
+            try:
+                from amplifier_foundation.session import (
+                    diagnose_transcript,
+                    repair_transcript,
+                )
+
+                diagnosis = diagnose_transcript(entries)
+                if diagnosis.needs_repair:
+                    logger.warning("Transcript needs repair: %s", diagnosis.summary)
+                    entries = repair_transcript(entries, diagnosis)
+                    logger.info("Transcript repaired successfully")
+            except ImportError:
+                logger.debug(
+                    "Transcript repair not available (foundation not installed)"
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Transcript repair failed, using raw entries", exc_info=True
+                )
+
+            messages: list[dict[str, str]] = []
+            for entry in entries:
                 role = entry.get("role", "user")
                 content = entry.get("content", "")
                 if content:

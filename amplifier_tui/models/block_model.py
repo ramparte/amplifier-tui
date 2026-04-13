@@ -52,6 +52,7 @@ class BlockRegistry:
 
     def __init__(self) -> None:
         self._blocks: list[BlockInfo] = []
+        self._next_id: int = 0
 
     def __len__(self) -> int:
         return len(self._blocks)
@@ -65,24 +66,33 @@ class BlockRegistry:
     ) -> BlockInfo:
         """Create and register a new block. Returns the new BlockInfo."""
         block = BlockInfo(
-            block_id=len(self._blocks),
+            block_id=self._next_id,
             block_type=block_type,
             turn_index=turn_index,
             summary=summary,
             content=content,
         )
+        self._next_id += 1
         self._blocks.append(block)
         return block
 
     def get_by_id(self, block_id: int) -> BlockInfo | None:
-        """Look up a block by its sequential ID."""
-        if 0 <= block_id < len(self._blocks):
-            return self._blocks[block_id]
+        """Look up a block by its ID."""
+        for b in self._blocks:
+            if b.block_id == block_id:
+                return b
         return None
 
     def get_by_turn(self, turn_index: int) -> list[BlockInfo]:
         """Return all blocks belonging to a specific turn."""
         return [b for b in self._blocks if b.turn_index == turn_index]
+
+    def _index_of(self, block_id: int) -> int | None:
+        """Return list index for a given block_id, or None."""
+        for idx, b in enumerate(self._blocks):
+            if b.block_id == block_id:
+                return idx
+        return None
 
     def search(
         self, term: str, *, forward: bool = False, from_id: int | None = None
@@ -92,31 +102,41 @@ class BlockRegistry:
         Args:
             term: Case-insensitive substring to search for.
             forward: If True, search forward from from_id. Default is backward.
-            from_id: Starting block ID. None means start from end (backward) or start (forward).
+            from_id: Starting block ID. None means start from end (backward)
+                or start (forward).
         """
         term_lower = term.lower()
+        if from_id is not None:
+            pos = self._index_of(from_id)
+            if pos is None:
+                return None
+        else:
+            pos = None
+
         if forward:
-            start = (from_id + 1) if from_id is not None else 0
+            start = (pos + 1) if pos is not None else 0
             for block in self._blocks[start:]:
                 if term_lower in block.summary.lower():
                     return block
         else:
-            start = (from_id - 1) if from_id is not None else len(self._blocks) - 1
+            start = (pos - 1) if pos is not None else len(self._blocks) - 1
             for i in range(start, -1, -1):
                 if term_lower in self._blocks[i].summary.lower():
                     return self._blocks[i]
         return None
 
     def prev_block(self, current_id: int) -> BlockInfo | None:
-        """Return the block before current_id, or None if at start."""
-        if current_id > 0:
-            return self._blocks[current_id - 1]
+        """Return the block before *current_id* (by list position), or None."""
+        for idx, b in enumerate(self._blocks):
+            if b.block_id == current_id:
+                return self._blocks[idx - 1] if idx > 0 else None
         return None
 
     def next_block(self, current_id: int) -> BlockInfo | None:
-        """Return the block after current_id, or None if at end."""
-        if current_id < len(self._blocks) - 1:
-            return self._blocks[current_id + 1]
+        """Return the block after *current_id* (by list position), or None."""
+        for idx, b in enumerate(self._blocks):
+            if b.block_id == current_id:
+                return self._blocks[idx + 1] if idx < len(self._blocks) - 1 else None
         return None
 
     @property
@@ -125,8 +145,13 @@ class BlockRegistry:
         return self._blocks[-1] if self._blocks else None
 
     def clear(self) -> None:
-        """Remove all blocks, resetting the registry to empty."""
+        """Remove all blocks but keep the ID counter.
+
+        This is critical: Textual remembers widget IDs globally, so reusing
+        a previously-assigned block ID after clear causes ``DuplicateIds``.
+        """
         self._blocks = []
+        # NOTE: self._next_id is intentionally NOT reset.
 
     @property
     def all_blocks(self) -> list[BlockInfo]:

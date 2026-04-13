@@ -125,11 +125,12 @@ class TestFullCockpitFlow:
             app.action_clear_chat()
             await pilot.pause()
 
-            # Verify both DOM and registry are cleared
+            # Verify both DOM and registry are cleared.
+            # NOTE: _turn_index is NOT reset -- Textual keeps global widget
+            # IDs so restarting at 0 would cause DuplicateIds.
             chat_view = app.query_one("#cockpit-chat-view")
             assert len(list(chat_view.children)) == 0
             assert len(app._block_registry) == 0
-            assert app._turn_index == 0
 
     @pytest.mark.asyncio
     async def test_block_registry_consistent_with_widgets(self):

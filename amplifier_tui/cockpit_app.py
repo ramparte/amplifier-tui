@@ -806,6 +806,11 @@ class CockpitApp(
                 pass
             return
 
+        # Bare exit/quit (without slash prefix) -- just exit the app.
+        if text.strip().lower() in ("exit", "quit"):
+            self.exit()
+            return
+
         # Main session: slash command or regular message
         if text.startswith("/"):
             if self._dispatch_slash_command(text):
@@ -824,7 +829,11 @@ class CockpitApp(
         self._clear_welcome()
         self._add_user_message(text)
         cid = self._conversation.conversation_id
-        self._start_processing("Starting session", conversation_id=cid)
+        has_session = bool(
+            self.session_manager and self.session_manager.get_handle(cid)
+        )
+        label = "Thinking" if has_session else "Starting session"
+        self._start_processing(label, conversation_id=cid)
         self._do_send_message(text)
 
     def _dispatch_slash_command(self, text: str) -> bool:
@@ -841,9 +850,12 @@ class CockpitApp(
         handlers = {
             "/help": lambda: self._cmd_cockpit_help(),
             "/shell": lambda: self._cmd_cockpit_shell(),
-            "/clear": lambda: self.action_clear_chat(),
+            "/clear": lambda: self._cmd_clear_with_context(),
+            "/status": lambda: self._cmd_status(),
+            "/new": lambda: self._cmd_new_session(),
             "/quit": lambda: self.exit(),
             "/q": lambda: self.exit(),
+            "/exit": lambda: self.exit(),
         }
 
         handler = handlers.get(cmd)
@@ -1034,7 +1046,14 @@ class CockpitApp(
     # ------------------------------------------------------------------
 
     def action_clear_chat(self) -> None:
-        """Clear the chat view."""
+        """Clear the chat view (DOM only, does not clear session context).
+
+        NOTE: ``_turn_index`` is NOT reset to zero.  Textual keeps a global
+        registry of widget IDs and even after ``child.remove()`` the old IDs
+        remain reserved until the next compose cycle.  Reusing them causes
+        ``DuplicateIds``.  Instead we keep the counter monotonically
+        increasing so new ChatBlock IDs (``block-{turn}``) stay unique.
+        """
         try:
             chat_view = self._active_chat_view()
             for child in list(chat_view.children):
@@ -1042,7 +1061,69 @@ class CockpitApp(
         except NoMatches:
             pass
         self._block_registry.clear()
-        self._turn_index = 0
+
+    def _cmd_clear_with_context(self) -> None:
+        """Clear the chat view AND the session's context memory."""
+        self.action_clear_chat()
+        # Also clear the LLM's context so it doesn't remember previous turns
+        cid = self._conversation.conversation_id
+        if self.session_manager:
+            handle = self.session_manager.get_handle(cid)
+            if handle and handle.session:
+                try:
+                    ctx = handle.session.coordinator.get("context")
+                    if ctx and hasattr(ctx, "clear"):
+                        ctx.clear()
+                        _cockpit_log.info("/clear: session context cleared")
+                except Exception:  # noqa: BLE001
+                    _cockpit_log.debug("Could not clear session context", exc_info=True)
+        self._add_system_message("Chat and session context cleared.")
+
+    def _cmd_status(self) -> None:
+        """Show session status information."""
+        lines = ["Session Status:"]
+        cid = self._conversation.conversation_id
+        if self.session_manager:
+            handle = self.session_manager.get_handle(cid)
+            if handle:
+                lines.append(f"  Session ID: {handle.session_id or 'none'}")
+                if handle.model_name:
+                    lines.append(f"  Model: {handle.model_name}")
+                lines.append(f"  Messages: {self._turn_index}")
+                lines.append(f"  Blocks: {len(self._block_registry)}")
+                # Show provider list
+                try:
+                    providers = self.session_manager.get_provider_models()
+                    if providers:
+                        prov_list = ", ".join(
+                            f"{model} ({name})" for model, name in providers
+                        )
+                        lines.append(f"  Providers: {prov_list}")
+                except Exception:  # noqa: BLE001
+                    pass
+            else:
+                lines.append("  No active session")
+        else:
+            lines.append("  Amplifier not initialized")
+        self._add_system_message("\n".join(lines))
+
+    def _cmd_new_session(self) -> None:
+        """End the current session and start a fresh one."""
+        import asyncio as _asyncio
+
+        cid = self._conversation.conversation_id
+        if self.session_manager:
+            handle = self.session_manager.get_handle(cid)
+            if handle and handle.session:
+                try:
+                    _asyncio.run(self.session_manager.end_session(cid))
+                except Exception:  # noqa: BLE001
+                    _cockpit_log.debug("Error ending session", exc_info=True)
+
+        # Clear DOM and create fresh conversation state
+        self.action_clear_chat()
+        self._conversation = ConversationState()
+        self._add_system_message("New session started. Send a message to begin.")
 
     def action_cancel_streaming(self) -> None:
         """Cancel current streaming."""
