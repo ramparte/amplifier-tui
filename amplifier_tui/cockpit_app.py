@@ -1065,7 +1065,12 @@ class CockpitApp(
     def _cmd_clear_with_context(self) -> None:
         """Clear the chat view AND the session's context memory."""
         self.action_clear_chat()
-        # Also clear the LLM's context so it doesn't remember previous turns
+        # Schedule the async context clear (context module methods are async)
+        self.run_worker(self._async_clear_context(), exclusive=False)
+        self._add_system_message("Chat and session context cleared.")
+
+    async def _async_clear_context(self) -> None:
+        """Actually clear the session's context memory (async)."""
         cid = self._conversation.conversation_id
         if self.session_manager:
             handle = self.session_manager.get_handle(cid)
@@ -1073,11 +1078,10 @@ class CockpitApp(
                 try:
                     ctx = handle.session.coordinator.get("context")
                     if ctx and hasattr(ctx, "clear"):
-                        ctx.clear()
+                        await ctx.clear()
                         _cockpit_log.info("/clear: session context cleared")
                 except Exception:  # noqa: BLE001
                     _cockpit_log.debug("Could not clear session context", exc_info=True)
-        self._add_system_message("Chat and session context cleared.")
 
     def _cmd_status(self) -> None:
         """Show session status information."""
