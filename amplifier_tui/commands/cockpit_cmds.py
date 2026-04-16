@@ -89,27 +89,81 @@ class CockpitCommandsMixin:
             )
 
     def _cmd_cockpit_help(self) -> None:
-        """Display cockpit command list."""
-        help_text = (
-            "Cockpit Commands:\n"
-            "  /help        Show this help\n"
-            "  /shell       Open tmux split for shell access\n"
-            "  /clear       Clear chat and session context\n"
-            "  /status      Show session info (ID, model, providers)\n"
-            "  /new         Start a new session\n"
-            "  /quit        Exit cockpit  (also: /q, /exit)\n"
-            "\n"
-            "Session Commands (forwarded to Amplifier):\n"
-            "  /mode NAME   Activate a mode (e.g. /mode plan)\n"
-            "  /modes       List available modes\n"
-            "  /save        Save conversation transcript\n"
-            "  /config      Show current configuration\n"
-            "  /tools       List available tools\n"
-            "  /agents      List available agents\n"
-            "  /rename NAME Rename current session\n"
-            "  /compact     Compact context to free token space\n"
-            "\n"
-            "Any other /command is sent to the session as a message.\n"
-            "Skills and mode shortcuts (e.g. /brainstorm) also work."
-        )
-        self._add_system_message(help_text)  # type: ignore[attr-defined]
+        """Display help with cockpit commands + dynamic modes/skills from session."""
+        lines = [
+            "Cockpit Commands:",
+            "  /help        Show this help",
+            "  /shell       Open tmux split for shell access",
+            "  /clear       Clear chat and session context",
+            "  /status      Show session info (ID, model, providers)",
+            "  /new         Start a new session",
+            "  /quit        Exit cockpit  (also: /q, /exit)",
+            "",
+            "Session Commands (forwarded to Amplifier):",
+            "  /mode NAME   Activate a mode (e.g. /mode plan)",
+            "  /modes       List available modes",
+            "  /save        Save conversation transcript",
+            "  /config      Show current configuration",
+            "  /tools       List available tools",
+            "  /agents      List available agents",
+            "  /skills      List available skills",
+            "  /skill NAME  Load a skill (e.g. /skill simplify)",
+            "  /rename NAME Rename current session",
+            "  /compact     Compact context to free token space",
+        ]
+
+        # Dynamic mode shortcuts from the session (same API as CLI)
+        modes = self._discover_mode_shortcuts()
+        if modes:
+            lines.append("")
+            lines.append("Mode Shortcuts:")
+            for name, description in modes:
+                if description:
+                    lines.append(f"  /{name:<11} - {description}")
+                else:
+                    lines.append(f"  /{name}")
+
+        # Dynamic skill commands from the session (same API as CLI)
+        skills = self._discover_skill_shortcuts()
+        if skills:
+            lines.append("")
+            lines.append("Skill Commands:")
+            for name in sorted(skills.keys()):
+                info = skills[name]
+                desc = (
+                    info.get("description", "") if isinstance(info, dict) else str(info)
+                )
+                # Truncate long descriptions for readability
+                if len(desc) > 80:
+                    desc = desc[:77] + "..."
+                lines.append(f"  /{name:<11} - {desc}")
+
+        self._add_system_message("\n".join(lines))  # type: ignore[attr-defined]
+
+    def _discover_mode_shortcuts(self) -> list[tuple[str, str]]:
+        """Query the session for available mode shortcuts."""
+        try:
+            session = self._get_active_session()  # type: ignore[attr-defined]
+            if not session:
+                return []
+            discovery = session.coordinator.session_state.get("mode_discovery")
+            if discovery and hasattr(discovery, "list_modes"):
+                modes = discovery.list_modes()
+                # Normalise to list of (name, description) tuples
+                return [(item[0], item[1]) for item in modes] if modes else []
+        except Exception:  # noqa: BLE001
+            pass
+        return []
+
+    def _discover_skill_shortcuts(self) -> dict[str, object]:
+        """Query the session for user-invokable skill shortcuts."""
+        try:
+            session = self._get_active_session()  # type: ignore[attr-defined]
+            if not session:
+                return {}
+            discovery = session.coordinator.get_capability("skills_discovery")
+            if discovery and hasattr(discovery, "get_shortcuts"):
+                return discovery.get_shortcuts() or {}
+        except Exception:  # noqa: BLE001
+            pass
+        return {}

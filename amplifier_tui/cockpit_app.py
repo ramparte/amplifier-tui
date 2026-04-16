@@ -1083,6 +1083,15 @@ class CockpitApp(
                 except Exception:  # noqa: BLE001
                     _cockpit_log.debug("Could not clear session context", exc_info=True)
 
+    def _get_active_session(self) -> object | None:
+        """Return the active AmplifierSession, or None."""
+        cid = self._conversation.conversation_id
+        if self.session_manager:
+            handle = self.session_manager.get_handle(cid)
+            if handle and handle.session:
+                return handle.session
+        return None
+
     def _cmd_status(self) -> None:
         """Show session status information."""
         lines = ["Session Status:"]
